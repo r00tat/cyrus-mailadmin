@@ -1,0 +1,5 @@
+# `check && check || die` is the idiom here for "fail unless all of these
+# hold": die runs when any check fails, which is exactly the intent.
+# shellcheck 0.11 no longer reports it for that shape, 0.9 (Ubuntu 24.04,
+# the release workflow) does.
+disable=SC2015
