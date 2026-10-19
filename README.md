@@ -133,6 +133,13 @@ führt alle Prüfungen aus, baut Backend und Frontend und packt das Ergebnis mit
 Build-Attestation als GitHub-Release. Ein Tag mit Bindestrich (`v1.2.0-rc.1`) wird zum
 Pre-Release, und das nimmt der Installer ohne ausdrückliches `--release` nie.
 
+Ebenso gut legst du das Release selbst an, mit eigenem Titel und eigenen Notizen:
+`gh release create v1.2.0 --target main --generate-notes`. Das legt den Tag an und startet
+denselben Workflow, der die Dateien an das Release anhängt. Bis der Workflow fertig ist (einige
+Minuten), hat das Release noch keine Dateien, und ein `install` in dieser Zeit scheitert beim
+Herunterladen. Schlägt der Workflow fehl, bleibt das Release ohne Dateien. Dann löschst du es
+und den Tag wieder.
+
 ### Aufbau
 
 ```text

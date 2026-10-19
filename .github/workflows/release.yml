@@ -2,7 +2,9 @@
 #
 # A tag v* runs every check, builds the release archive and publishes it as a
 # GitHub release, together with the installer, SHA256SUMS and a build
-# provenance attestation. A server installs it with
+# provenance attestation. The tag may come from `git push` or from creating
+# the release itself (`gh release create v1.2.0 --target main`); an existing
+# release gets the files attached. A server installs it with
 #
 #   curl -fsSLO https://github.com/r00tat/cyrus-mailadmin/releases/latest/download/install
 #   sudo bash install
@@ -128,13 +130,21 @@ jobs:
             dist/mailadmin-*.tar.gz
             dist/install
 
+      # A release created by hand (gh release create, or the web page) creates
+      # the tag and so starts this run; its title and notes stay, the files are
+      # attached. A plain tag push gets a release created here.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: |
           cp "$BUNDLE" "dist/mailadmin-$GITHUB_REF_NAME.tar.gz.sigstore.json"
-          prerelease=()
-          case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --verify-tag --title "mailadmin $GITHUB_REF_NAME" --generate-notes "${prerelease[@]}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            prerelease=()
+            case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --verify-tag --title "mailadmin $GITHUB_REF_NAME" --generate-notes "${prerelease[@]}"
+          fi
