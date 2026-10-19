@@ -1,0 +1,83 @@
+{
+    "name": "mailadmin/mailadmin",
+    "description": "Web administration interface for a Postfix / Cyrus IMAP / MySQL mail server.",
+    "type": "project",
+    "license": "AGPL-3.0-or-later",
+    "require": {
+        "php": ">=8.3",
+        "ext-json": "*",
+        "firebase/php-jwt": "^7.1",
+        "justinrainbow/json-schema": "^6.0",
+        "league/openapi-psr7-validator": "^0.22",
+        "monolog/monolog": "^3.6",
+        "nikic/fast-route": "^1.3",
+        "nyholm/psr7": "^1.8",
+        "php-di/php-di": "^7.0"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.58",
+        "phpstan/phpstan": "^1.11",
+        "phpunit/phpunit": "^11.1",
+        "vlucas/phpdotenv": "^5.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Mailadmin\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Mailadmin\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "scripts": {
+        "test": "@php vendor/bin/phpunit",
+        "lint": "@php vendor/bin/php-cs-fixer fix --dry-run --diff --show-progress=none",
+        "lint:fix": "@php vendor/bin/php-cs-fixer fix --show-progress=none",
+        "analyse": [
+            "@analyse:app",
+            "@analyse:domain"
+        ],
+        "analyse:app": "@php vendor/bin/phpstan analyse --no-progress --memory-limit=1G",
+        "analyse:domain": "sh -c 'if [ -n \"$(find src/Domain -name \\*.php -print -quit)\" ]; then vendor/bin/phpstan analyse --configuration=phpstan-domain.neon.dist --no-progress; else echo \"src/Domain holds no PHP files yet (F4 fills it) - skipping the level max pass.\"; fi'",
+        "build": [
+            "@build:cache",
+            "@build:openapi",
+            "@build:routes"
+        ],
+        "build:cache": "@php bin/prepare-cache.php",
+        "migrate": "@php bin/migrate.php",
+        "migrate:status": "@php bin/migrate.php status",
+        "migrate:check": "@php bin/migrate.php --dry-run",
+        "db:check": "@php bin/db-check.php",
+        "check:deployment": "@php bin/check-deployment.php",
+        "build:openapi": "@php bin/openapi-bundle.php",
+        "build:routes": "@php bin/compile-routes.php",
+        "post-install-cmd": [
+            "@build"
+        ],
+        "post-update-cmd": [
+            "@build"
+        ]
+    },
+    "scripts-descriptions": {
+        "test": "Runs the PHPUnit suites (unit, application, contract, integration).",
+        "lint": "Checks the coding style without changing files.",
+        "lint:fix": "Applies the coding style.",
+        "analyse": "Runs PHPStan (level 8 overall, level max for src/Domain).",
+        "build": "Produces every build artefact under var/cache. Extended by later packages.",
+        "build:openapi": "Merges openapi/**.yaml into var/cache/openapi.bundled.{yaml,json} and checks it against OpenAPI 3.0.",
+        "build:routes": "Compiles the route table from the bundled contract; fails on a missing handler or a missing x-permission.",
+        "migrate": "Applies pending migrations under the database lock. The deployment runs this; composer install deliberately does not.",
+        "migrate:status": "Prints the schema state and changes nothing.",
+        "migrate:check": "Lists what would run and verifies the additive-only rule. Exits 1 when something is pending.",
+        "db:check": "Reports charset, collation and storage engine of the legacy tables, plus the migration state.",
+        "check:deployment": "Probes a deployed installation for paths that must not be readable (U-25). Takes the base URL."
+    }
+}

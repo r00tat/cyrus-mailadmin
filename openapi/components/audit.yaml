@@ -1,0 +1,278 @@
+#
+# Components of the audit trail (S4). See `openapi/README.md` for the file
+# conventions and `docs/03-architektur.md`, section 13, for the reasoning.
+#
+# There is no `AuditEntryRequest` and there never will be: nothing writes this
+# table over the API. An entry is a side effect of an operation that changed
+# something, which is what makes it evidence rather than a note somebody left.
+#
+components:
+  schemas:
+    AuditEntry:
+      type: object
+      description: |
+        One recorded operation: who, when, from where, on what, and what the
+        object looked like before and after.
+
+        `before` and `after` are the API representation of the object with the
+        secrets already removed — password fields carry the placeholder
+        `[redacted]`, hash fields are absent altogether. The masking happens
+        before the row is written, so there is no unmasked form anywhere, not
+        even for an operator with a SQL client.
+
+        A creation has no `before` and a deletion no `after`. Both are `null`
+        rather than `{}`, so that "did not exist" and "was empty" stay
+        distinguishable.
+      required:
+        - id
+        - recorded_at
+        - actor
+        - action
+        - object_type
+        - outcome
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Ascending, and the tiebreaker of every ordering.
+        recorded_at:
+          type: string
+          format: date-time
+          description: UTC, always. `2026-08-15T09:41:07Z`.
+        actor:
+          type: string
+          description: |
+            The administrator's user name. On a failed sign-in it is the name
+            that was **sent**, which may be an account that does not exist —
+            that is what makes a burst of failures readable. `<system>` for
+            something the application did with nobody behind it.
+        actor_role:
+          type: string
+          nullable: true
+          description: The role at the time of the operation. `null` when nobody was authenticated.
+          enum:
+            - superuser
+            - domainmaster
+        client_ip:
+          type: string
+          nullable: true
+          description: |
+            Where the request came from — `REMOTE_ADDR` and nothing else.
+            `null` when unknown, which is the case for a command-line run, and
+            **behind a reverse proxy it is the proxy** (O-6).
+        request_id:
+          type: string
+          nullable: true
+          description: |
+            The same value the `X-Request-Id` header carried. It is what joins an
+            entry to the application log for the request that produced it.
+        action:
+          type: string
+          description: |
+            `<object>.<verb>`, the same spelling `x-permission` uses —
+            `domain.create`, `account.password.write`, `session.sign_in`. A
+            refusal carries the permission that was missing, so a search for
+            `domain.delete` finds the deletions **and** the attempts.
+          example: domain.create
+        object_type:
+          type: string
+          description: The kind of object. `domain`, `account`, `address`, `admin`, `list`, `session`.
+        object_id:
+          type: string
+          nullable: true
+          description: |
+            The identifier as the API spells it. `null` when the entry is not
+            about one specific object — a refusal, or the operation entry of a
+            batch.
+        domain:
+          type: string
+          nullable: true
+          description: |
+            The domain the object belongs to. Recorded so that a scoped view
+            remains possible later; `null` for an entry that is not about one
+            domain.
+        outcome:
+          $ref: '#/components/schemas/AuditOutcome'
+        reason:
+          type: string
+          nullable: true
+          description: |
+            Why it was denied or failed, for an operator. English, not
+            translated, **not a contract** — never render it as a message to a
+            user (E-16).
+        before:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: The object before the operation, redacted. `null` when it did not exist.
+        after:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: The object afterwards, redacted. `null` when it no longer exists.
+        part_of:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            The `id` of the operation entry this one belongs to. A domain rename
+            writes one entry for the rename and one per account, each pointing
+            back at it — so a batch reads as a batch rather than as forty
+            unrelated changes in the same second.
+
+    AuditOutcome:
+      type: string
+      description: |
+        How the attempt ended.
+
+        `denied` is why this is not a boolean: a refusal is the entry an operator
+        most often goes looking for, and it is neither a success nor a
+        malfunction. `failed` means the actor was allowed and it did not work
+        anyway.
+      enum:
+        - succeeded
+        - denied
+        - failed
+
+    AuditPage:
+      type: object
+      description: One page of the trail.
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    AuditSort:
+      type: string
+      description: |
+        The field to sort by — an enumeration, not a free string (`CLAUDE.md`,
+        rule 2). Every ordering is broken by `id`, because timestamps have second
+        resolution and a batch writes dozens of rows inside one; without the
+        tiebreaker a row could appear on two pages while nothing changed.
+      enum:
+        - recorded_at
+        - actor
+        - action
+        - object
+        - id
+      default: recorded_at
+
+  parameters:
+    AuditSort:
+      name: sort
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/AuditSort'
+
+    AuditOrder:
+      name: order
+      in: query
+      required: false
+      description: |
+        Sort direction. **Defaults to `desc` here**, unlike everywhere else: the
+        interesting end of an audit trail is the recent one, and an ascending
+        default would make page one the oldest rows in the table for ever.
+      schema:
+        allOf:
+          - $ref: '#/components/schemas/SortOrder'
+        default: desc
+
+    AuditActor:
+      name: actor
+      in: query
+      required: false
+      description: Exact user name.
+      schema:
+        type: string
+        maxLength: 190
+
+    AuditAction:
+      name: action
+      in: query
+      required: false
+      description: |
+        Matched as a **prefix**, so `domain.` answers "everything that happened
+        to domains" and `domain.delete` answers itself.
+      schema:
+        type: string
+        maxLength: 64
+        pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*\.?$'
+
+    AuditObjectType:
+      name: object_type
+      in: query
+      required: false
+      schema:
+        type: string
+        maxLength: 32
+        pattern: '^[a-z][a-z0-9_]*$'
+
+    AuditObjectId:
+      name: object_id
+      in: query
+      required: false
+      description: Exact identifier. Pair it with `object_type` — identifiers are only unique within a kind.
+      schema:
+        type: string
+        maxLength: 320
+
+    AuditDomain:
+      name: domain
+      in: query
+      required: false
+      schema:
+        type: string
+        maxLength: 255
+
+    AuditOutcomeFilter:
+      name: outcome
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/AuditOutcome'
+
+    AuditRequestId:
+      name: request_id
+      in: query
+      required: false
+      description: |
+        Everything recorded for one request. The counterpart of looking the same
+        id up in the application log.
+      schema:
+        type: string
+        maxLength: 64
+
+    AuditPartOf:
+      name: part_of
+      in: query
+      required: false
+      description: The entries belonging to one operation, by that operation's `id`.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+
+    AuditSince:
+      name: since
+      in: query
+      required: false
+      description: Entries recorded at or after this moment. RFC 3339; a zone is required.
+      schema:
+        type: string
+        format: date-time
+
+    AuditUntil:
+      name: until
+      in: query
+      required: false
+      description: Entries recorded at or before this moment. RFC 3339; a zone is required.
+      schema:
+        type: string
+        format: date-time

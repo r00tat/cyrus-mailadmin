@@ -1,0 +1,282 @@
+#
+# Maintenance (A6): reconciliation, repair queue, detailed health. See
+# `openapi/README.md` for the file conventions and
+# `docs/features/A6-betrieb.md` for the reasoning.
+#
+# Superuser-only throughout (`maintenance.read`, `maintenance.write`): every
+# answer here spans domains, and most of it names mailboxes of all of them.
+#
+tags:
+  - name: maintenance
+    description: |
+      What the database and the mail store disagree about, what half-finished
+      operations left behind, and how the dependencies are doing.
+
+      Nothing here repairs anything on its own (E-18). The reconciliation only
+      reports; a repair entry is retried or dismissed because an administrator
+      asked for it.
+
+paths:
+  /maintenance/reconciliation:
+    get:
+      operationId: getReconciliation
+      tags:
+        - maintenance
+      summary: Compare the database with the mail store
+      description: |
+        Runs now, synchronously, and is not stored (U-115). Reads `accountuser`,
+        `domain`, `virtual` and `lists` whole and lists every user root in
+        Cyrus with one `LIST "" "user/%"`, which covers both namespaces
+        (U-116). Mailboxes waiting in `DELETED/` after a delayed delete are not
+        reported.
+
+        **Report only.** Nothing is changed, whatever is found (E-18).
+
+        A destination without `@` that no account has is reported as written —
+        the domain it was meant for is never guessed (U-119).
+      x-permission: maintenance.read
+      responses:
+        '200':
+          description: What was compared, and what does not match.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reconciliation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          description: |
+            The mail store could not be listed (`request.service_unavailable`).
+            There is no partial report: a comparison against half of one side
+            would list every account as missing its mailbox.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /maintenance/repairs:
+    get:
+      operationId: listRepairs
+      tags:
+        - maintenance
+      summary: List repair-queue entries
+      description: |
+        Newest first by default. `status=open` is the working list;
+        `operation` matches as a prefix, so `account.` gives everything account
+        operations left behind.
+      x-permission: maintenance.read
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - $ref: '#/components/parameters/RepairSort'
+        - $ref: '#/components/parameters/RepairOrder'
+        - $ref: '#/components/parameters/RepairStatusFilter'
+        - $ref: '#/components/parameters/RepairOperationFilter'
+        - $ref: '#/components/parameters/RepairStepFilter'
+      responses:
+        '200':
+          description: One page of the queue.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /maintenance/repairs/{repair}:
+    parameters:
+      - $ref: '#/components/parameters/RepairPath'
+
+    get:
+      operationId: getRepair
+      tags:
+        - maintenance
+      summary: One repair-queue entry
+      x-permission: maintenance.read
+      responses:
+        '200':
+          description: The entry.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /maintenance/repairs/{repair}/retry:
+    parameters:
+      - $ref: '#/components/parameters/RepairPath'
+
+    post:
+      operationId: retryRepair
+      tags:
+        - maintenance
+      summary: Let the application finish the step that failed
+      description: |
+        Only for an entry with `retryable: true` (U-118). The state is checked
+        first; if it is no longer the one the entry describes — the account was
+        created again, the limit changed — nothing is done and the answer is
+        `409 repair.state_changed`. Deleting a mailbox and renaming one back
+        check under the locks account and domain operations take (U-97).
+
+        Success closes the entry as `retried`. A refusal by the mail store
+        leaves it open, counts the attempt and keeps the code in `last_error`.
+        Both are audited as `repair.retry`.
+      x-permission: maintenance.write
+      responses:
+        '200':
+          description: Done; the entry is resolved.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            Already resolved (`repair.already_resolved`), not something the
+            application can do (`repair.not_retryable`), the state moved on
+            (`repair.state_changed`), or the mail store refused again
+            (`repair.retry_failed`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          description: The mail store could not be reached (`repair.retry_failed`). The entry stays open.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /maintenance/repairs/{repair}/resolve:
+    parameters:
+      - $ref: '#/components/parameters/RepairPath'
+
+    post:
+      operationId: resolveRepair
+      tags:
+        - maintenance
+      summary: Close an entry that was handled some other way
+      description: |
+        Changes nothing in Cyrus or the legacy tables. The entry is closed as
+        `dismissed`, with the administrator's name and an optional note, and
+        the audit trail records `repair.resolve`. The only way to close an entry
+        the application cannot retry.
+
+        **Always send a JSON body**, `{}` when there is no note — as for
+        `refreshToken`: a body-less `POST` is rejected as `422`, because request
+        validation cannot check a body it is not told the type of (U-9).
+      x-permission: maintenance.write
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepairResolveRequest'
+      responses:
+        '200':
+          description: The entry, now resolved.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Already resolved (`repair.already_resolved`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /maintenance/health:
+    get:
+      operationId: getHealthDetails
+      tags:
+        - maintenance
+      summary: Every probe, now, with codes and durations
+      description: |
+        The detail the public `/health` leaves out (U-121): per component the
+        stable error code of a failure and how long the probe took. Never
+        cached. The depth is a real query for the database, a real
+        administrator login for IMAP, and a TLS session with certificate
+        verification for ManageSieve — timsieved refuses the administrator's
+        own session, and the credentials are the ones IMAP already proved.
+
+        Always `200` — the request succeeded, whatever the dependencies are
+        doing; `status` carries the verdict.
+      x-permission: maintenance.read
+      responses:
+        '200':
+          description: The probes.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthDetails'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'

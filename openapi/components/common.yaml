@@ -1,0 +1,516 @@
+#
+# Cross-cutting components — owned by F2, used by every other package.
+#
+# Nothing here is specific to a resource. A package that needs its own schemas
+# adds `components/<package>.yaml` and references what it finds here with an
+# internal pointer, for example:
+#
+#     $ref: '#/components/schemas/Problem'
+#
+# The pointer is internal because the bundler merges every partial into one
+# document before anything reads it (U-3). File-relative references work too and
+# are rewritten during bundling, but internal ones are shorter and cannot point
+# at a file that does not exist.
+#
+# See `openapi/README.md` for the rules that go with these components.
+#
+components:
+  securitySchemes:
+    # S2 issues the token; S3 enforces what it allows. The contract only names
+    # the scheme so that generated clients know where the credential goes.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Access token from `POST /auth/token`, valid for 60 minutes.
+
+        The refresh token is **not** sent this way: it stays in an HttpOnly
+        cookie and is only read by `POST /auth/refresh` (E-15).
+
+  schemas:
+    # ------------------------------------------------------------------
+    # Errors
+    # ------------------------------------------------------------------
+
+    ErrorCode:
+      type: string
+      description: |
+        The stable, machine-readable error identifier. `<resource>.<state>`, both
+        parts `snake_case` (U-7).
+
+        This enumeration is **exhaustive**: a `code` that does not appear here is
+        a contract violation and fails the contract tests. It doubles as the
+        complete set of translation keys the frontend has to cover, which is what
+        keeps the language files from rotting (architecture 11.4).
+
+        A package appends its own block, alphabetically within the block. Blocks
+        are separated by a comment so that two packages appending at once do not
+        collide.
+      enum:
+        # --- request: cross-cutting, no resource (F2) ---
+        - request.conflict
+        - request.forbidden
+        - request.internal_error
+        - request.malformed_json
+        - request.method_not_allowed
+        - request.not_found
+        - request.precondition_failed
+        - request.precondition_required
+        - request.rate_limited
+        - request.service_unavailable
+        - request.unauthenticated
+        - request.unsupported_media_type
+        - request.validation_failed
+        # --- migration: build and schema state (F2, F3) ---
+        - migration.build_stale
+        - migration.schema_outdated
+        # --- domain model: invalid values rejected by a value object (F4) ---
+        - account.identity_mismatch
+        - account.invalid_identity
+        - address.invalid
+        - address.invalid_destination
+        - address.invalid_local_part
+        - admin.invalid_scope
+        - domain.invalid_account_limit
+        - domain.invalid_folder
+        - domain.invalid_name
+        - mailstore.invalid_acl
+        - quota.invalid
+        - sieve.invalid_rule
+        # --- authentication, sessions and password rules (S1, S2) ---
+        # `auth.` and not `password.`, because U-7 lists no `password` prefix and
+        # these all arise on the way in through an authentication or a password set.
+        #
+        # One block rather than one per package: the ordering test sorts by
+        # prefix, not by comment, so a second `auth.` block further down would be
+        # out of order however neatly it was labelled.
+        #
+        # None of the three session codes says whether an account exists. What
+        # separates them is what a client can do about it — bad credentials mean
+        # "ask the human again", an invalid refresh token means "sign in again",
+        # and a reused one means "sign in again, and somebody should look".
+        - auth.invalid_credentials
+        - auth.password_contains_personal_data
+        - auth.password_empty
+        - auth.password_invalid_characters
+        - auth.password_too_common
+        - auth.password_too_long
+        - auth.password_too_short
+        - auth.refresh_invalid
+        - auth.refresh_reused
+        # --- administrator accounts (A4) ---
+        # `admin.invalid_scope` sits in the domain-model block above and belongs
+        # to this same prefix. The ordering test reads the enum as one list per
+        # prefix rather than per comment block, so these names were deliberately
+        # chosen to sort **after** `invalid_scope` — appending a block stays
+        # possible without reopening F4's.
+        - admin.last_superuser
+        - admin.not_found
+        - admin.role_scope_mismatch
+        - admin.self_deletion
+        - admin.unknown_domain
+        - admin.username_taken
+        - admin.wrong_current_password
+        # --- domains (A1) ---
+        # Same constraint as the block above: `domain.invalid_*` already sits in
+        # the domain-model block, and the ordering test reads one list per
+        # prefix, so every name here sorts after `invalid_name`.
+        #
+        # There is deliberately no `domain.not_found`. A domain that does not
+        # exist and a domain the actor may not see have to be the same answer
+        # down to the byte (CLAUDE.md, U-44), and that answer is
+        # `request.not_found` — a code of our own would undo the whole thing in
+        # the one field a client reads.
+        - domain.leftover_state
+        - domain.mailstore_unavailable
+        - domain.name_taken
+        - domain.namespace_conflict
+        - domain.not_empty
+        - domain.prefix_taken
+        - domain.rename_incomplete
+        - domain.rename_not_confirmed
+        - domain.still_has_addresses
+        # --- mail accounts (A2) ---
+        # `account.identity_mismatch` and `account.invalid_identity` sit in the
+        # domain-model block and belong to this prefix; every name here sorts
+        # after them, for the reason the A4 block gives. A2 raises
+        # `identity_mismatch` itself, with `409`, for a stored user name that
+        # cannot be resolved against its domain.
+        #
+        # No `account.not_found`, for the reason the domain block gives.
+        - account.limit_reached
+        - account.mailbox_exists
+        - account.mailbox_missing
+        - account.mailstore_unavailable
+        - account.name_taken
+        - account.quota_exceeds_domain
+        - account.setup_incomplete
+        - account.status_not_enforced
+        - account.username_too_long
+        # --- mailing lists (A5) ---
+        # No `list.not_found` here either, and for the same reason the domain
+        # block gives: `lists` has no domain column, so a list outside an actor's
+        # scope can only ever be hidden through `request.not_found`. A distinct
+        # code for "really absent" would be exactly the distinguisher CLAUDE.md's
+        # 403/404 rule exists to remove.
+        #
+        # `list.invalid_*` are raised for new or changed values only. A row that
+        # is already in the table is shown and flagged, never rejected (U-22) —
+        # `unusable_members` and `address_usable` in the representation.
+        - list.already_exists
+        - list.invalid_address
+        - list.invalid_member
+        - list.invalid_name
+        - list.invalid_tag
+        # --- addresses, aliases, catchall, forwards, vacation notice (A3) ---
+        # `address.invalid*` sit in the domain-model block and belong to this
+        # prefix; every `address.` name here sorts after `invalid_local_part`,
+        # for the reason the A4 block gives. `address.invalid_destination` is
+        # what A3 raises for a destination it refuses (U-104).
+        #
+        # No `alias.not_found` or `vacation.not_found`, for the reason the
+        # domain block gives.
+        - address.needed_by_catchall
+        - address.not_editable
+        - address.reserved
+        - address.taken
+        - address.unstorable
+        - forward.copy_required
+        - vacation.foreign_script
+        - vacation.mailstore_unavailable
+        - vacation.not_supported
+        - vacation.rejected
+        # --- repair queue (A6) ---
+        # A prefix of its own, extending U-7's list (U-122): a refused retry is
+        # neither a mail-store failure nor a malformed request, and borrowing
+        # either prefix would make it look like one. No `repair.not_found`, for
+        # the reason the domain block gives.
+        - repair.already_resolved
+        - repair.not_retryable
+        - repair.retry_failed
+        - repair.state_changed
+
+    Problem:
+      type: object
+      description: |
+        `application/problem+json` per RFC 9457, with two additions.
+
+        `code` is the contract; `title` and `detail` are English fallbacks and
+        may change without notice (E-16). `detail` never carries an exception
+        message — that rule lives in the error handler, and it is the reason this
+        schema has no field for one.
+
+        `request_id` repeats the `X-Request-Id` header so that a user reporting a
+        failure hands over something that can be found in the log.
+      required:
+        - type
+        - title
+        - status
+        - code
+      properties:
+        type:
+          type: string
+          description: URI reference identifying the problem type. `about:blank` when the status code says it all.
+          example: about:blank
+        title:
+          type: string
+          description: Short, human-readable summary in English. Not translated, not a contract.
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        detail:
+          type: string
+          description: English explanation of this occurrence. Never an exception message.
+        instance:
+          type: string
+          description: The request path this problem occurred on.
+        request_id:
+          type: string
+          description: Same value as the `X-Request-Id` response header.
+        errors:
+          type: object
+          description: |
+            Field to reason, present on validation failures. The key is a
+            dot-separated path (`body.quota`, `query.per_page`,
+            `header.If-Match`), the value a short reason keyword.
+
+            **Values are never echoed back.** The reason names the constraint
+            that failed (`enum`, `maximum`, `required`), not the input — a
+            request body may carry a password.
+          additionalProperties:
+            type: string
+
+    # ------------------------------------------------------------------
+    # Pagination and sorting (U-20)
+    # ------------------------------------------------------------------
+
+    PaginationMeta:
+      type: object
+      description: |
+        Accompanies every paginated collection as the `meta` member.
+
+        `total` is the number of items matching the request, not the number in
+        this page.
+      required:
+        - page
+        - per_page
+        - total
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        per_page:
+          type: integer
+          minimum: 1
+          maximum: 200
+        total:
+          type: integer
+          minimum: 0
+
+    SortOrder:
+      type: string
+      description: Sort direction. The field to sort by is a per-resource enumeration.
+      enum:
+        - asc
+        - desc
+      default: asc
+
+  # --------------------------------------------------------------------
+  # Parameters
+  # --------------------------------------------------------------------
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 1-based page number (U-20).
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    PerPage:
+      name: per_page
+      in: query
+      required: false
+      description: |
+        Items per page. 200 is the ceiling at which a collection still fits into
+        one request; it is enforced here rather than trusted (U-20).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+    SortOrder:
+      name: order
+      in: query
+      required: false
+      description: Sort direction. Pair it with a per-resource `sort` parameter.
+      schema:
+        $ref: '#/components/schemas/SortOrder'
+
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        The `ETag` of the representation the client last saw. A mismatch is
+        answered with `412` and `request.precondition_failed`, so that two
+        administrators cannot overwrite each other (U-19).
+
+        Declared optional on purpose. Made mandatory here, a missing header
+        would be rejected by schema validation as `422`; a handler that requires
+        it answers `428` with `request.precondition_required`, which says what is
+        actually wrong.
+      schema:
+        type: string
+
+  # --------------------------------------------------------------------
+  # Response headers
+  # --------------------------------------------------------------------
+
+  headers:
+    ETag:
+      description: |
+        Weak validator over the canonically serialised representation — a hash of
+        exactly the fields this API returns, not of the database row (U-19). A
+        column webcyradm writes in parallel therefore does not invalidate it.
+      schema:
+        type: string
+      example: W/"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+    XRequestId:
+      description: Correlation id, present on every response and in every log line for it.
+      schema:
+        type: string
+
+    Location:
+      description: Path of the newly created resource.
+      schema:
+        type: string
+
+    Allow:
+      description: Methods this path does accept.
+      schema:
+        type: string
+
+  # --------------------------------------------------------------------
+  # Reusable error responses
+  #
+  # Every operation declares exactly the statuses it can produce, and always
+  # `500`. There is deliberately no `default` response: an undeclared status is
+  # then caught by response validation in development and test (U-9) instead of
+  # being quietly accepted.
+  # --------------------------------------------------------------------
+
+  responses:
+    BadRequest:
+      description: The request could not be read — malformed JSON, for instance.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    Unauthorized:
+      description: No token, an expired token or a token that does not verify.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    Forbidden:
+      description: |
+        Authenticated, but not permitted to perform this operation.
+
+        Note what this is *not* used for: an object the actor may not see is
+        answered with `404`, not `403` (CLAUDE.md). `403` means the operation
+        itself is out of reach, not that a specific object is.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    NotFound:
+      description: No such resource — or one the actor may not see.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    MethodNotAllowed:
+      description: The path exists, the method does not.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Allow:
+          $ref: '#/components/headers/Allow'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    Conflict:
+      description: The request contradicts the current state — a name already taken, for instance.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    UnsupportedMediaType:
+      description: The body was sent with a content type this API does not accept.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    PreconditionFailed:
+      description: The `If-Match` value does not match the current representation (U-19).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    UnprocessableEntity:
+      description: |
+        The request is well-formed but does not satisfy the schema or a business
+        rule. `errors` maps each offending field to the constraint it failed.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    PreconditionRequired:
+      description: This operation requires an `If-Match` header and none was sent.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    TooManyRequests:
+      description: Rate limit reached (architecture 5.6).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    InternalServerError:
+      description: |
+        An unexpected failure. The body carries a stable code, an English
+        fallback text and the request id — and nothing else. Whoever needs the
+        detail looks up the request id in the log.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+    ServiceUnavailable:
+      description: |
+        The service is temporarily unable to answer — build artefacts that do not
+        match the contract (`migration.build_stale`, U-8), or a dependency that is
+        down.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'

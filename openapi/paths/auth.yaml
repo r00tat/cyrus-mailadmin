@@ -1,0 +1,226 @@
+#
+# Authentication and session handling (S2). See `openapi/README.md` for the file
+# conventions and `docs/03-architektur.md`, section 5, for the reasoning.
+#
+# Four operations, and deliberately no more. There is no registration, no
+# password reset by mail and no end-user login (E-7) — an administrator account
+# is created by another administrator, and a mailbox owner never signs in here.
+#
+tags:
+  - name: auth
+    description: |
+      Signing in, keeping a session alive, and signing out.
+
+      Two of the four operations are reachable without a bearer token, because
+      they are how one is obtained. They are not unprotected: `POST /auth/token`
+      is behind the rate limiter (architecture 5.6) and `POST /auth/refresh`
+      behind possession of a single-use token.
+
+paths:
+  /auth/token:
+    post:
+      operationId: issueToken
+      tags:
+        - auth
+      summary: Sign in and receive an access token
+      description: |
+        Verifies the credentials against `adminuser` and issues an access token
+        with a matching refresh token.
+
+        **A wrong password and an unknown user name are answered identically** —
+        same status, same code, same wording, and comparable timing: an unknown
+        name still runs a dummy verification (architecture 5.5). Whether an
+        account exists is not something this endpoint tells anyone.
+
+        A stored password in one of the legacy formats — DES-crypt, md5crypt,
+        SHA1 hex, MySQL `PASSWORD()`, plaintext — is accepted and, on success,
+        rewritten as Argon2id (E-13). That is the only way the legacy hashes in
+        `adminuser` ever disappear; there is no migration campaign.
+      security: []
+      x-permission: public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '200':
+          description: The credentials were correct.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Set-Cookie:
+              description: |
+                The refresh token, when `refresh_delivery` was `cookie`.
+                `HttpOnly`, `Secure`, `SameSite=Strict`, and a path narrowed to
+                the `/auth` endpoints so that it is not sent with any other
+                request.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          description: |
+            Wrong password, unknown user name, or an account that cannot
+            authenticate. One answer for all three (`auth.invalid_credentials`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          description: |
+            Too many failed attempts for this user name or from this address
+            (architecture 5.6). `Retry-After` names the number of seconds.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Retry-After:
+              description: Seconds until the next attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /auth/refresh:
+    post:
+      operationId: refreshSession
+      tags:
+        - auth
+      summary: Exchange a refresh token for a new access token
+      description: |
+        Every refresh token is valid **exactly once**. Using it invalidates it
+        and returns a new pair, within the same twelve-hour family.
+
+        If a token that has already been spent turns up again, it was copied.
+        The whole family is then revoked and both the thief and the rightful
+        owner have to sign in again (`auth.refresh_reused`). That is the point:
+        the theft is noticed, which is not true of a long-lived token that can
+        be replayed quietly.
+
+        Reachable without a bearer token — the refresh token *is* the credential.
+        This is the one endpoint a browser reaches with a cookie, so it is the
+        one endpoint that needs CSRF protection: `SameSite=Strict`, `POST` only,
+        and a narrow cookie path (architecture 7.3).
+
+        **Always send a JSON body, even when there is nothing to say.** A client
+        relying on the cookie sends `{}` with
+        `Content-Type: application/json`; a body-less `POST` is rejected as
+        `422`, because request validation cannot check a body against this
+        operation without being told what kind of body it is. That is one line
+        in a client and it keeps the input boundary unconditional (U-9).
+      security: []
+      x-permission: public
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: A new access token, and a new refresh token in the same channel the old one arrived through.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Set-Cookie:
+              description: The rotated refresh token, when the old one came from the cookie.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          description: |
+            No refresh token, an unknown one, an expired one
+            (`auth.refresh_invalid`) — or one that had already been spent, in
+            which case the family is now revoked (`auth.refresh_reused`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Set-Cookie:
+              description: An expired cookie, so that a browser stops sending a token that will never work again.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /auth/logout:
+    post:
+      operationId: endSession
+      tags:
+        - auth
+      summary: Sign out
+      description: |
+        Revokes the refresh family and puts the presented access token on the
+        denylist until it would have expired anyway.
+
+        Both halves matter. Revoking only the refresh token would leave the
+        access token working for up to an hour, which is not what anyone means
+        by signing out; denylisting only the access token would leave the
+        refresh token able to mint a new one.
+
+        Idempotent: signing out twice is not an error.
+      x-permission: session.write
+      responses:
+        '204':
+          description: Signed out. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Set-Cookie:
+              description: An expired refresh cookie.
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /auth/me:
+    get:
+      operationId: getCurrentSession
+      tags:
+        - auth
+      summary: Who the presented token belongs to
+      description: |
+        The identity behind the token **as the database has it now**, not as the
+        token claims. Role and domain scope are read per request (architecture
+        5.3), so this endpoint is also how a client notices that an assignment
+        was withdrawn.
+
+        The frontend uses it after a reload to decide what to render, which is
+        why it returns the scope rather than only the name.
+      x-permission: session.read
+      responses:
+        '200':
+          description: The token is valid and the administrator still exists.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'

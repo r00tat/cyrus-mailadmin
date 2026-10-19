@@ -1,0 +1,90 @@
+-- ---------------------------------------------------------------------------
+-- Template: the view `allusers` with account deactivation (U-127).
+--
+-- For the configuration management that owns the view (Salt in the reference
+-- installation). mailadmin itself never creates or changes a view — its
+-- migrator refuses view definitions on principle (E-1, AdditiveOnlyRule).
+--
+-- MANDATORY ORDER
+--
+--   1. Run mailadmin's migrations:   php bin/migrate.php
+--      This creates `mailadmin_account_status` (migration 0060).
+--   2. Check:                        php bin/db-check.php
+--      "Account status (U-127)" must list the table as present.
+--   3. Only then roll out this view.
+--   4. Check again:                  php bin/db-check.php
+--      allusers must read "honours the status table in every UNION branch".
+--
+-- Rolling out the view on a database WITHOUT the table breaks every login on
+-- the server: MariaDB refuses to create the view, and a view whose table
+-- disappears later fails every query pam_mysql sends — IMAP, POP, ManageSieve
+-- and SMTP-AUTH alike. The reverse is harmless: the old view next to the new
+-- table simply ignores the table, and mailadmin refuses to disable an account
+-- until the view honours it (`account.status_not_enforced`).
+--
+-- ROLLBACK
+--
+-- Re-create the previous definition. Every disabled account can log in again at
+-- once; nothing else changes. Leave the table where it is.
+--
+-- ADAPT, DO NOT COPY BLINDLY
+--
+-- The statement below is mailadmin's reference reconstruction of `allusers`
+-- (docker/db/init/10-views.sql), extended by the status filter. The production
+-- definition may differ in detail — read it first (`SHOW CREATE VIEW
+-- allusers`) and add exactly the two things below to EACH branch of its UNION,
+-- changing nothing else:
+--
+--   LEFT JOIN mailadmin_account_status
+--          ON mailadmin_account_status.username = accountuser.username
+--   WHERE mailadmin_account_status.username IS NULL
+--      OR mailadmin_account_status.disabled = 0
+--
+-- The join key is `accountuser.username` as stored — not the derived address of
+-- the first branch.
+--
+-- PRIVILEGES
+--
+-- With the default `SQL SECURITY DEFINER`, the view's definer needs SELECT on
+-- `mailadmin_account_status`; the account pam_mysql connects with needs nothing
+-- new. With `SQL SECURITY INVOKER`, that account needs
+--
+--   GRANT SELECT ON <database>.mailadmin_account_status TO '<pam user>'@'<host>';
+--
+-- WHAT IT DOES AND DOES NOT DO
+--
+-- A disabled account is absent from the view, so saslauthd/pam_mysql refuses
+-- its credentials on every service that authenticates through it. Mail is still
+-- delivered to the mailbox (Postfix reads `virtual`, not this view). Sessions
+-- that are already open stay open until the client disconnects, and a
+-- credential cache in saslauthd (`-c`) keeps answering "yes" until its entries
+-- expire. See docs/features/A2-konten.md, "Deaktivierung".
+--
+-- This file must stay identical to the statement in docker/db/init/10-views.sql;
+-- tests/Integration/TestEnvironment/AccountStatusViewTest.php checks it.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW allusers AS
+SELECT CONCAT(REPLACE(accountuser.username, CONCAT('.', accountuser.domain_name), ''), '@', accountuser.domain_name) AS username,
+       accountuser.password                                                                                          AS password,
+       accountuser.domain_name                                                                                       AS domain_name,
+       accountuser.imap                                                                                              AS imap,
+       accountuser.pop                                                                                               AS pop,
+       accountuser.sieve                                                                                             AS sieve,
+       accountuser.smtpauth                                                                                          AS smtpauth
+FROM accountuser
+         LEFT JOIN mailadmin_account_status ON mailadmin_account_status.username = accountuser.username
+WHERE mailadmin_account_status.username IS NULL
+   OR mailadmin_account_status.disabled = 0
+UNION
+SELECT accountuser.username    AS username,
+       accountuser.password    AS password,
+       accountuser.domain_name AS domain_name,
+       accountuser.imap        AS imap,
+       accountuser.pop         AS pop,
+       accountuser.sieve       AS sieve,
+       accountuser.smtpauth    AS smtpauth
+FROM accountuser
+         LEFT JOIN mailadmin_account_status ON mailadmin_account_status.username = accountuser.username
+WHERE mailadmin_account_status.username IS NULL
+   OR mailadmin_account_status.disabled = 0;

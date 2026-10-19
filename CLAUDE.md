@@ -130,9 +130,17 @@ Handhabung. Daran hängen Regeln, die nicht verhandelbar sind:
 
 - **Das Erneuerungstoken bleibt im HttpOnly-Cookie.** Niemals ebenfalls in den `localStorage`
   legen — das verlängert ein gestohlenes Token von 60 Minuten auf 12 Stunden.
-- **Die Content-Security-Policy nicht aufweichen.** Kein `unsafe-inline`, kein `unsafe-eval`.
-  Wenn der Bundler Inline-Skripte erzeugt, wird der Bundler geändert, nicht die Policy.
-- **Keine Fremdinhalte im Frontend**, kein `dangerouslySetInnerHTML` ohne Bereinigung.
+- **`script-src 'self'` ist unantastbar.** Kein `unsafe-inline` und kein `unsafe-eval` für
+  Skripte — das ist der Teil der Policy, der das Token schützt, denn ein Tokendiebstahl braucht
+  Skriptausführung. Wenn der Bundler Inline-Skripte erzeugt, wird der Bundler geändert, nicht die
+  Policy.
+- **`style-src` trägt seit U-35 `'unsafe-inline'`**, weil Material UI zur Laufzeit über Emotion
+  stylt und für statisch ausgelieferte Seiten kein anderer Weg dokumentiert ist. Das ist die
+  einzige Aufweichung, sie ist begründet und abgeschlossen — **jede weitere Lockerung der CSP
+  bleibt Eskalationsfall.**
+- **Keine Fremdinhalte im Frontend**, kein `dangerouslySetInnerHTML` ohne Bereinigung. Das gilt
+  ausdrücklich auch für MUI: Roboto und die Material Icons werden **lokal gebündelt**
+  (`@fontsource/roboto`, `@mui/icons-material`), nie über das Google-Fonts-CDN eingebunden.
 - Die Token-Laufzeit von 60 Minuten wird nicht erhöht, um Anmeldungen zu sparen.
 
 ### Cyrus-Zugriff

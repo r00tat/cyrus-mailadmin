@@ -11,7 +11,8 @@ arbeitet **auf dessen Datenbankschema weiter**. Eine bestehende Installation kan
 umgestellt werden, ohne Konten neu anzulegen, Postfächer zu migrieren oder Nutzer zu neuen
 Zugangsdaten zu zwingen.
 
-> **Status:** In Entwurf. Die Architektur steht, Implementierung beginnt.
+> **Status:** Implementiert, vor dem ersten Release. Installation:
+> [deployment/installation.md](deployment/installation.md).
 
 ---
 
@@ -70,9 +71,10 @@ vHost-Konfiguration bleiben Sache des Konfigurationsmanagements der jeweiligen I
 | Postfix | mit `mysql`-Maps für `virtual_alias_maps`, `mydestination`, `smtpd_sender_login_maps` |
 | Cyrus IMAP | 3.x, mit ManageSieve; Adminzugang über IMAPS |
 | Authentifizierung | `saslauthd` mit `pam_mysql`, `crypt=1` (also `crypt(3)`) gegen den View `allusers` |
-| Datenbank | MySQL 8 oder MariaDB mit dem web-cyradm-Schema |
-| PHP | 8.1 oder neuer, mit `pdo_mysql`, `openssl`, `sodium`, `mbstring` |
-| Webserver | Apache oder nginx mit PHP-FPM |
+| Datenbank | MariaDB mit dem web-cyradm-Schema (die Migrationen nutzen `ADD COLUMN IF NOT EXISTS`, U-34) |
+| PHP | 8.3 oder neuer (U-1), mit `pdo_mysql`, `openssl`, `sodium`, `mbstring` |
+| Webserver | Apache oder nginx mit PHP-FPM, HTTPS |
+| Bau | Composer und Node 20 oder neuer — nur zum Bauen, nicht zur Laufzeit |
 
 mailadmin ist für genau diesen Aufbau gebaut. Es ist bewusst **kein** universelles Werkzeug
 mit austauschbarem Mailstore oder Datenbank-Backend — die Annahmen sind dokumentiert statt
@@ -128,7 +130,10 @@ von Wiederverwendung. Widerruf über eine `jti`-Sperrliste, damit ein Abmelden s
 Im Browser liegt das Zugriffstoken im `localStorage`, das Erneuerungstoken dagegen in einem
 HttpOnly-Cookie. Damit ist das Zugriffstoken bei einer XSS-Lücke abgreifbar — begrenzt auf
 60 Minuten, weil das Erneuerungstoken für JavaScript unerreichbar bleibt. Getragen wird diese
-Abwägung von einer strengen Content-Security-Policy ohne `unsafe-inline` und `unsafe-eval`.
+Abwägung von einer Content-Security-Policy mit `script-src 'self'` und ohne `unsafe-eval` — der
+Diebstahl eines Tokens setzt Skriptausführung voraus, und genau die bleibt ausgeschlossen. Für
+Stile lässt die Policy `'unsafe-inline'` zu, weil Material UI zur Laufzeit styled; externe
+Ursprünge sind nirgends erlaubt.
 
 Der Domain-Zuschnitt steht bewusst **nicht** im Token, sondern wird pro Anfrage gelesen. Sonst
 wirkte eine entzogene Zuweisung bis zu 60 Minuten weiter.
@@ -192,6 +197,7 @@ Testdaten sind ausschließlich synthetisch.
 | Datenzugriff | PDO, ausschließlich Prepared Statements, Repositories mit explizitem SQL |
 | API | REST, OpenAPI 3.1, Fehler als `application/problem+json` (RFC 9457) |
 | Frontend | React als Single-Page-Application, statisch ausgeliefert |
+| Komponenten | Material UI; Schriften und Symbole lokal gebündelt, kein CDN |
 | Typen | aus dem OpenAPI-Schema generiert (`openapi-typescript`) |
 
 Keine Offline-Fähigkeit, kein Service Worker: mailadmin ist ein Administrationswerkzeug hinter
@@ -272,5 +278,5 @@ Weitere Konventionen in `CLAUDE.md` im Wurzelverzeichnis.
 
 ## Lizenz
 
-Noch festzulegen. web-cyradm steht unter der GPL; da mailadmin eine Neuentwicklung ohne
-Codeübernahme ist, besteht keine Bindung daran.
+[AGPL-3.0-or-later](../LICENSE) (U-23). web-cyradm steht unter der GPL; mailadmin ist eine
+Neuentwicklung ohne Codeübernahme, bleibt mit einer Copyleft-Lizenz aber im selben Ökosystem.

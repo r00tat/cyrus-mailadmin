@@ -1,0 +1,17 @@
+# mailadmin — web root protection (U-25, layer 2)
+#
+# The frontend sources, its build configuration and its dependency tree are not
+# served over the web. Only the *built* bundle is, and that lands in public/assets/
+# with a content hash in the file name (architecture 11.3).
+#
+# This layer works without mod_rewrite. Layer 1 (the project root .htaccess)
+# names this directory as well; two independent mechanisms, because either can
+# be switched off by the vHost.
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

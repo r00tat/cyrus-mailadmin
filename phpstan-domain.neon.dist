@@ -1,0 +1,20 @@
+#
+# The domain model at level max (U-16).
+#
+# A separate configuration because PHPStan applies one level per run. `composer
+# analyse` runs this after the project-wide level 8 pass.
+#
+# The stricter level is worth its cost in exactly this directory: the domain layer
+# has no SQL, no IMAP and no HTTP, so there is nothing here that legitimately
+# needs a `mixed` — and MailboxIdentity, the naming schemes and the password
+# rules are the places where an unnoticed type widening does real damage.
+#
+parameters:
+    level: max
+
+    paths:
+        - src/Domain
+
+    tmpDir: var/cache/phpstan-domain
+
+    treatPhpDocTypesAsCertain: false

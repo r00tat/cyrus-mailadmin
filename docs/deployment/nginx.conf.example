@@ -1,0 +1,116 @@
+# mailadmin — nginx (U-25)
+#
+# nginx does not read .htaccess. The protection the project ships as files has no
+# effect here; these location blocks are mandatory, not advisory.
+#
+# Placeholders: mail.example.test, /srv/mailadmin, the certificate paths.
+
+server {
+    listen 80;
+    server_name mail.example.test;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name mail.example.test;
+
+    ssl_certificate     /etc/ssl/certs/mail.example.test.pem;
+    ssl_certificate_key /etc/ssl/private/mail.example.test.key;
+
+    # Variant A: serve out of public/ and nothing else is reachable at all.
+    root /srv/mailadmin/public;
+
+    index index.html;
+    charset utf-8;
+
+    # --- Security headers (architecture 5.7, O-13) -------------------------
+    # nginx reads no .htaccess, so these are mandatory here. Without them the
+    # SPA shell is served without a Content-Security-Policy — the one document
+    # in which an XSS hole becomes exploitable (E-15, U-35).
+    #
+    # `always` sends them on error responses too. Note that nginx's add_header
+    # does NOT inherit into a location block that has add_header of its own, so
+    # the two location blocks below repeat them.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+
+    # --- The API -----------------------------------------------------------
+    location ^~ /api/ {
+        try_files $uri /index.php$is_args$args;
+    }
+
+    location = /index.php {
+        include fastcgi_params;
+        fastcgi_pass unix:/run/php/mailadmin.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_param MAILADMIN_ENV prod;
+        fastcgi_hide_header X-Powered-By;
+    }
+
+    # Exactly one PHP entry point. Anything else ending in .php is not executed
+    # and not served.
+    location ~ \.php$ {
+        return 404;
+    }
+
+    # --- Frontend ----------------------------------------------------------
+    location / {
+        try_files $uri /index.html;
+    }
+
+    # Built assets carry a content hash (architecture 11.3).
+    location ~* \.(js|mjs|css|woff2?|png|jpe?g|svg|webp|avif|ico)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+        try_files $uri =404;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-store";
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+    }
+
+    location ~ /\. {
+        deny all;
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Variant B — the whole project directory below the web root.
+#
+# Only do this if variant A is impossible. `root` then points at the project
+# directory and every non-public path has to be denied explicitly. There is no
+# second layer here: get this list wrong and the directory is readable.
+#
+# server {
+#     root /var/www/html;
+#
+#     location ~ ^/mailadmin/(src|config|bin|migrations|openapi|tests|var|vendor|docs|frontend|node_modules)/ {
+#         deny all;
+#     }
+#
+#     location ~ ^/mailadmin/(composer\.(json|lock)|package(-lock)?\.json|.*\.dist|\.env) {
+#         deny all;
+#     }
+#
+#     location ^~ /mailadmin/api/ {
+#         try_files $uri /mailadmin/public/index.php$is_args$args;
+#     }
+#
+#     location /mailadmin/ {
+#         try_files $uri /mailadmin/public/$uri /mailadmin/public/index.html;
+#     }
+# }

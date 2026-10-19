@@ -1,0 +1,404 @@
+#
+# Domain management (A1). See `openapi/README.md` for the file conventions and
+# `docs/03-architektur.md`, sections 7.2 and 8.1, for the reasoning.
+#
+# Nothing cross-cutting belongs here: `Problem`, `PaginationMeta`, `IfMatch`,
+# `Page`, `PerPage` and the reusable error responses come from
+# `components/common.yaml` through internal pointers.
+#
+components:
+  schemas:
+    # ------------------------------------------------------------------
+    # Values shared by the representation and the two request bodies
+    # ------------------------------------------------------------------
+
+    DomainNamingScheme:
+      type: string
+      description: |
+        Which Cyrus user name **new** accounts of this domain get (architecture
+        3.3, E-14).
+
+        `inherited` means the domain says nothing and the global default
+        (`MAILADMIN_NAMING_SCHEME`, itself falling back to `dotted`) applies. It
+        is a distinct value rather than a null, because "not set" and "set to
+        dotted" behave differently the moment the global default changes.
+
+        **It never describes an account that already exists.** The scheme of a
+        stored account is recognised from its user name and may differ from this
+        setting; moving an account between schemes is a `renamemailbox` plus new
+        credentials for its owner and is never a side effect of writing this
+        field.
+      enum:
+        - inherited
+        - dotted
+        - fqun
+
+    DomainEffectiveNamingScheme:
+      type: string
+      description: What `inherited` currently resolves to, so a client need not know the server's default.
+      enum:
+        - dotted
+        - fqun
+
+    DomainSetupStep:
+      type: string
+      description: |
+        A step mailadmin cannot perform and the operator has to (E-4, E-9).
+
+        A stable key, not a sentence: the API stays language neutral and the
+        frontend translates (E-16). Salt owns the mail server's configuration and
+        DNS lives elsewhere entirely — the application knows that the step is
+        outstanding and nothing more, and it never claims to have checked.
+      enum:
+        - salt_pillar
+        - salt_apply
+        - cyrus_loginrealm
+        - dns_mx
+        - dns_spf
+        - dns_dkim
+        - dns_dmarc
+
+    # ------------------------------------------------------------------
+    # Representations
+    # ------------------------------------------------------------------
+
+    DomainListItem:
+      type: object
+      description: |
+        A domain as a collection lists it: what a table shows, and nothing that
+        costs an extra round trip.
+
+        `account_count` comes from `accountuser` and is one indexed count per
+        row. Quota **usage** is deliberately absent — it lives in Cyrus, and the
+        legacy interface's habit of asking per row is what made its lists slow
+        (architecture 7.2).
+      required:
+        - name
+        - account_count
+        - max_accounts
+        - default_account_quota_kib
+        - domain_quota_kib
+        - naming_scheme
+        - effective_naming_scheme
+        - conventional_name
+      properties:
+        name:
+          type: string
+          description: The domain name, exactly as `domain.domain_name` stores it.
+          example: example.test
+        account_count:
+          type: integer
+          minimum: 0
+          description: Rows in `accountuser` for this domain.
+        max_accounts:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: |
+            How many accounts the domain may hold. `null` is unlimited, which is
+            what the legacy `0` means; a limit of `0` is a domain in which no
+            account may be created (U-48).
+        default_account_quota_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: |
+            `domain.quota` — the limit a new account is given, in kibibytes,
+            because that is the unit `SETQUOTA … STORAGE` takes. `null` is "no
+            limit".
+        domain_quota_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: |
+            `domain.domainquota` — the allowance for the domain as a whole, in
+            kibibytes. Carried and shown; **not** enforced on every account
+            operation, because doing so would mean summing every mailbox in
+            Cyrus per request (U-48).
+        naming_scheme:
+          $ref: '#/components/schemas/DomainNamingScheme'
+        effective_naming_scheme:
+          $ref: '#/components/schemas/DomainEffectiveNamingScheme'
+        conventional_name:
+          type: boolean
+          description: |
+            False for a stored name mailadmin would not accept from a form —
+            an underscore, a single label, mixed case. Such a domain is shown
+            rather than hidden (U-22); it simply cannot be created that way
+            today.
+
+    Domain:
+      type: object
+      description: |
+        A domain in full: everything the collection carries, plus the fields a
+        detail view needs.
+
+        Three of them are legacy columns mailadmin carries without interpreting
+        (U-47). They are in the representation rather than hidden because a value
+        nobody shows is a value nobody notices is wrong.
+      required:
+        - name
+        - account_count
+        - max_accounts
+        - default_account_quota_kib
+        - domain_quota_kib
+        - naming_scheme
+        - effective_naming_scheme
+        - conventional_name
+        - default_folders
+        - legacy_prefix
+        - transport
+        - free_names
+        - free_address
+      properties:
+        name:
+          type: string
+          example: example.test
+        account_count:
+          type: integer
+          minimum: 0
+        max_accounts:
+          type: integer
+          minimum: 0
+          nullable: true
+        default_account_quota_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+        domain_quota_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+        naming_scheme:
+          $ref: '#/components/schemas/DomainNamingScheme'
+        effective_naming_scheme:
+          $ref: '#/components/schemas/DomainEffectiveNamingScheme'
+        conventional_name:
+          type: boolean
+        default_folders:
+          type: array
+          description: |
+            The folders a **new** mailbox in this domain gets, in order.
+            `domain.folders` stores them comma separated and keeps doing so
+            (E-1); the separator never reaches this API.
+
+            Changing the list does not touch mailboxes that already exist —
+            creating folders in somebody's mailbox after the fact is a decision
+            for a person, not a side effect of an edit (U-47).
+          items:
+            type: string
+            minLength: 1
+            maxLength: 255
+          maxItems: 32
+        legacy_prefix:
+          type: string
+          readOnly: true
+          description: |
+            `domain.prefix`, which webcyradm used as a surrogate key. It is
+            `NOT NULL UNIQUE` and cannot be removed (E-1), so mailadmin derives
+            one when a domain is created and never changes it again — not even
+            on a rename (U-46). Shown, never accepted.
+          maxLength: 50
+        transport:
+          type: string
+          readOnly: true
+          description: |
+            `domain.transport`. Every row in the field carries `cyrus` and the
+            legacy code aborted on anything else. Carried verbatim and never
+            read; shown so that an unusual value is visible instead of silently
+            ignored (U-47).
+        free_names:
+          type: boolean
+          description: |
+            `domain.freenames`, a webcyradm compatibility flag. Stored and
+            editable, **without effect in mailadmin** (U-47).
+        free_address:
+          type: boolean
+          description: |
+            `domain.freeaddress`, the same (U-47).
+
+    DomainCollection:
+      type: object
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DomainListItem'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    DomainCreated:
+      type: object
+      description: |
+        The domain that was created, together with what still has to happen
+        elsewhere before mail arrives.
+      required:
+        - domain
+        - next_steps
+      properties:
+        domain:
+          $ref: '#/components/schemas/Domain'
+        next_steps:
+          type: array
+          description: |
+            The outstanding external steps, in the order they should be taken.
+            `cyrus_loginrealm` only appears when the domain's effective naming
+            scheme is `fqun`, which needs the domain in the Cyrus `loginrealms`
+            — a file Salt owns and mailadmin can neither read nor write (E-4,
+            E-9).
+          items:
+            $ref: '#/components/schemas/DomainSetupStep'
+
+    # ------------------------------------------------------------------
+    # Requests
+    # ------------------------------------------------------------------
+
+    DomainCreateRequest:
+      type: object
+      description: |
+        Only `name` is required. Everything omitted takes the value webcyradm's
+        column default has, so a domain created with a bare name is the domain
+        webcyradm would have created.
+      required:
+        - name
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 255
+          description: |
+            The domain name. Strictly validated: ASCII letter-digit-hyphen
+            labels, at least two of them. Internationalised names are given as
+            punycode (`xn--…`) — converting a U-label needs `ext-intl`, which is
+            not a dependency (E-12).
+          example: example.test
+        max_accounts:
+          type: integer
+          minimum: 0
+          nullable: true
+        default_account_quota_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+        domain_quota_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+        default_folders:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 255
+          maxItems: 32
+        naming_scheme:
+          $ref: '#/components/schemas/DomainNamingScheme'
+        free_names:
+          type: boolean
+        free_address:
+          type: boolean
+
+    DomainUpdateRequest:
+      type: object
+      description: |
+        A partial update: every field is optional and an absent field is left
+        alone. At least one has to be present, so that an empty body is a
+        mistake the client is told about rather than a silent no-op.
+
+        **`name` is the expensive one.** Changing it renames every mailbox of
+        the domain in Cyrus before the database is touched at all (architecture
+        8.1), because the domain name is part of the Cyrus user name. It
+        therefore requires `confirm_rename: true` in the same body — the legacy
+        system changed the database alone and left every account unreachable,
+        and a rename that can happen by accident is that mistake waiting for a
+        second chance.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 255
+          description: The new domain name. Present and different means a rename.
+        confirm_rename:
+          type: boolean
+          description: |
+            Required to be `true` when `name` differs from the current name.
+            Ignored otherwise.
+        max_accounts:
+          type: integer
+          minimum: 0
+          nullable: true
+        default_account_quota_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+        domain_quota_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+        default_folders:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 255
+          maxItems: 32
+        naming_scheme:
+          $ref: '#/components/schemas/DomainNamingScheme'
+        free_names:
+          type: boolean
+        free_address:
+          type: boolean
+
+  # --------------------------------------------------------------------
+  # Parameters
+  # --------------------------------------------------------------------
+
+  parameters:
+    DomainNamePath:
+      name: domain
+      in: path
+      required: true
+      description: |
+        The domain name. A domain outside the actor's scope answers `404`, byte
+        for byte the same document as a domain that does not exist — the
+        existence of other people's data is not confirmed (CLAUDE.md, U-44).
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+    DomainSort:
+      name: sort
+      in: query
+      required: false
+      description: |
+        The field to sort by. An enumeration rather than a free string, which is
+        rule two of `CLAUDE.md` in contract form: the legacy system pasted an
+        `ORDER BY` out of the session straight into its SQL.
+
+        Only columns of `domain` are offered. `account_count` is a subquery and
+        sorting by it would make every page a full scan of `accountuser`.
+      schema:
+        type: string
+        enum:
+          - name
+          - max_accounts
+          - default_account_quota
+          - domain_quota
+        default: name
+
+    DomainNameFilter:
+      name: name
+      in: query
+      required: false
+      description: Substring match on the domain name, case insensitive.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255

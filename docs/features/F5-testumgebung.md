@@ -7,7 +7,7 @@
 | **Stufe** | 1 — Gerüst |
 | **Hängt ab von** | F1 |
 | **Pflichtlektüre** | [CLAUDE.md](../../CLAUDE.md) · [Architektur](../03-architektur.md), Abschnitt 12 |
-| **Status** | offen |
+| **Status** | **fertig** — hochgefahren, Kette nachgewiesen |
 
 ---
 
@@ -47,40 +47,68 @@ Pakete.
 - `bin/test-env` — Hochfahren, Warten auf Bereitschaft, Zurücksetzen
 - Kurzanleitung in `docs/features/F5-testumgebung.md` oder einer eigenen `TESTING.md`
 
+## Benutzung
+
+```bash
+bin/test-env up      # baut, startet, lädt Fixtures, legt die Mailboxen an — ein Befehl
+bin/test-env test    # PHPUnit im App-Container
+bin/test-env reset   # Container und Volumes weg; danach wieder Ausgangsschema
+bin/test-env status  # was läuft
+bin/test-env logs    # allen Diensten zusehen
+```
+
+Die Reihenfolge in `up` ist nicht beliebig: die Datenbank kommt zuerst und **die Fixtures noch
+vor dem Warten auf den Mail-Container**. Cyrus authentifiziert seinen eigenen Administrator über
+`saslauthd` gegen `accountuser`, sein Healthcheck kann also nicht bestehen, bevor die Zeilen da
+sind — wer auf ein gesundes `mail` wartet, bevor er sät, wartet ewig.
+
 ## Zu klärende Punkte
 
-1. **Woher kommt Cyrus?** Es gibt kein gepflegtes offizielles Abbild. Selbst bauen auf
-   Debian-Basis (nah an der Produktion, aber Bauzeit) oder ein Community-Abbild (schneller,
-   aber Version und Pflege unklar)?
-2. **`pam_mysql` ist in aktuellen Distributionen nicht mehr paketiert.** Woher kommt es —
-   selbst übersetzen im Abbild? Das ist der Punkt mit dem höchsten Risiko in diesem Paket und
-   sollte zuerst geprüft werden.
-3. **Zertifikate.** Selbstsigniert mit eigener CA, die in den Trust Store des
-   Anwendungscontainers gelegt wird — damit die Zertifikatsprüfung im Test *echt* geprüft wird
-   und nicht abgeschaltet werden muss.
-4. **Startdauer und Bereitschaftsprüfungen.** Cyrus braucht eine initialisierte
-   `mailboxes.db`. Wie signalisiert der Container Bereitschaft, und wie lange darf ein
-   Testlauf auf ihn warten?
-5. **Zurücksetzen zwischen Testläufen.** Container neu starten (langsam, sauber) oder Daten
-   per Skript zurücksetzen (schnell, fehleranfällig)?
-6. **Umfang der Fixtures.** Welche Fälle müssen abgedeckt sein? Mindestens: beide
-   Namensschemata, ein Konto je Alt-Hash-Format, eine Domain ohne Konten, ein Catchall, eine
-   Weiterleitung, ein verwaister Eintrag für den Abgleich.
+Alle sechs sind entschieden.
+
+1. ~~**Woher kommt Cyrus?**~~ **Selbst gebaut auf Debian trixie.** Es gibt kein gepflegtes
+   offizielles Abbild, und ein Community-Abbild bände die Umgebung an eine Version und einen
+   Betreuer, die man nicht sieht. Trixie führt genau die Versionen des Produktivsystems
+   (Cyrus 3.10.2, Postfix 3.10.x), also sagt „läuft hier" etwas über Produktion aus.
+2. ~~**`pam_mysql`.**~~ **Es ist paketiert:** `libpam-mysql` 0.8.2 liegt in trixie/main. Der
+   Punkt mit dem höchsten Risiko in diesem Paket kostete eine `apt`-Zeile; nichts wird übersetzt.
+3. ~~**Zertifikate.**~~ Selbstsigniert mit eigener CA (`docker/certs/generate.sh`), die im
+   App-Container im Trust Store liegt. Die Prüfung ist damit **echt** und wird nirgends
+   abgeschaltet. Die CA wird einmal erzeugt und über Rebuilds hinweg behalten.
+4. ~~**Startdauer und Bereitschaft.**~~ Über Compose-Healthchecks und `up --wait`; der
+   Mail-Container hat ein eigenes Skript, das IMAP, SMTP und ManageSieve wirklich anspricht.
+   Grenze 300 s; bei Überschreitung zeigt `bin/test-env` die letzten Logzeilen jedes Dienstes,
+   statt still zu scheitern.
+5. ~~**Zurücksetzen.**~~ Beides, je nach Bedarf: `seed` lädt die Fixtures neu (schnell,
+   idempotent — `00-reset.sql` leert vorher), `reset` entfernt die Volumes und stellt das
+   Ausgangsschema wieder her (langsam, vollständig). Die Init-Skripte laufen nur beim Anlegen
+   des Volumes, deshalb ist `reset` der einzige Weg zurück zum Altschema.
+6. ~~**Umfang der Fixtures.**~~ Abgedeckt: beide Namensschemata, je ein Konto pro
+   Alt-Hash-Format (bcrypt, md5crypt, SHA1-hex, DES-crypt, sha512crypt, MySQL-`PASSWORD()`,
+   Klartext), eine Domain ohne Konten (`leer.test`, die auch die Mailstore-Integrationstests
+   benutzen), Catchall, Weiterleitung und ein verwaister Eintrag.
 
 ## Definition of Done
 
-- `bin/test-env up` liefert eine Umgebung, in der eine IMAP-Anmeldung mit einem
-  bcrypt-gehashten Konto gelingt und mit falschem Passwort scheitert.
-- Dasselbe für SMTP-AUTH über STARTTLS.
-- Ein Konto mit DES-crypt-Hash meldet sich ebenfalls erfolgreich an — der Rückwärtspfad ist
-  Teil der Zusage.
-- Die Zertifikatsprüfung ist aktiv; kein Test schaltet TLS-Verifikation ab.
-- Der Migrator läuft gegen das Ausgangsschema durch.
+Alle fünf Zusagen sind erfüllt und laufen als Test.
+
+| Zusage | Nachweis |
+|---|---|
+| IMAP-Anmeldung mit bcrypt gelingt, mit falschem Passwort nicht | `AuthenticationChainTest::testTheWholeChainWithABcryptAccount`, `…AWrongPasswordIsRefused` |
+| Dasselbe für SMTP-AUTH über STARTTLS | `SmtpAuthenticationTest` |
+| Ein DES-crypt-Konto meldet sich ebenfalls an | `AuthenticationChainTest`, Datensatz `descrypt` — dazu md5crypt, SHA1-hex und sha512crypt |
+| Zertifikatsprüfung aktiv, kein Test schaltet sie ab | `CertificateVerificationTest`: mit Test-CA gelingt, ohne sie scheitert es |
+| Der Migrator läuft gegen das Ausgangsschema durch | `MigratorIntegrationTest` — läuft seit **U-36** wirklich, statt sich zu überspringen |
+
+Nicht gefordert, aber miterledigt: `AuthenticationChainTest` weist auch nach, dass
+MySQL-`PASSWORD()` und Klartext **nicht** authentifizieren, weil keine PAM-Zeile sie abdeckt.
 
 ## Testfälle
 
-Dieses Paket **ist** die Testinfrastruktur. Eigene Prüfungen:
+Dieses Paket **ist** die Testinfrastruktur. Eigene Prüfungen, alle vorhanden:
 
-- Ein Rauchtest, der die Kette einmal vollständig durchläuft.
-- Ein Test, der belegt, dass `autocreate` aus ist: Anmeldung mit falschem Namensschema
-  scheitert und erzeugt **keine** Mailbox.
+- `AuthenticationChainTest` — die Kette einmal vollständig, je Hash-Format.
+- `AutocreateDisabledTest` — eine Anmeldung mit falschem Namensschema scheitert und erzeugt
+  **keine** Mailbox. Genau die 33 Schattenpostfächer, die im Altsystem unbemerkt entstanden.
+- `BaselineSchemaTest` — das Schema ist wirklich das webcyradm-Altschema, MyISAM und latin1
+  inbegriffen, und die beiden Views liefern, was Postfix und `pam_mysql` erwarten.

@@ -198,7 +198,17 @@ passt, wird als „unbekannt" geführt und **angezeigt** statt stillschweigend �
 
 ## 4. Der API-Vertrag: OpenAPI als Quelle (E-11)
 
-Design-first, nicht annotationsgeneriert. `openapi/openapi.yaml` (OpenAPI 3.1) ist die einzige
+> **Nachtrag aus der Umsetzung.** Drei Angaben dieses Abschnitts sind durch
+> [05-umsetzungsentscheidungen.md](05-umsetzungsentscheidungen.md) überholt: das Schema ist
+> **OpenAPI 3.0.3**, nicht 3.1 (U-2 — der gesetzte Validator unterstützt 3.1 nur unvollständig);
+> die Spezifikation liegt **auf mehrere Dateien verteilt** und wird gebündelt (U-3), bleibt aber
+> ein logisches Dokument; und **Redoc wird nicht ausgeliefert** — stattdessen liefert
+> `/api/docs/openapi.json` den gebündelten Vertrag (U-9, U-30). Der ursprüngliche Grund dafür
+> (Redoc bräuchte `style-src 'unsafe-inline'`) ist mit U-35 entfallen; die Entscheidung steht
+> jetzt nur noch auf der zusätzlichen Abhängigkeit und wird unter O-12 neu bewertet.
+> Property-basierte Vertragstests (Schemathesis) sind nicht eingerichtet, siehe U-16 und O-2.
+
+Design-first, nicht annotationsgeneriert. `openapi/openapi.yaml` (OpenAPI 3.0.3) ist die einzige
 Wahrheit; der Code richtet sich danach, nicht umgekehrt. Ein aus Annotationen erzeugtes Schema
 ist ein Nebenprodukt und driftet — ein handgeschriebener Vertrag ist ein Vertrag.
 
@@ -231,7 +241,9 @@ Betrieb.
 **Tests.** Die Spezifikation ist ausführbar: property-basierte Vertragstests (Schemathesis)
 fahren die API gegen das Schema; zusätzlich decken PHPUnit-Tests die Fachlogik ab.
 
-**Erkundung.** Unter `/api/docs` liefert Redoc die Spezifikation — in Produktion abschaltbar.
+**Erkundung.** Unter `/api/docs/openapi.json` liegt der gebündelte Vertrag — in Produktion
+abgeschaltet, über `MAILADMIN_API_DOCS=1` einschaltbar (U-9). Ein Betrachter läuft im eigenen
+Ursprung; die CSP wird dafür nicht aufgeweicht.
 
 ---
 
@@ -269,7 +281,9 @@ setzen kann. Deshalb hängt an dieser Entscheidung eine Reihe von Maßnahmen, di
   `localStorage`. Sonst wüchse das Zeitfenster eines gestohlenen Tokens von 60 Minuten auf
   12 Stunden — mit beliebiger Verlängerung durch den Angreifer.
 - **Strenge Content-Security-Policy** (Abschnitt 5.7). Sie ist ab hier die wichtigste
-  Einzelmaßnahme gegen XSS.
+  Einzelmaßnahme gegen XSS. Tragend ist dabei `script-src 'self'`: an das Token kommt nur, wer
+  Skripte ausführen kann. `style-src` trägt seit U-35 `'unsafe-inline'` (Material UI); das
+  berührt diesen Schutz nicht, kostet aber die Absicherung gegen Verunstaltung der Oberfläche.
 - **60 Minuten bleiben 60 Minuten.** Die Laufzeit wird nicht erhöht, um Anmeldungen zu sparen.
 - **Keine Fremdinhalte im Frontend:** keine externen Skripte, keine Analysebausteine, kein
   ungefiltertes Einsetzen von HTML.
@@ -383,7 +397,7 @@ Ausgeliefert vom Webserver bzw. vom Front-Controller, für alle Antworten:
 
 | Header | Wert | Zweck |
 |---|---|---|
-| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'` | kein `unsafe-inline`, kein `unsafe-eval`. Tragend wegen E-15. |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'` | Tragend wegen E-15 — aber **über `script-src`**, nicht über `style-src`. Kein `unsafe-eval`, nirgends. `style-src 'unsafe-inline'` ist mit U-35 für Material UI zugelassen; Begründung und Grenzen dort. |
 | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | erzwingt HTTPS |
 | `X-Content-Type-Options` | `nosniff` | verhindert MIME-Raten |
 | `Referrer-Policy` | `no-referrer` | keine Pfade an Dritte |
@@ -673,6 +687,15 @@ ausgeliefert. Die API liegt same-origin unter `/api` — kein CORS nötig. Der v
 unbekannte Pfade unterhalb des Anwendungsverzeichnisses die `index.html`, damit clientseitiges
 Routing funktioniert; `/api/*` geht an den Front-Controller.
 
+**Komponenten kommen von Material UI** (`@mui/material`, U-35). Roboto und die Material Icons
+werden **lokal gebündelt** (`@fontsource/roboto`, `@mui/icons-material`) — kein Google-Fonts-CDN,
+weder aus Bequemlichkeit noch als Rückfall. `default-src 'self'` verbietet es, und Abschnitt 5.2
+tut es ohnehin.
+
+MUI stylt zur Laufzeit über Emotion und schreibt dabei `<style>`-Elemente in das Dokument;
+deshalb trägt `style-src` in Abschnitt 5.7 `'unsafe-inline'`. `script-src` bleibt unangetastet —
+die Abwägung samt verworfener Alternativen steht in U-35.
+
 ### 11.2 Zusammenspiel mit der API
 
 - **Generierter Client.** `openapi-typescript` erzeugt Typen aus `openapi.yaml`; darüber ein
@@ -709,6 +732,12 @@ Zwischenspeicherung erledigen ausschließlich HTTP-Header:
 - `index.html` wird nie zwischengespeichert, damit ein Deployment sofort greift.
 - API-Antworten sind grundsätzlich `no-store` — Verwaltungsdaten gehören nicht in einen
   Browser-Cache.
+
+**Die Sicherheits-Header aus Abschnitt 5.7 müssen auch an der statisch ausgelieferten
+`index.html` hängen.** Heute setzt sie allein der Front-Controller, also nur für `/api/*` — die
+Shell, in der eine XSS-Lücke überhaupt erst wirksam würde, bekommt keine. W1 schließt das über
+`public/.htaccess` und die vHost-Beispiele oder durch Auslieferung der Shell über den
+Front-Controller (offener Punkt O-13).
 
 ### 11.4 Mehrsprachigkeit
 
@@ -815,16 +844,17 @@ Umsetzung nicht:
 
 | Punkt | Anmerkung |
 |---|---|
-| **Lizenz** | Noch festzulegen. Keine Bindung an die GPL von web-cyradm, da Neuentwicklung ohne Codeübernahme. |
-| **Wurzel-README** | Kurzfassung für die Repository-Startseite, sobald es etwas zu installieren gibt. |
+| **Lizenz** | AGPL-3.0-or-later (U-23); Bestätigung durch den Projekteigner offen (O-1). |
+| **Wurzel-README** | Erledigt: `README.md` mit Schnellstart für Installation und Entwicklung, Details in [deployment/installation.md](deployment/installation.md). |
 | **Umfang des ersten Release** | Vorschlag: Parität mit webcyradm plus Revisionsprotokoll und Abgleichsansicht. Die gezielte Massenrücksetzung wandert nach E-18 in eine spätere Fassung. |
 
 Bewusst offen gelassene Risiken, jeweils mit Begründung im Entscheidungsprotokoll:
 
 - **Bestandshashes bleiben in Altverfahren** (E-13, E-18). Sichtbar gemacht über die
   Hash-Format-Anzeige, nicht erzwungen umgestellt.
-- **Zugriffstoken im `localStorage`** (E-15). Kompensiert durch die Content-Security-Policy,
-  die kurze Laufzeit und das Erneuerungstoken im HttpOnly-Cookie.
+- **Zugriffstoken im `localStorage`** (E-15). Kompensiert durch die Content-Security-Policy —
+  seit U-35 mit `'unsafe-inline'` in `style-src`, aber unverändert strengem `script-src` —, die
+  kurze Laufzeit und das Erneuerungstoken im HttpOnly-Cookie.
 - **Drift zwischen Datenbank und Salt-Konfiguration bleibt unsichtbar** (E-9). Die Anwendung
   weist im Anlage-Dialog auf die nötigen externen Schritte hin, prüft sie aber nicht.
 - **Bestandsbereinigung findet nicht statt** (E-18). Die Abgleichsansicht zeigt den Zustand,

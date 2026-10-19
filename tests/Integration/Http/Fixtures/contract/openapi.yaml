@@ -1,0 +1,23 @@
+#
+# A contract that exists only for the tests.
+#
+# It uses an invented resource ("widgets") so that these tests keep passing when
+# the A packages add the real ones, and it exercises the two cases the real
+# contract cannot yet show: an operation with a request body, and an operation
+# that requires a token.
+#
+openapi: 3.0.3
+
+info:
+  title: mailadmin test contract
+  version: 1.0.0
+
+servers:
+  - url: /api/v1
+
+security:
+  - bearerAuth: []
+
+paths: {}
+
+components: {}

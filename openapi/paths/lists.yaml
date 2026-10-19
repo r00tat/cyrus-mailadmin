@@ -1,0 +1,261 @@
+#
+# Mailing lists (A5). See `openapi/README.md` for the file conventions and
+# `docs/03-architektur.md`, section 7.2, for where this resource sits.
+#
+# Five operations over one legacy table. What makes them unlike the rest of the
+# API is stated once here and repeated where it matters: the application writes
+# `lists` and never renders a file (E-4), so a change takes effect at the next
+# configuration run, not at save time.
+#
+tags:
+  - name: mailing-lists
+    description: |
+      Mailing lists — the `lists` table, made editable.
+
+      **webcyradm never showed this table.** It is written today by an external
+      tool and read by the configuration management, which renders it into an
+      aliases file (analysis 4.1 and 6). This package makes it visible and
+      editable; it does not take over the rendering, and it does not become
+      mailing list software — no subscriptions, no archives, no bounce handling.
+
+      Two consequences a client has to carry:
+
+        * every write answers with `X-Mailadmin-Effect: pending-configuration-run`,
+          because the change is in the database and not yet in the mail system;
+        * rows that were written before this application existed may contain
+          values it would not accept. They are shown and flagged
+          (`unusable_members`, `address_usable`), never filtered out and never
+          silently corrected (U-22).
+
+paths:
+  /lists:
+    get:
+      operationId: listMailingLists
+      tags:
+        - mailing-lists
+      summary: List mailing lists
+      description: |
+        One page of mailing lists (U-20).
+
+        Sorting is over an enumeration, never a free string, and so is the
+        direction. A filter the schema does not describe is answered with `422`
+        rather than ignored: a request asking for a subset that quietly gets
+        everything is worse than one that fails.
+      x-permission: list.read
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - $ref: '#/components/parameters/MailingListSortField'
+        - $ref: '#/components/parameters/SortOrder'
+        - $ref: '#/components/parameters/MailingListNameFilter'
+        - $ref: '#/components/parameters/MailingListTagFilter'
+        - $ref: '#/components/parameters/MailingListAddressFilter'
+        - $ref: '#/components/parameters/MailingListMemberFilter'
+      responses:
+        '200':
+          description: A page of mailing lists. An empty page is a `200`, not a `404`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailingListCollection'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      operationId: createMailingList
+      tags:
+        - mailing-lists
+      summary: Create a mailing list
+      description: |
+        Writes one row to `lists`. Nothing is created in the mail store — a
+        mailing list has no mailbox — so none of the ordering rules for
+        operations that span both systems apply (architecture 8.1).
+
+        **The address does not deliver yet.** It starts working when the
+        configuration management next renders the aliases file (E-4); the answer
+        carries `X-Mailadmin-Effect` to say so.
+
+        Every member has to be a mail address. That is a security rule, not
+        validation: the column is rendered into an aliases file, where `|command`
+        and `/path/to/file` name a command and a file rather than a recipient.
+      x-permission: list.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailingListCreateRequest'
+      responses:
+        '201':
+          description: |
+            Created. `Location` names the new list and `ETag` is its validator,
+            so that the next change can send `If-Match` without a round trip.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Location:
+              $ref: '#/components/headers/Location'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            X-Mailadmin-Effect:
+              $ref: '#/components/headers/MailingListEffect'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailingList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: A list of that name already exists — the name is the primary key (`list.already_exists`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /lists/{listName}:
+    parameters:
+      - $ref: '#/components/parameters/MailingListName'
+
+    get:
+      operationId: getMailingList
+      tags:
+        - mailing-lists
+      summary: One mailing list
+      description: |
+        Answers with an `ETag` over exactly the fields below (U-19) — a hash of
+        the representation, not of the database row, so that a column the
+        external tool writes in parallel does not invalidate an administrator's
+        `If-Match`.
+      x-permission: list.read
+      responses:
+        '200':
+          description: The list.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailingList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    patch:
+      operationId: updateMailingList
+      tags:
+        - mailing-lists
+      summary: Change a mailing list
+      description: |
+        **A field the request does not mention is left alone.** `{"tag": "team"}`
+        changes the tag and does not touch the members; `{"members": []}` empties
+        the member list.
+
+        A list saved without changing its membership is written back byte for
+        byte — the stored separator and spacing survive, and a `NULL` stays
+        `NULL`. That matters because `lists` is also written by another tool and
+        the exact form of the existing rows was never captured (U-56).
+
+        The name cannot be changed here. It identifies the list; renaming is a
+        delete and a create.
+
+        `If-Match` is accepted, not demanded. Sent and stale, the answer is
+        `412`; absent, the write proceeds (architecture 7.1).
+      x-permission: list.write
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailingListUpdateRequest'
+      responses:
+        '200':
+          description: The list as it now stands, with its new validator.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            X-Mailadmin-Effect:
+              $ref: '#/components/headers/MailingListEffect'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailingList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      operationId: deleteMailingList
+      tags:
+        - mailing-lists
+      summary: Delete a mailing list
+      description: |
+        Removes the row. Nothing is removed from the mail store, because nothing
+        was ever created there.
+
+        **The address keeps delivering until the configuration management next
+        runs** (E-4) — the opposite of the surprise every other delete in this
+        API has, which is why the answer carries `X-Mailadmin-Effect` although it
+        has no body.
+
+        `If-Match` is accepted here too: deleting the wrong version of a list is
+        exactly as damaging as overwriting it.
+      x-permission: list.delete
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            X-Mailadmin-Effect:
+              $ref: '#/components/headers/MailingListEffect'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'

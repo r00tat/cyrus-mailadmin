@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Four suites, matching the test levels in architecture 12.3:
+
+    unit          domain model, value objects, policies, password handling — no I/O
+    application   use cases including error and compensation paths, against the
+                  in-memory mailstore double
+    contract      every endpoint against the bundled OpenAPI document
+    integration   mailbox, ACL, quota, Sieve, IMAP and SMTP login — needs the
+                  Docker environment (F5)
+
+  All four exist from the start even though F1 only fills `unit` and `integration`.
+  A suite that appears later tends to appear with a different name.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         cacheDirectory="var/cache/phpunit"
+         colors="true"
+         executionOrder="depends,defects"
+         failOnRisky="true"
+         failOnWarning="true"
+         beStrictAboutOutputDuringTests="true"
+         beStrictAboutChangesToGlobalState="true"
+         displayDetailsOnTestsThatTriggerDeprecations="true"
+         displayDetailsOnTestsThatTriggerErrors="true"
+         displayDetailsOnTestsThatTriggerNotices="true"
+         displayDetailsOnTestsThatTriggerWarnings="true">
+    <testsuites>
+        <testsuite name="unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="application">
+            <directory>tests/Application</directory>
+        </testsuite>
+        <testsuite name="contract">
+            <directory>tests/Contract</directory>
+        </testsuite>
+        <testsuite name="integration">
+            <directory>tests/Integration</directory>
+        </testsuite>
+    </testsuites>
+
+    <source>
+        <include>
+            <directory>src</directory>
+        </include>
+    </source>
+
+    <php>
+        <!-- U-14: the same timezone the application sets at runtime. -->
+        <ini name="date.timezone" value="UTC"/>
+        <env name="MAILADMIN_ENV" value="test"/>
+
+        <!--
+          A signing key for the test run (S2).
+
+          NOT A SECRET AND NOT USABLE ANYWHERE. It is 32 zero bytes, chosen so
+          that nobody can mistake it for a generated value and so that a
+          production configuration accidentally pointing at this file is obvious
+          rather than subtle. Real installations generate one with
+          `openssl rand -base64 32` and put it in the environment (U-11).
+
+          It is needed because the application refuses to build a container
+          without a signing key — the authentication middleware is part of the
+          route chain, so every contract test constructs it. That refusal is the
+          intended production behaviour and is exercised by its own unit test;
+          the whole suite should not have to pay for it.
+        -->
+        <env name="MAILADMIN_JWT_SIGNING_KEY" value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="/>
+
+        <!--
+          A DSN that is never dialled.
+
+          Since S2 the route-middleware chain contains authentication, which
+          reads `adminuser` — so assembling the container now resolves the
+          database configuration, and that refuses to exist without a DSN. The
+          connection itself is lazy, so a test that touches no table opens no
+          socket and this value is never used for anything.
+
+          The tests that do need a database read MAILADMIN_TEST_DB_DSN instead
+          and skip when it is absent (see DatabaseTestCase). Setting this one
+          therefore cannot turn a skipped test into a passing one, which is the
+          property that matters.
+        -->
+        <env name="MAILADMIN_DB_DSN" value="mysql:host=localhost.invalid;port=3306;dbname=unused;charset=utf8mb4"/>
+        <env name="MAILADMIN_DB_USER" value="unused"/>
+        <env name="MAILADMIN_DB_PASSWORD" value="unused"/>
+    </php>
+</phpunit>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <!--
+      No <title> text is translated here: this is the shell, it is served before
+      any script runs, and E-16 forbids a hard-coded user-visible string in the
+      application. The document title is set from a translation key once the app
+      mounts (src/app/DocumentTitle.tsx); this value is the pre-mount fallback
+      and is the product name, not a sentence.
+    -->
+    <title>mailadmin</title>
+    <!--
+      No <link> to a font provider and no <script> with a body. The security
+      headers are set by the web server (public/.htaccess and the vHost
+      examples), not by a <meta http-equiv>: a meta CSP cannot express
+      frame-ancestors and would be the second place the policy lives.
+    -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

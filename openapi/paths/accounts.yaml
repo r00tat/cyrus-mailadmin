@@ -1,0 +1,457 @@
+#
+# Mail accounts (A2). Schemas and parameters live in
+# `openapi/components/account.yaml`; everything cross-cutting comes from
+# `components/common.yaml`, and `DomainNamePath` from `components/domain.yaml`.
+#
+# Eight operations over two resources: the account as the database knows it
+# (`accountuser` plus its address row in `virtual`), and its quota as Cyrus
+# knows it. The quota is a resource of its own because it lives in the mail
+# store and costs an IMAP round trip; putting it into the list would make every
+# page cost one per row, which is what made the legacy lists slow (architecture
+# 7.2).
+#
+# No operation declares `403`: both roles hold every `account.*` permission
+# (`RolePermissions`). What separates a domain master from someone else's
+# accounts is scope, and scope answers `404` (CLAUDE.md, U-44).
+#
+tags:
+  - name: accounts
+    description: |
+      Creating, listing, changing and removing mail accounts, setting their
+      passwords and reading and setting their quota.
+
+      Every write that reaches both systems follows architecture 8.1 — so that
+      a failure loses nobody's mail: creating puts the mailbox in Cyrus
+      **before** the database rows that make Postfix deliver to it, deleting
+      removes the database rows **before** the mailbox. What could not be
+      undone after a failure is recorded in the repair queue.
+
+paths:
+  /domains/{domain}/accounts:
+    parameters:
+      - $ref: '#/components/parameters/DomainNamePath'
+
+    get:
+      operationId: listAccounts
+      tags:
+        - accounts
+      summary: List the accounts of a domain
+      description: |
+        One page of the domain's rows in `accountuser`, read from the database
+        alone. Quota and usage are **not** here; they live in Cyrus and are
+        `GET /accounts/{account}/quota`.
+
+        Every row carries the format of its stored password hash, and the list
+        can be filtered by it (E-13): the legacy formats stay valid, and this is
+        where an operator sees how many accounts still use them.
+
+        A row whose stored user name contradicts its `domain_name` is listed
+        with `resolvable: false` rather than skipped (U-22).
+      x-permission: account.read
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - $ref: '#/components/parameters/AccountSort'
+        - $ref: '#/components/parameters/SortOrder'
+        - $ref: '#/components/parameters/AccountNameFilter'
+        - $ref: '#/components/parameters/AccountPasswordFormatFilter'
+      responses:
+        '200':
+          description: One page of accounts.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountCollection'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      operationId: createAccount
+      tags:
+        - accounts
+      summary: Create an account
+      description: |
+        The order is fixed by architecture 8.1:
+
+        1. the mailbox is created in Cyrus, its owner gets the full ACL, and the
+           quota is set;
+        2. **then** `accountuser` and the address row in `virtual` are written in
+           one transaction;
+        3. then the domain's default folders are created and subscribed in the
+           owner's name (SASL proxy authorisation, never the owner's password).
+
+        A failure in step 1 changes nothing. A failure after the mailbox exists
+        removes it again and answers `409` with `account.setup_incomplete`; a
+        mailbox that cannot be removed becomes a repair-queue entry. A failure in
+        step 3 leaves a working account: the answer is `201` and
+        `incomplete_steps` names what is missing.
+
+        The account limit of the domain (`max_accounts`) is checked twice: once
+        before the mailbox step, so that the ordinary refusal touches nothing,
+        and once more under a per-domain lock in the database step, so that two
+        concurrent creations cannot both take the last place (U-81).
+
+        The Cyrus user name is derived from the local part and the domain's
+        naming scheme, never taken apart. It may be at most 50 characters,
+        because `virtual.username` is `VARCHAR(50)` and cannot be widened
+        (CLAUDE.md, rule one).
+
+        The password is stored as bcrypt, which `crypt(3)` and therefore
+        `pam_mysql` can read (E-13). It never appears in a response, a log line
+        or the audit trail.
+      x-permission: account.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCreateRequest'
+      responses:
+        '201':
+          description: The account was created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Location:
+              $ref: '#/components/headers/Location'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountCreated'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The address or the Cyrus user name is already taken, or in the
+            dotted scheme the user name would fall into the namespace of an
+            existing subdomain (`account.name_taken`), the domain holds as many accounts as it may
+            (`account.limit_reached`), the quota would exceed the domain's
+            allowance (`account.quota_exceeds_domain`), Cyrus already has a
+            mailbox under that name that no account claims
+            (`account.mailbox_exists`), or a step after the mailbox failed and
+            was undone (`account.setup_incomplete`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /accounts/{account}:
+    parameters:
+      - $ref: '#/components/parameters/AccountIdPath'
+
+    get:
+      operationId: getAccount
+      tags:
+        - accounts
+      summary: One account
+      description: |
+        Carries an `ETag` over the representation (U-19). `PATCH` accepts it in
+        `If-Match`, `DELETE` requires it.
+      x-permission: account.read
+      responses:
+        '200':
+          description: The account.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    patch:
+      operationId: updateAccount
+      tags:
+        - accounts
+      summary: Change the service flags of an account, or disable and enable it
+      description: |
+        Writes `accountuser.imap`, `pop`, `sieve` and `smtpauth`, and whether
+        the account may log in. Nothing else about an account is changed here:
+        the password has its own endpoint, the quota lives in Cyrus, and a
+        rename or a change of naming scheme is not offered (U-82).
+
+        **The flags are carried, not enforced.** `allusers` passes them on, but
+        neither `pam_mysql` (whose account stack is `pam_permit`) nor Cyrus reads
+        them — the same as under webcyradm. Switching a flag off does not lock
+        anybody out (U-78).
+
+        **`enabled` is enforced** (U-127). `false` records the account in
+        `mailadmin_account_status`, and the view `allusers` — what
+        `saslauthd`/`pam_mysql` authenticates against — leaves it out: IMAP,
+        POP, ManageSieve and SMTP-AUTH refuse its password, in both spellings
+        of its login. Mail is still delivered to the mailbox. Connections that
+        are already open are not closed. `true` allows the logins again.
+
+        Before a disabling is confirmed, the view is asked in the same
+        transaction whether it still offers the login. If it does, the
+        installation runs a view without the status filter: nothing is changed
+        and the answer is `409` with `account.status_not_enforced`.
+
+        Audited as `account.disable` / `account.enable` and `account.update`.
+        `If-Match` is accepted and checked when sent, not required.
+      x-permission: account.write
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountUpdateRequest'
+      responses:
+        '200':
+          description: The account after the change.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The stored user name cannot be resolved
+            (`account.identity_mismatch`), or the account was to be disabled
+            and the deployed view `allusers` does not honour the status
+            (`account.status_not_enforced`); nothing was changed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      operationId: deleteAccount
+      tags:
+        - accounts
+      summary: Delete an account and its mailbox
+      description: |
+        The order is fixed by architecture 8.1: the rows in `virtual` and
+        `accountuser` are removed **first**, so that no more mail is accepted;
+        the mailbox is removed after that. If Cyrus refuses, the account is
+        still gone — the answer is `204`, and the mailbox left behind is a
+        repair-queue entry the reconciliation reports.
+
+        Removed from `virtual` are the rows that name this account as their
+        `username` and the forward rows whose `alias` is its user name — what
+        webcyradm removed (U-83). The account's row in
+        `mailadmin_account_status` goes with it (U-127).
+
+        **The domain's catchall goes with the account** (U-128). If a catchall
+        row (`@<domain>`) delivers to the account — its stored user name, its
+        own address, or another address that is removed with it and leaves no
+        enabled row behind — that destination is taken out of the row in the
+        same database step. A row with other destinations keeps them; a row
+        with none left is removed. A catchall that named the account as its
+        sending account keeps working without one. The audit trail records it
+        as a child entry of the deletion.
+
+        **`If-Match` is required**: the mail in the mailbox goes with it. A
+        client should show the usage from `GET /accounts/{account}/quota` in
+        its confirmation; this API offers no undelete (U-83).
+      x-permission: account.delete
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: The account is gone. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{account}/password:
+    parameters:
+      - $ref: '#/components/parameters/AccountIdPath'
+
+    put:
+      operationId: setAccountPassword
+      tags:
+        - accounts
+      summary: Set the password of an account
+      description: |
+        Hashes the new password with bcrypt — never Argon2id, which `crypt(3)`
+        cannot read and which would break IMAP and SMTP login (CLAUDE.md) — and
+        writes it to `accountuser.password`. An account in a legacy format moves
+        to bcrypt with this; nothing else forces it to (E-13).
+
+        The rules are S1's for mail accounts. A refused password is `422` with
+        the `auth.password_*` code that names the rule; the password itself is
+        never echoed, logged or audited.
+      x-permission: account.password.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountPasswordRequest'
+      responses:
+        '204':
+          description: The password was set. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{account}/quota:
+    parameters:
+      - $ref: '#/components/parameters/AccountIdPath'
+
+    get:
+      operationId: getAccountQuota
+      tags:
+        - accounts
+      summary: Quota limit and usage of an account
+      description: |
+        Read from Cyrus (`GETQUOTAROOT`), not from the database — there is no
+        quota column (architecture 7.2). One IMAP round trip.
+      x-permission: account.read
+      responses:
+        '200':
+          description: Limit and usage.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountQuota'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The account has no mailbox in Cyrus (`account.mailbox_missing`), or
+            its stored user name cannot be resolved against its domain
+            (`account.identity_mismatch`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+    put:
+      operationId: setAccountQuota
+      tags:
+        - accounts
+      summary: Set the quota limit of an account
+      description: |
+        `SETQUOTA` on the mailbox. `null` removes the limit; `0` is not
+        accepted, because a mailbox with a zero limit refuses every message
+        (U-79).
+
+        When the domain has an allowance (`domain_quota_kib`), **raising** a
+        limit — or removing it — is checked against the sum of every other
+        account's limit, read from Cyrus over one connection (U-48, U-81).
+        Lowering is always allowed.
+      x-permission: account.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountQuotaRequest'
+      responses:
+        '200':
+          description: Limit and usage after the change.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountQuota'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The new limit would exceed the domain's allowance
+            (`account.quota_exceeds_domain`), the account has no mailbox
+            (`account.mailbox_missing`), or its stored user name cannot be
+            resolved (`account.identity_mismatch`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'

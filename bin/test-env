@@ -1,0 +1,199 @@
+#!/usr/bin/env sh
+#
+# mailadmin — the local test environment (F5).
+#
+# A thin, readable wrapper around `docker compose`. Everything it does could be
+# typed by hand; what it adds is the three things that are easy to forget and
+# produce confusing failures when they are:
+#
+#   1. the certificates have to exist before the mail container starts, because
+#      TLS is mandatory and there is no switch to turn verification off;
+#   2. "the containers are up" is not "the services are ready" — Cyrus needs an
+#      initialised mailboxes.db, and a test that starts too early fails in a way
+#      that looks like a bug in the client;
+#   3. resetting means removing the volumes, not restarting: the database init
+#      scripts only run when the data volume is created, and the whole point of
+#      the baseline is that the migrator meets a legacy schema.
+#
+# Deliberately POSIX sh and deliberately not a PHP script (U-29 e applies to CLI
+# scripts of the application; this one orchestrates Docker and runs before PHP
+# exists anywhere).
+#
+# EVERY CREDENTIAL INVOLVED IS A TEST VALUE, in git on purpose. See the header of
+# docker/compose.yaml.
+
+set -eu
+
+project_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+compose_file="$project_root/docker/compose.yaml"
+certs_out="$project_root/docker/certs/out"
+
+compose() {
+    docker compose -f "$compose_file" "$@"
+}
+
+usage() {
+    cat <<'USAGE'
+mailadmin test environment (F5)
+
+  bin/test-env up        build if needed, start, wait until the services answer
+  bin/test-env seed      load the synthetic fixtures (safe to repeat)
+  bin/test-env down      stop the containers, keep the data
+  bin/test-env reset     stop and remove the volumes — back to the baseline schema
+  bin/test-env test      run PHPUnit inside the app container
+  bin/test-env logs      follow the logs of every service
+  bin/test-env shell     a shell in the app container
+  bin/test-env status    what is running, and what answers
+
+Ports on the host (all bound to 127.0.0.1):
+
+  13306  MariaDB          10143  IMAP + STARTTLS     10993  IMAPS
+  10025  SMTP             10587  submission          14190  ManageSieve
+  18080  Apache
+
+USAGE
+}
+
+# The certificates are a build input for the mail container and a trust anchor
+# for the app container. Generating them here rather than in a Dockerfile keeps
+# one CA across rebuilds, so a running client does not lose its anchor when an
+# image is rebuilt.
+ensure_certificates() {
+    if [ -r "$certs_out/ca.crt" ] && [ -r "$certs_out/server.crt" ] \
+       && [ -r "$certs_out/server.key" ]; then
+        return 0
+    fi
+
+    echo '==> generating the test CA and server certificate'
+    sh "$project_root/docker/certs/generate.sh"
+}
+
+# `docker compose up --wait` honours the healthchecks, which is what "ready"
+# means here: the database answers `healthcheck.sh --connect`, and the mail
+# container's own script has spoken IMAP, SMTP and ManageSieve.
+wait_for() {
+    if compose up -d --wait --wait-timeout 300 "$@"; then
+        return 0
+    fi
+
+    echo >&2
+    echo >&2 'The environment did not become healthy in time.'
+    echo >&2 'The last lines of each service:'
+    echo >&2
+    compose logs --tail 40 >&2
+
+    return 1
+}
+
+# The rows. `00-reset.sql` empties the legacy tables first, so this is
+# idempotent and can be repeated between test runs — which is why the fixtures
+# are loaded through the client and not from the init directory, where they
+# would run once per volume and never again.
+load_sql_fixtures() {
+    echo '==> loading fixtures'
+
+    for fixture in "$project_root"/docker/db/fixtures/*.sql; do
+        echo "    $(basename "$fixture")"
+        compose exec -T db \
+            mariadb --user=root --password=testenv-root-pw mail < "$fixture"
+    done
+}
+
+# The mailboxes behind those rows. A row in `accountuser` with no mailbox is
+# exactly the inconsistency A6 reports, and not what a fixture should hand to
+# every other test.
+#
+# The account list comes from the database rather than from a list in this
+# script, so that adding a fixture account is one edit and not two. `cyrus` is
+# skipped: it is the administrator, not a mailbox.
+create_fixture_mailboxes() {
+    echo '==> creating the fixture mailboxes in Cyrus'
+
+    accounts=$(compose exec -T db mariadb --user=root --password=testenv-root-pw \
+        --skip-column-names --batch mail \
+        -e "SELECT username FROM accountuser WHERE domain_name <> '' ORDER BY username" \
+        | tr -d '\r')
+
+    if [ -z "$accounts" ]; then
+        echo >&2 'No accounts in `accountuser` — did the fixtures load?'
+        exit 1
+    fi
+
+    # shellcheck disable=SC2086
+    compose exec -T mail /usr/local/bin/create-mailboxes.pl create $accounts
+}
+
+command=${1:-help}
+[ $# -gt 0 ] && shift
+
+case "$command" in
+    up)
+        ensure_certificates
+        echo '==> building images that are out of date'
+        compose build "$@"
+
+        # The database first, and the rows before the mail container is waited
+        # on. Cyrus authenticates its own administrator through saslauthd against
+        # `accountuser`, so its healthcheck cannot pass until the fixtures are
+        # there: waiting for a healthy `mail` before seeding waits forever.
+        echo '==> starting the database'
+        wait_for db
+        load_sql_fixtures
+
+        echo '==> starting the remaining services'
+        wait_for
+        create_fixture_mailboxes
+
+        echo
+        echo 'Ready.'
+        ;;
+
+    seed)
+        # Reloading into an environment that is already up.
+        load_sql_fixtures
+        create_fixture_mailboxes
+        echo 'Fixtures loaded.'
+        ;;
+
+    down)
+        compose down "$@"
+        ;;
+
+    reset)
+        # `--volumes` is the point: the database init scripts run only when the
+        # data volume is created, and the baseline schema is what the migrator is
+        # supposed to meet (architecture 12.3).
+        echo '==> removing containers and volumes'
+        compose down --volumes "$@"
+        echo 'Reset. `bin/test-env up` starts from the baseline schema again.'
+        ;;
+
+    test)
+        # Inside the app container: it is the one place with pdo_mysql, the test
+        # CA in its trust store and a route to both other services.
+        compose exec -T app php vendor/bin/phpunit "$@"
+        ;;
+
+    logs)
+        compose logs -f "$@"
+        ;;
+
+    shell)
+        compose exec app sh
+        ;;
+
+    status)
+        compose ps
+        ;;
+
+    help|--help|-h)
+        usage
+        ;;
+
+    *)
+        echo >&2 "Unknown command: $command"
+        echo >&2
+        usage >&2
+        exit 64
+        ;;
+esac

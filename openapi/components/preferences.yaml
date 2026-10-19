@@ -1,0 +1,35 @@
+#
+# Schemas for per-administrator interface preferences (W2).
+#
+components:
+  schemas:
+    AdminPreferences:
+      type: object
+      description: |
+        An administrator's own interface preferences, stored in
+        `mailadmin_admin_setting` (one row per key, U-90).
+      required:
+        - locale
+      additionalProperties: false
+      properties:
+        locale:
+          description: |
+            The interface language this administrator has chosen, or `null` to
+            follow the browser.
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/InterfaceLocale'
+
+    InterfaceLocale:
+      type: string
+      description: |
+        A language the frontend ships a catalogue for. **This enumeration and
+        the catalogues in `frontend/src/i18n/` are the same list**: a test on
+        each side holds them together (U-89), so a value here that the frontend
+        cannot render, or a catalogue the server would refuse to store, fails
+        the build.
+
+        German only for now (U-91). English is a catalogue file and one value
+        here, nothing more.
+      enum:
+        - de

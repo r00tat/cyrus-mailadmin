@@ -1,0 +1,731 @@
+#
+# Addresses, aliases, catchall, forwards and the vacation notice (A3). Schemas
+# and parameters live in `openapi/components/address.yaml`; everything
+# cross-cutting comes from `components/common.yaml`, `DomainNamePath` from
+# `components/domain.yaml` and `AccountIdPath` from `components/account.yaml`.
+#
+# Three of the four are rows of `virtual`, the table Postfix reads at delivery
+# time (CLAUDE.md, rule one); the fourth is a Sieve script. The table is
+# written in its legacy shape and nothing else: no column added, no meaning
+# changed, and the view `validsenders` keeps working because `username` is
+# written as the sending right it is (U-106).
+#
+# No operation declares `403`: both roles hold every `address.*` permission
+# (`RolePermissions`). What separates a domain master from someone else's
+# addresses is scope, and scope answers `404` (CLAUDE.md, U-44).
+#
+# `If-Match` is accepted on every write and checked when sent (U-55's line for
+# changes that are cheap to set back); every `GET` of a single resource
+# carries an `ETag`.
+#
+tags:
+  - name: addresses
+    description: |
+      The rows of `virtual` — addresses, aliases, the catchall, forwards — and
+      the vacation notice in Sieve.
+
+      Every row is shown, including the ones that fit no pattern (U-22). A row
+      is changed only as part of a resource whose rows can be written back as
+      one; anything else is shown and can be removed one row at a time
+      (U-103, U-105).
+
+      `virtual` is MyISAM (O-11): a change and its audit entry are not one
+      transaction. When the audit entry fails, the rows are set back; when
+      that fails as well, the repair queue says so (U-105).
+
+paths:
+  /domains/{domain}/addresses:
+    parameters:
+      - $ref: '#/components/parameters/DomainNamePath'
+
+    get:
+      operationId: listDomainAddresses
+      tags:
+        - addresses
+      summary: List every row of a domain in the address table
+      description: |
+        The rows whose `alias` ends in `@<domain>`, the forward rows of the
+        domain's accounts in the dotted scheme, and rows without `@` that
+        deliver into an account of the domain — classified, and **including
+        those that fit no pattern** (U-22, U-103). Aliases of other domains that
+        point here are not listed.
+
+        Sorted and paged after classification, because the type of a row is
+        not a column.
+
+        A name without a `domain` row is listed when rows still carry it: this
+        is where the leftovers of a deleted domain are found (U-95, U-99). A
+        name with neither answers `404`.
+      x-permission: address.read
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - $ref: '#/components/parameters/AddressSort'
+        - $ref: '#/components/parameters/SortOrder'
+        - $ref: '#/components/parameters/AddressTypeFilter'
+        - $ref: '#/components/parameters/AddressAliasFilter'
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressEntryCollection'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /domains/{domain}/addresses/{entry}:
+    parameters:
+      - $ref: '#/components/parameters/DomainNamePath'
+      - $ref: '#/components/parameters/AddressEntryPath'
+
+    delete:
+      operationId: deleteDomainAddress
+      tags:
+        - addresses
+      summary: Remove one row of the address table
+      description: |
+        Removes exactly the row the `id` names — whatever its type, including
+        one that fits no pattern (U-103). This is how the leftovers that block
+        `DELETE /domains/{domain}` (`domain.still_has_addresses`) are cleared.
+
+        An account's own address row is refused with `address.not_editable`: it
+        is what delivers into the mailbox and goes with the account.
+        `postmaster` and `abuse` need `confirm_reserved` (`address.reserved`,
+        U-109).
+
+        A row whose `alias` has no `@` is a lookup key and belongs to the
+        domain of the account it names (U-126). Every such domain must be in
+        the caller's scope, or the row is not found. A key that names no
+        account belongs to no domain: only a superuser removes it, anyone else
+        gets `address.not_editable`.
+      x-permission: address.delete
+      parameters:
+        - $ref: '#/components/parameters/ConfirmReserved'
+      responses:
+        '204':
+          description: The row is gone. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The row is an account's own address or a key without `@` that names
+            no account while the caller is no superuser (`address.not_editable`), a
+            reserved address without confirmation (`address.reserved`), it
+            changed while it was being removed (`address.not_editable`), or the
+            domain's enabled catchall would lose a working destination
+            (`address.needed_by_catchall`, U-112).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /domains/{domain}/aliases:
+    parameters:
+      - $ref: '#/components/parameters/DomainNamePath'
+
+    post:
+      operationId: createAlias
+      tags:
+        - addresses
+      summary: Create an alias
+      description: |
+        One row in `virtual`. The address must not be in use — as a row of any
+        type or as an account's user name — checked under the namespace lock
+        A1 and A2 take for the same question.
+
+        Destinations are mail addresses or account user names (U-104).
+        `sender_account` names the account `validsenders` lets send as the
+        alias; it must be among the destinations. Absent, the alias's only
+        destination is used when it is an account, and nobody otherwise
+        (U-106).
+      x-permission: address.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AliasCreateRequest'
+      responses:
+        '201':
+          description: The alias was created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Location:
+              $ref: '#/components/headers/Location'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alias'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The address is already in use (`address.taken`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /aliases/{alias}:
+    parameters:
+      - $ref: '#/components/parameters/AliasPath'
+
+    get:
+      operationId: getAlias
+      tags:
+        - addresses
+      summary: One alias
+      description: |
+        Every row under the address, the destinations as their union. An
+        address whose rows are all of another type — an account's own address,
+        say — is no alias and `404`.
+      x-permission: address.read
+      responses:
+        '200':
+          description: The alias.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alias'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    patch:
+      operationId: updateAlias
+      tags:
+        - addresses
+      summary: Change an alias
+      description: |
+        Rewrites the alias as **one** row (U-105): the new row is inserted
+        first and the old ones removed after it, so that Postfix never sees
+        the address without a row. Only when every row under the address is an
+        alias naming the same sending account (`editable`); otherwise
+        `address.not_editable`.
+
+        Disabling withdraws the sending right as well — `validsenders` joins
+        only enabled rows. Disabling `postmaster` or `abuse` needs
+        `confirm_reserved`.
+      x-permission: address.write
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AliasUpdateRequest'
+      responses:
+        '200':
+          description: The alias after the change.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alias'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The rows cannot be written back as one (`address.not_editable`), a
+            reserved address would be disabled without confirmation
+            (`address.reserved`), or the domain's enabled catchall would lose a
+            working destination (`address.needed_by_catchall`, U-112).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      operationId: deleteAlias
+      tags:
+        - addresses
+      summary: Delete an alias
+      description: |
+        Removes every alias row under the address. Rows of another type stay.
+        `postmaster` and `abuse` need `confirm_reserved` (U-109).
+      x-permission: address.delete
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/ConfirmReserved'
+      responses:
+        '204':
+          description: The alias is gone. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            A reserved address without confirmation (`address.reserved`), the
+            rows changed while they were being removed
+            (`address.not_editable`), or the domain's enabled catchall would
+            lose a working destination (`address.needed_by_catchall`, U-112).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /domains/{domain}/catchall:
+    parameters:
+      - $ref: '#/components/parameters/DomainNamePath'
+
+    get:
+      operationId: getCatchall
+      tags:
+        - addresses
+      summary: The catchall of a domain
+      description: |
+        `configured: false` when the domain has none. Postfix prefers any row
+        of a concrete address; a concrete address whose rows are all disabled
+        falls through to the catchall (U-108).
+      x-permission: address.read
+      responses:
+        '200':
+          description: The catchall.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Catchall'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    put:
+      operationId: setCatchall
+      tags:
+        - addresses
+      summary: Create or replace the catchall
+      description: |
+        One row, `alias = '@<domain>'`. A destination inside the domain must
+        already be an enabled address (or an account), or the mail would fall
+        back through the catchall and bounce; a destination that leads into a
+        loop is refused as well (`address.invalid_destination`, U-108, U-112).
+
+        Nobody may send as the catchall unless `sender_account` says so —
+        unlike webcyradm's `catchall.php`, which granted it to the first
+        destination and with it the right to send as every address of the
+        domain (U-106). A sending account already stored is kept while it
+        still receives.
+      x-permission: address.write
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CatchallRequest'
+      responses:
+        '200':
+          description: The catchall after the change.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Catchall'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      operationId: deleteCatchall
+      tags:
+        - addresses
+      summary: Remove the catchall
+      description: Idempotent — a domain without a catchall answers `204` as well.
+      x-permission: address.delete
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: The domain has no catchall. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{account}/forwards:
+    parameters:
+      - $ref: '#/components/parameters/AccountIdPath'
+
+    get:
+      operationId: getForwards
+      tags:
+        - addresses
+      summary: The forward of an account
+      description: '`configured: false` when the account has none.'
+      x-permission: address.read
+      responses:
+        '200':
+          description: The forward.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Forwards'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    put:
+      operationId: setForwards
+      tags:
+        - addresses
+      summary: Set the forward of an account
+      description: |
+        One row in `virtual`, keyed by the account's stored user name — never a
+        Sieve `redirect` (U-107). `keep_copy` appends the account's own user
+        name to the destinations, the way every legacy row encodes it.
+
+        In the `fqun` scheme the mailbox always receives a copy, so
+        `keep_copy: false` is refused there (`forward.copy_required`). Without
+        a copy, the vacation notice never answers.
+      x-permission: address.write
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForwardsRequest'
+      responses:
+        '200':
+          description: The forward after the change.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Forwards'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            A copy is required for this account (`forward.copy_required`), the
+            rows under its name are not all forwards (`address.not_editable`),
+            or its stored user name cannot be resolved
+            (`account.identity_mismatch`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      operationId: deleteForwards
+      tags:
+        - addresses
+      summary: Remove the forward of an account
+      description: Idempotent.
+      x-permission: address.delete
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: The account has no forward. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{account}/vacation:
+    parameters:
+      - $ref: '#/components/parameters/AccountIdPath'
+
+    get:
+      operationId: getVacation
+      tags:
+        - addresses
+      summary: The vacation notice of an account
+      description: |
+        Read from the account's active Sieve script — from the model line
+        mailadmin writes under its marker, never by parsing Sieve (U-102). A
+        foreign or unreadable script is returned in `script`, read-only.
+      x-permission: address.read
+      responses:
+        '200':
+          description: The vacation notice.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Vacation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The stored user name cannot be resolved (`account.identity_mismatch`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          description: The Sieve service failed (`vacation.mailstore_unavailable`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+    put:
+      operationId: setVacation
+      tags:
+        - addresses
+      summary: Set the vacation notice of an account
+      description: |
+        Rendered whole into the account's Sieve script and installed by M3's
+        installer: checked against the server's extensions, stored, then
+        activated (architecture 9.4). Whatever else our script holds is
+        carried over; nothing is patched.
+
+        A foreign active script is replaced only with `take_over: true`
+        (`vacation.foreign_script` otherwise). There is no period: Sieve
+        `vacation` has none, and the notice stays until it is removed (A3 open
+        point 7).
+
+        The message is not written to the audit trail; its length is.
+      x-permission: address.write
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VacationRequest'
+      responses:
+        '200':
+          description: The vacation notice after the change.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Vacation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The active script is foreign and `take_over` was not given
+            (`vacation.foreign_script`), the server has no `vacation` extension
+            (`vacation.not_supported`), or the stored user name cannot be
+            resolved (`account.identity_mismatch`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          description: The Sieve service failed (`vacation.mailstore_unavailable`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+    delete:
+      operationId: deleteVacation
+      tags:
+        - addresses
+      summary: Remove the vacation notice of an account
+      description: |
+        Our script is rendered again without the notice, and withdrawn when
+        nothing is left. A foreign script is only deactivated, and only with
+        `take_over` (`vacation.foreign_script` otherwise). Idempotent.
+      x-permission: address.delete
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/TakeOver'
+      responses:
+        '204':
+          description: The account has no vacation notice. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The active script is foreign and `take_over` was not given
+            (`vacation.foreign_script`), or the stored user name cannot be
+            resolved (`account.identity_mismatch`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          description: The Sieve service failed (`vacation.mailstore_unavailable`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'

@@ -1,0 +1,7 @@
+# `mydestination` — which domains this host accepts mail for.
+# Production query, unchanged (analysis, section 6).
+hosts = __DB_HOST__
+user = __DB_USER__
+password = __DB_PASSWORD__
+dbname = __DB_NAME__
+query = SELECT domain_name FROM domain WHERE domain_name='%s'

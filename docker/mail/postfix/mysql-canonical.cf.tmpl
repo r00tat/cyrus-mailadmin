@@ -1,0 +1,8 @@
+# `sender_canonical_maps` — rewrites a Cyrus user name back into an address on
+# the way out.
+# Production query, unchanged. The LIKE with no wildcard is theirs, not ours.
+hosts = __DB_HOST__
+user = __DB_USER__
+password = __DB_PASSWORD__
+dbname = __DB_NAME__
+query = SELECT alias FROM virtual WHERE username LIKE '%s' AND status='1' LIMIT 1

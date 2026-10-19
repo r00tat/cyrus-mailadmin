@@ -1,0 +1,318 @@
+#
+# Domain management (A1). Schemas and parameters live in
+# `openapi/components/domain.yaml`; everything cross-cutting comes from
+# `components/common.yaml`.
+#
+# Five operations, split across two permissions on purpose: reading is scoped,
+# writing is superuser-only. That asymmetry is webcyradm's own — `newdomain`,
+# `editdomain` and `deletedomain` each began by refusing a domain master — and
+# it is kept because a rename walks every mailbox in Cyrus and a delete removes
+# mail (U-43).
+#
+tags:
+  - name: domains
+    description: |
+      Creating, listing, changing and removing mail domains.
+
+      A domain master sees their own domains and may change none of them. A
+      superuser may change all of them, and two of the operations reach past the
+      database: renaming walks `renamemailbox` over every account before the
+      database is touched (architecture 8.1), and deleting is refused while
+      accounts exist (U-49).
+
+paths:
+  /domains:
+    get:
+      operationId: listDomains
+      tags:
+        - domains
+      summary: List domains
+      description: |
+        The domains the actor may see: all of them for a superuser, the ones
+        assigned in `domainadmin` for a domain master. The narrowing is a
+        predicate in the query, not a filter applied afterwards, so a domain
+        master's page counts and totals are their own (U-45).
+
+        No `403`: both roles hold `domain.read`. What a domain master cannot see
+        is simply not in the list.
+      x-permission: domain.read
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - $ref: '#/components/parameters/DomainSort'
+        - $ref: '#/components/parameters/SortOrder'
+        - $ref: '#/components/parameters/DomainNameFilter'
+      responses:
+        '200':
+          description: One page of domains.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainCollection'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      operationId: createDomain
+      tags:
+        - domains
+      summary: Create a domain
+      description: |
+        Writes one row to `domain` and, when the request says something about the
+        naming scheme, one to `mailadmin_domain_setting`. No mailbox is created:
+        a domain has none until an account is added (A2).
+
+        **`domain.prefix` is derived, not asked for.** The column is
+        `NOT NULL UNIQUE` and webcyradm misused it as a surrogate key; it cannot
+        be removed (E-1), so mailadmin fills it from the domain name and never
+        changes it again (U-46).
+
+        The response carries `next_steps`: the things that have to happen
+        elsewhere before mail arrives — the Salt pillar entry, a configuration
+        run, and the DNS records. mailadmin cannot perform them and does not
+        claim to have checked them (E-4, E-9).
+      x-permission: domain.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DomainCreateRequest'
+      responses:
+        '201':
+          description: The domain was created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Location:
+              $ref: '#/components/headers/Location'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainCreated'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: |
+            The name is already taken (`domain.name_taken`), every candidate
+            for the unique legacy prefix is (`domain.prefix_taken`), or an
+            account of a parent domain already uses the name as the tail of a
+            dotted user name (`domain.namespace_conflict`, U-96): in the dotted
+            scheme `info.kunde@example.de` and `info@kunde.example.de` are the
+            same Cyrus user. Also refused while an earlier domain of that name
+            left `domainadmin` assignments or `virtual` rows ending in
+            `@<name>` behind (`domain.leftover_state`, U-99): they would apply
+            to the new domain at once.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /domains/{domain}:
+    parameters:
+      - $ref: '#/components/parameters/DomainNamePath'
+
+    get:
+      operationId: getDomain
+      tags:
+        - domains
+      summary: One domain
+      description: |
+        Carries an `ETag` over the representation below — the fields this API
+        returns, not the database row (U-19), so a column webcyradm writes in
+        parallel does not invalidate it. `PATCH` and `DELETE` require that value
+        back in `If-Match`.
+      x-permission: domain.read
+      responses:
+        '200':
+          description: The domain.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    patch:
+      operationId: updateDomain
+      tags:
+        - domains
+      summary: Change a domain, including renaming it
+      description: |
+        **`If-Match` is required**, not merely accepted (U-49). Two
+        administrators editing the same domain is exactly the case the header
+        exists for, and the operation this endpoint also performs — a rename —
+        is not one to run against a stale picture of the domain.
+
+        ## Renaming
+
+        Sending a different `name` renames the domain. That is the most
+        expensive operation in the application and the one the legacy system got
+        wrong: the domain name is part of every Cyrus user name, so changing the
+        database alone leaves every account unreachable.
+
+        The order is therefore mailbox first, database second (architecture
+        8.1):
+
+        1. the mail store is probed, and the rename is refused outright if it
+           cannot be reached (`503`, `domain.mailstore_unavailable`);
+        2. every account of the domain is renamed in Cyrus;
+        3. **only then** are `domain`, `accountuser`, `virtual`, `domainadmin`
+           and `mailadmin_domain_setting` updated, in one transaction.
+
+        If step 2 fails part way through, the already-renamed mailboxes are
+        renamed back and the database is not touched at all — mail keeps
+        arriving under the old name. What cannot be undone becomes a repair-queue
+        entry and `409` with `domain.rename_incomplete`.
+
+        A rename additionally requires `confirm_rename: true`; without it the
+        request is `422` with `domain.rename_not_confirmed`.
+      x-permission: domain.write
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DomainUpdateRequest'
+      responses:
+        '200':
+          description: The domain after the change.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Location:
+              $ref: '#/components/headers/Location'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The new name is already taken (`domain.name_taken`), it would make
+            a Cyrus user name ambiguous in the dotted scheme
+            (`domain.namespace_conflict`, U-96) — an account of a parent domain
+            already ends in `.<new name>`, or a moved account would land in the
+            namespace of an existing subdomain, on an existing user name or on
+            the key of a leftover forward (U-101) — an earlier domain of the new
+            name left `domainadmin` assignments or `virtual` rows ending in
+            `@<new name>` behind (`domain.leftover_state`, U-99), or a rename
+            stopped part way (`domain.rename_incomplete`): it could not be fully
+            undone, or the accounts of the domain changed while its mailboxes
+            moved and everything was undone (U-100).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+    delete:
+      operationId: deleteDomain
+      tags:
+        - domains
+      summary: Delete a domain
+      description: |
+        **Refused while the domain still has accounts** — `409` with
+        `domain.not_empty`, and the account count in the log. webcyradm cascaded;
+        one confirmation dialog then removed every mailbox of a domain, and the
+        mail with it (U-49).
+
+        **Also refused while the domain still has addresses** — `409` with
+        `domain.still_has_addresses` for rows in `virtual` whose alias ends in
+        `@<domain>` (aliases, forwards, the catchall). They are not tied to the
+        `domain` row and would come back to life with the name (U-95).
+        `GET /domains/{domain}/addresses` lists every one of them, including the
+        rows that fit no pattern, and `DELETE /domains/{domain}/addresses/{entry}`
+        removes any single row (A3, U-103).
+
+        The administrator assignments of the domain (`domainadmin`) are removed
+        with it, so that a domain created again under the same name is not
+        handed to its old domain master. Each removed assignment is an audit
+        entry of its own, `part_of` the deletion.
+
+        `If-Match` is required, for the same reason as on `PATCH`: the count that
+        made the deletion look safe must be the count the client actually saw.
+
+        An empty domain leaves nothing behind in Cyrus, so this operation touches
+        only the database.
+      x-permission: domain.delete
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: The domain is gone. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The domain still has accounts (`domain.not_empty`), or no accounts
+            but rows in `virtual` — addresses, forwards or the catchall
+            (`domain.still_has_addresses`, U-95).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '500':
+          $ref: '#/components/responses/InternalServerError'

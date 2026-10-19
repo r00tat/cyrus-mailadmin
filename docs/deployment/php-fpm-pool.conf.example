@@ -1,0 +1,64 @@
+; mailadmin — PHP-FPM pool (E-8, finding S-3)
+;
+; Its own pool, so that mailadmin runs as its own user and its configuration is
+; not visible to any other PHP application on the host. bin/install generates
+; this file from /etc/mailadmin/mailadmin.env; this example is for a manual
+; installation.
+;
+; Place at /etc/php/8.3/fpm/pool.d/mailadmin.conf, mode 0640 — it holds
+; passwords. Check with `php-fpm8.3 -t` before reloading: a pool file php-fpm
+; cannot read takes down every pool on the host, not only this one.
+;
+; Placeholders: CHANGEME, the database name, the host names.
+
+[mailadmin]
+user = mailadmin
+group = mailadmin
+
+; The web server talks to this socket; its group needs access.
+listen = /run/php/mailadmin.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+
+; An administration tool: few requests, no reason to keep workers around.
+pm = ondemand
+pm.max_children = 10
+pm.process_idle_timeout = 60s
+pm.max_requests = 500
+
+; The configuration comes from here and nowhere else (U-11). With clear_env on,
+; nothing from php-fpm's own environment leaks in.
+clear_env = yes
+
+php_admin_value[date.timezone] = UTC
+php_admin_flag[display_errors] = off
+php_admin_flag[log_errors] = on
+
+; --- Configuration (.env.example explains every variable) ------------------
+;
+; php-fpm refuses an empty value (`env[X] = ""`); leave the line out instead,
+; which selects the default.
+
+env[MAILADMIN_ENV] = "prod"
+
+env[MAILADMIN_DB_DSN] = "mysql:host=localhost;port=3306;dbname=CHANGEME;charset=utf8mb4"
+env[MAILADMIN_DB_USER] = "mailadmin"
+env[MAILADMIN_DB_PASSWORD] = "CHANGEME"
+
+; openssl rand -base64 32
+env[MAILADMIN_JWT_SIGNING_KEY] = "CHANGEME"
+
+env[MAILADMIN_IMAP_HOST] = "mail.example.test"
+env[MAILADMIN_IMAP_PORT] = "993"
+env[MAILADMIN_IMAP_TLS] = "implicit"
+env[MAILADMIN_IMAP_ADMIN_USER] = "cyrus"
+env[MAILADMIN_IMAP_ADMIN_PASSWORD] = "CHANGEME"
+;env[MAILADMIN_IMAP_CA_FILE] = "/etc/ssl/certs/mailadmin-ca.pem"
+env[MAILADMIN_MANAGESIEVE_PORT] = "4190"
+
+; dotted | fqun — for new accounts only
+env[MAILADMIN_NAMING_SCHEME] = "dotted"
+
+; Only for deployment variant B (application in a subdirectory of the web root).
+;env[MAILADMIN_BASE_PATH] = "/mailadmin"

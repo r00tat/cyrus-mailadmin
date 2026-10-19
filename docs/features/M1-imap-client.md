@@ -7,7 +7,7 @@
 | **Stufe** | 3 — Mailstore |
 | **Hängt ab von** | F1, F4 |
 | **Pflichtlektüre** | [CLAUDE.md](../../CLAUDE.md) · [Architektur](../03-architektur.md), Abschnitt 9.2 |
-| **Status** | offen |
+| **Status** | **fertig** — Unit-Tests grün, gegen F5 gefahren |
 
 ---
 
@@ -47,29 +47,42 @@ Wird von M2 und M3 genutzt. Integrationstests laufen gegen F5.
 
 ## Zu klärende Punkte
 
-1. **IMAPS oder STARTTLS?** Beides ist verfügbar. Vorschlag: IMAPS auf 993 als Standard,
-   STARTTLS konfigurierbar.
-2. **Mindest-Cyrus-Version.** 3.x ist gesetzt, aber Antwortformate unterscheiden sich zwischen
-   Unterversionen — insbesondere bei `GETQUOTA` und `GETACL`. Welche Versionen werden zugesagt?
-3. **Zeichensatz für Ordnernamen.** Cyrus erwartet modifiziertes UTF-7 für Mailboxnamen mit
-   Sonderzeichen. Wird das unterstützt, oder beschränken wir Ordnernamen auf ASCII?
-4. **Verbindungsabbruch mitten in einem Stapel.** Bei einer Domainumbenennung über viele Konten:
-   Wiederverbinden und fortsetzen, oder abbrechen und melden? Betrifft A1.
-5. **Proxy-Authentifizierung.** Für das Anlegen von Ordnern im Namen eines Nutzers (Architektur
-   9.3) wird SASL PLAIN mit `authzid` gebraucht. Beherrscht der Client das, oder wird es erst
-   in M2 gebraucht?
-6. **Protokollierung.** Ein IMAP-Mitschnitt hilft bei der Fehlersuche enorm — aber er enthält
-   Passwörter. Nur in Entwicklung, mit Maskierung der Anmeldezeile?
+1. ~~**IMAPS oder STARTTLS?**~~ Entschieden: **IMAPS auf 993 als Vorgabe**, `STARTTLS`
+   konfigurierbar über `MAILADMIN_IMAP_TLS`. `TlsMode` hat bewusst **keinen** Klartextfall —
+   der Schalter, den Befund S-5 beseitigen soll, existiert nicht.
+2. **Mindest-Cyrus-Version.** *Annahme:* **3.x**, entwickelt und getestet gegen 3.10.2 (die
+   Version des Zielservers, siehe `docker/mail/Dockerfile`). Der Adapter liest `QUOTA` und `ACL`
+   über den Tokenizer statt über feste Spalten, ist also gegenüber Formatunterschieden robust;
+   eine kleinere Untergrenze wird nicht zugesagt, weil sie nicht geprüft ist.
+3. ~~**Zeichensatz für Ordnernamen.**~~ Entschieden: **modifiziertes UTF-7 wird unterstützt**
+   (`ModifiedUtf7`, von Hand geschrieben, ohne `mbstring`/`iconv` — E-12). Beim Lesen duldsam:
+   ein Name, der nicht dekodiert, kommt unverändert zurück statt zu verschwinden (U-22).
+4. **Verbindungsabbruch mitten in einem Stapel.** Weiterhin offen, und **A1s Entscheidung**, nicht
+   M1s: der Pool stellt eine abgerissene Sitzung beim nächsten Zugriff neu her, weil auf ihr noch
+   nichts gesendet wurde. Ob eine Domainumbenennung nach einem Abbruch fortsetzt oder abbricht,
+   entscheidet der Anwendungsfall, der weiß, was halb getan ist.
+5. ~~**Proxy-Authentifizierung.**~~ Entschieden: **der Client beherrscht sie**
+   (`Connection::authenticateFor()`, SASL PLAIN mit `authzid`). Gegen F5 geprüft. Sie in M2 zu
+   verschieben hätte bedeutet, den Mechanismus zweimal zu bauen.
+6. ~~**Protokollierung.**~~ Entschieden: `ProtocolTrace`, aus per Vorgabe, über
+   `MAILADMIN_IMAP_TRACE` einschaltbar und **in Produktion nicht einschaltbar**. Kommandos mit
+   Geheimnissen werden unabhängig davon redigiert; Literale erscheinen nur als `{n}`.
 
 ## Definition of Done
 
-- Verbindung zu einem Server mit selbstsigniertem Zertifikat gelingt **nur**, wenn dessen CA
-  bekannt ist.
-- Ein Mailboxname mit Leerzeichen und Sonderzeichen wird korrekt übertragen.
-- Eine hängende Verbindung bricht nach der eingestellten Zeit mit einer Ausnahme ab, nicht mit
-  einer Endlosschleife — genau dieser Fehler steckte im Altclient.
-- Mehrere Kommandos laufen über eine Verbindung.
-- Kein Passwort erscheint in einem Log.
+Alle fünf Punkte sind erfüllt und durch je einen Test gehalten.
+
+| Zusage | Nachweis |
+|---|---|
+| Verbindung mit selbstsigniertem Zertifikat gelingt **nur** bei bekannter CA | `CertificateVerificationTest` gegen F5 |
+| Ein Mailboxname mit Leerzeichen und Sonderzeichen wird korrekt übertragen | `ImapCommandTest::testAnAwkwardNameSurvivesIntact`, `ModifiedUtf7Test` |
+| Eine hängende Verbindung bricht mit einer Ausnahme ab, nicht mit einer Endlosschleife | `ConnectionTest::testAHangingServerEndsInATimeoutAndNotALoop` |
+| Mehrere Kommandos laufen über eine Verbindung | `ConnectionTest::testSeveralCommandsShareOneConnectionAndCountUp`, `ConnectionPoolTest` |
+| Kein Passwort erscheint in einem Log | `ProtocolTraceTest::testTheAuthenticationExchangeLeavesNoCredentialBehind`, `ImapCommandTest` (beide Wege) |
+
+Dazu, nicht gefordert aber tragend:
+`ConnectionTest::testCredentialsAreRefusedOnAnUnencryptedConnection` — die Zeile, die diesen
+Client von dem aus Befund S-5 unterscheidet.
 
 ## Testfälle
 

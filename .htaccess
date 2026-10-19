@@ -1,0 +1,59 @@
+# mailadmin — web root protection (U-25, layer 1)
+#
+# This file assumes the DEPLOYMENT MODEL where the *whole* project directory sits
+# inside the web root, e.g. /var/www/html/mailadmin/. Everything except public/
+# must then be unreachable over HTTP.
+#
+# If you can configure the vHost, pointing DocumentRoot at public/ is the better
+# option — this file is then simply never consulted. See docs/deployment/.
+#
+# REQUIRES `AllowOverride All` (at minimum `FileInfo Limit AuthConfig Options=Indexes`).
+# With `AllowOverride None` every .htaccess in this project is ignored and the
+# whole tree becomes readable. Verify with `php bin/check-deployment.php <base-url>`.
+
+Options -Indexes -MultiViews
+
+# --- Dotfiles ---------------------------------------------------------------
+# .env, .php-cs-fixer.cache, .phpunit.result.cache, .git/…
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# --- Project files at the top level -----------------------------------------
+# Named explicitly rather than by extension: a blanket "*.json" rule would also
+# block translation bundles and source maps below public/.
+<FilesMatch "^(composer\.(json|lock)|package(-lock)?\.json|phpunit\.xml(\.dist)?|phpstan[^/]*\.neon(\.dist)?|Makefile|.*\.dist)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # --- Non-public directories ---------------------------------------------
+    # Layer 2 puts a denying .htaccess inside each of these. This rule repeats
+    # the list because vendor/ and node_modules/ are not tracked in git — a file
+    # placed inside them would be wiped by the next `composer install` /
+    # `npm install`. Keep both lists in sync; a test enforces it.
+    RewriteRule ^(src|config|bin|docker|migrations|openapi|resources|tests|var|vendor|docs|frontend|node_modules)(/|$) - [F,L]
+
+    # --- Everything else is served out of public/ ---------------------------
+    # Already inside public/: stop, and let public/.htaccess take over.
+    RewriteRule ^public(/|$) - [L]
+
+    # Map the request into public/. A path such as src/Config/Config.php would
+    # become public/src/Config/Config.php, which does not exist — so even without
+    # the rule above it resolves to 404 rather than to the file.
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>

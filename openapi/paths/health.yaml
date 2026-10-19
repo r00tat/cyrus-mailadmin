@@ -1,0 +1,50 @@
+#
+# Health endpoint (F2). See `openapi/README.md` for the file conventions.
+#
+tags:
+  - name: health
+    description: Reachability of the service and of the systems it depends on.
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags:
+        - health
+      summary: Reachability of the service and its dependencies
+      description: |
+        Reachable **without a token**, so that a monitoring system can use it. The
+        representation is therefore kept to the minimum a monitor needs: an
+        overall verdict and one entry per probed dependency. No version, no host
+        names, no error text.
+
+        `200` means every probe passed, `503` means at least one did not. Both
+        carry the same representation — a monitor that only looks at the status
+        code gets a correct answer, and one that reads the body learns which
+        dependency is at fault.
+      security: []
+      x-permission: public
+      responses:
+        '200':
+          description: Every probe passed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: |
+            At least one probe failed. Same representation as `200` rather than a
+            problem document: this is not a client error, and the caller is a
+            monitor that wants the detail.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '500':
+          $ref: '#/components/responses/InternalServerError'

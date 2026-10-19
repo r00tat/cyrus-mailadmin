@@ -1,0 +1,197 @@
+# mailadmin — local test environment (F5, architecture 12).
+#
+# Not a production deployment and not a copy of one. It reproduces exactly the
+# services the application talks to, so the full authentication chain
+#
+#     password_hash() -> accountuser -> view allusers -> pam_mysql -> crypt(3)
+#                     -> IMAP login and SMTP-AUTH
+#
+# can be walked on a laptop. Everything else about the production host — Salt,
+# OpenDKIM, rspamd, Horde — is out of scope (F5, Abgrenzung).
+#
+# Driven through `bin/test-env`; `docker compose -f docker/compose.yaml …` works
+# just as well but does not generate the certificates or wait for readiness.
+#
+# EVERY CREDENTIAL IN THIS FILE IS A TEST VALUE. They are in git on purpose:
+# there is nothing to protect, and an environment whose passwords are a puzzle
+# does not get used.
+
+name: mailadmin-testenv
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # MariaDB with the webcyradm schema in its BASELINE state — no `mailadmin_`
+  # tables. The migrator is tested against this, not against an empty database
+  # (architecture 12.3).
+  #
+  # The init scripts run once, when the data volume is created. `bin/test-env
+  # reset` removes the volume to get back here.
+  # ---------------------------------------------------------------------------
+  db:
+    image: mariadb:11.4
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      # U-14: one timezone everywhere. The application sets it per connection as
+      # well; setting it on the server means a hand-written query in a shell
+      # sees the same thing.
+      - --default-time-zone=+00:00
+      # Strict mode is the default from MariaDB 10.2. Named here because it is
+      # what makes an over-long password hash an error instead of silent
+      # truncation — see docker/db/fixtures/10-widen-password-columns.sql.
+      - --sql-mode=STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+    environment:
+      MARIADB_ROOT_PASSWORD: testenv-root-pw
+      MARIADB_DATABASE: mail
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      # Not run automatically. `bin/test-env seed` loads them through the
+      # client, so they can be reloaded between test runs.
+      - ./db/fixtures:/fixtures:ro
+    ports:
+      - '127.0.0.1:13306:3306'
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Postfix, Cyrus IMAP, timsieved and saslauthd with pam_mysql — one container,
+  # as in production, where all four sit behind one supervisord and share the
+  # saslauthd socket.
+  # ---------------------------------------------------------------------------
+  mail:
+    build:
+      context: ./mail
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Read by the entrypoint to wait for the database and to seed mailboxes.
+      MAIL_DB_HOST: db
+      MAIL_DB_NAME: mail
+      MAIL_DB_USER: mailreader
+      MAIL_DB_PASSWORD: testenv-mailreader-pw
+      CYRUS_ADMIN: cyrus
+      CYRUS_ADMIN_PASSWORD: testenv-cyrus-admin-pw
+    volumes:
+      - ./certs/out:/etc/ssl/mailadmin:ro
+      - cyrus-spool:/var/spool/cyrus
+      - cyrus-config:/var/lib/cyrus
+      - cyrus-sieve:/var/spool/sieve
+    networks:
+      default:
+        aliases:
+          # The name on the server certificate. Verification is on everywhere,
+          # so the alias is not cosmetic.
+          - mail.example.test
+    ports:
+      - '127.0.0.1:10025:25'    # SMTP
+      - '127.0.0.1:10587:587'   # submission, STARTTLS + SMTP-AUTH
+      - '127.0.0.1:10143:143'   # IMAP, STARTTLS only (allowplaintext: no)
+      - '127.0.0.1:10993:993'   # IMAPS
+      - '127.0.0.1:14190:4190'  # ManageSieve
+    healthcheck:
+      test: ['CMD', '/usr/local/bin/healthcheck.sh']
+      interval: 5s
+      timeout: 10s
+      retries: 40
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # The application: PHP-FPM. Also the image `bin/test-env test` uses to run
+  # PHPUnit, because it is the one place that has pdo_mysql, the test CA in its
+  # trust store and a route to both other services.
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: ./app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MAILADMIN_ENV: test
+      MAILADMIN_LOG_TARGET: stderr
+      MAILADMIN_LOG_LEVEL: debug
+
+      # F3 — the application's own database user. Not the one Postfix and
+      # pam_mysql use (architecture 10.1, finding S-12).
+      MAILADMIN_DB_DSN: 'mysql:host=db;port=3306;dbname=mail;charset=utf8mb4'
+      MAILADMIN_DB_USER: mailadmin
+      MAILADMIN_DB_PASSWORD: testenv-app-pw
+
+      # M1 — Cyrus. TLS is mandatory and the CA is in the trust store, so there
+      # is nothing to switch off.
+      MAILADMIN_IMAP_HOST: mail.example.test
+      MAILADMIN_IMAP_PORT: '993'
+      MAILADMIN_MANAGESIEVE_PORT: '4190'
+      MAILADMIN_IMAP_ADMIN_USER: cyrus
+      MAILADMIN_IMAP_ADMIN_PASSWORD: testenv-cyrus-admin-pw
+      MAILADMIN_NAMING_SCHEME: dotted
+
+      # S2. The seed is exactly 32 bytes, base64 — Ed25519 accepts nothing else,
+      # and it decodes to readable ASCII so that nobody mistakes it for a
+      # generated value. A real installation runs `openssl rand -base64 32`.
+      MAILADMIN_JWT_ISSUER: mailadmin-testenv
+      MAILADMIN_JWT_SIGNING_KEY: dGVzdGVudi1zaWduaW5nLWtleS1ub3Qtc2VjcmV0ISE=
+      # The floors AuthenticationConfiguration allows, not the production values.
+      #
+      # They used to be 60 and 300 here, so that an expiry could be watched
+      # without waiting an hour. That is no longer possible and no longer
+      # needed: the lifetimes are bounded because E-15 trades an access token in
+      # localStorage against a short life, and the bound must not have a hole in
+      # it that a test environment is allowed through. Expiry itself is covered
+      # against a frozen clock, which is faster and does not wait at all.
+      MAILADMIN_ACCESS_TOKEN_TTL: '300'
+      MAILADMIN_REFRESH_TOKEN_TTL: '900'
+
+      # Test-only connection details, read by tests/Integration/**.
+      MAILADMIN_TEST_DB_DSN: 'mysql:host=db;port=3306;dbname=mail;charset=utf8mb4'
+      MAILADMIN_TEST_DB_USER: mailadmin
+      MAILADMIN_TEST_DB_PASSWORD: testenv-app-pw
+      # An empty second schema for the tests that create and drop tables (U-36).
+      # `mail` holds the fixtures every other integration test needs, and the
+      # safety catch in DatabaseTestCase — rightly — refuses to run there.
+      MAILADMIN_TEST_DB_DISPOSABLE_DSN: 'mysql:host=db;port=3306;dbname=mail_test;charset=utf8mb4'
+      MAILADMIN_TEST_DB_ROOT_USER: root
+      MAILADMIN_TEST_DB_ROOT_PASSWORD: testenv-root-pw
+      MAILADMIN_TEST_MAIL_HOST: mail.example.test
+      MAILADMIN_TEST_IMAPS_PORT: '993'
+      MAILADMIN_TEST_IMAP_PORT: '143'
+      MAILADMIN_TEST_SUBMISSION_PORT: '587'
+      MAILADMIN_TEST_MANAGESIEVE_PORT: '4190'
+      MAILADMIN_TEST_CA_FILE: /etc/ssl/mailadmin/ca.crt
+      MAILADMIN_TEST_IMAP_ADMIN_USER: cyrus
+      MAILADMIN_TEST_IMAP_ADMIN_PASSWORD: testenv-cyrus-admin-pw
+      MAILADMIN_TEST_WEB_URL: http://web
+    volumes:
+      # The whole project directory, because U-25 deploys it that way: the web
+      # server serves out of the project root and .htaccess does the rest.
+      - ../:/var/www/mailadmin
+      - ./certs/out/ca.crt:/usr/local/share/ca-certificates/mailadmin-testenv-ca.crt:ro
+
+  # ---------------------------------------------------------------------------
+  # Apache in front of PHP-FPM, configured the way U-25 describes: DocumentRoot
+  # is the project root, AllowOverride All, and the .htaccess files are what
+  # keeps src/, config/ and docker/ out of reach. That makes
+  # `bin/check-deployment.php` something this environment can actually run.
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: ./web
+    depends_on:
+      - app
+    volumes:
+      - ../:/var/www/mailadmin:ro
+    ports:
+      - '127.0.0.1:18080:80'
+
+volumes:
+  db-data:
+  cyrus-spool:
+  cyrus-config:
+  cyrus-sieve:

@@ -1,0 +1,377 @@
+#
+# Administrator management (A4). See `openapi/README.md` for the file
+# conventions and `docs/03-architektur.md`, section 7.2.
+#
+# Six operations. Five of them are superuser-only and each declares `403`,
+# because `admin.read`, `admin.write` and `admin.delete` are held by exactly one
+# role — webcyradm enforced the same split, where the whole `adminuser` screen
+# began with `if ($_SESSION['admintype'] != 0)`.
+#
+# The sixth, `PUT /admins/me/password`, is held by **both** roles and therefore
+# declares no `403` at all. A domain master who had to ask a superuser for a new
+# password would be handing their account to somebody who then knows it.
+#
+# There is deliberately no `404` on this resource for „belongs to somebody
+# else". An administrator is not in a domain — `adminuser` has no domain column —
+# so there is no scope to hide behind, and a domain master is refused at the
+# permission before any lookup happens (see `Domain\Policy\AdminPolicy`).
+#
+tags:
+  - name: admins
+    description: |
+      Administrator accounts: who may sign in to this interface, with which role,
+      and for which domains.
+
+      Not to be confused with mailboxes. `adminuser` and `accountuser` are
+      separate tables and separate worlds — an administrator has no mailbox and a
+      mailbox owner never signs in here (E-7).
+
+paths:
+  /admins:
+    get:
+      operationId: listAdmins
+      tags:
+        - admins
+      summary: List administrators
+      description: |
+        Every administrator, paginated. Not narrowed by domain: administrators are
+        not in domains, and the operation is superuser-only anyway.
+
+        The list shows the state of the stored data as it is, including
+        assignments to domains that no longer exist and passwords still in a
+        legacy hash format (U-22).
+      x-permission: admin.read
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - $ref: '#/components/parameters/AdminSort'
+        - $ref: '#/components/parameters/SortOrder'
+        - $ref: '#/components/parameters/AdminRoleFilter'
+        - $ref: '#/components/parameters/AdminUsernameFilter'
+      responses:
+        '200':
+          description: One page of administrators.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCollection'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      operationId: createAdmin
+      tags:
+        - admins
+      summary: Create an administrator
+      description: |
+        Creates the `adminuser` row and its `domainadmin` assignments in one
+        transaction.
+
+        A superuser is written with the wildcard row `('*', username)`, which is
+        how webcyradm expresses „all domains" — so an installation still running
+        both interfaces shows the same thing in each. A domain master is written
+        with one row per named domain, and every name has to exist in `domain`.
+
+        The password is hashed with Argon2id (`CLAUDE.md`). It is never echoed
+        back, not even in an error.
+      x-permission: admin.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateRequest'
+      responses:
+        '201':
+          description: Created.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Location:
+              $ref: '#/components/headers/Location'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Admin'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: |
+            The name is already taken (`admin.username_taken`). Case-sensitive,
+            as the `latin1_bin` column is.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: |
+            The request does not satisfy the schema, a password rule
+            (`auth.password_*`), the role/scope rule
+            (`admin.role_scope_mismatch`) or names a domain that does not exist
+            (`admin.unknown_domain`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /admins/me/password:
+    put:
+      operationId: setOwnPassword
+      tags:
+        - admins
+      summary: Change one's own password
+      description: |
+        The one operation on this resource that both roles hold
+        (`profile.password.write`, U-43). It acts on the caller's own account and
+        on no other: the name is taken from the verified token, never from the
+        request.
+
+        The current password is required. Being authenticated is not enough —
+        otherwise a stolen access token would be enough to take the account away
+        from its owner for good.
+
+        **Every refresh token family of this administrator is revoked**, this
+        client's included. Signing in again is the point: after a password change
+        the sessions that were opened with the old one should end, and singling
+        out „this one" would need the server to trust the client about which one
+        that is.
+      x-permission: profile.password.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminOwnPasswordRequest'
+      responses:
+        '204':
+          description: Changed. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: |
+            The new password breaks a rule (`auth.password_*`), or the current one
+            is wrong (`admin.wrong_current_password`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /admins/{username}:
+    parameters:
+      - $ref: '#/components/parameters/AdminUsernamePath'
+
+    get:
+      operationId: getAdmin
+      tags:
+        - admins
+      summary: One administrator
+      description: |
+        The `ETag` is a hash of exactly the representation below (U-19), not of
+        the database row — a column webcyradm writes in parallel therefore does
+        not invalidate it.
+      x-permission: admin.read
+      responses:
+        '200':
+          description: The administrator.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Admin'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No such administrator (`admin.not_found`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    patch:
+      operationId: updateAdmin
+      tags:
+        - admins
+      summary: Change an administrator
+      description: |
+        Role, domain assignment and password, individually or together.
+
+        Two refusals protect the installation from becoming unmanageable, and
+        both are counted in the database rather than guessed at:
+
+          * **The last superuser cannot be demoted** (`admin.last_superuser`).
+            Without the rule, one `PATCH` can leave a system with nobody who may
+            create domains or administrators.
+          * **A domain master needs at least one domain**
+            (`admin.role_scope_mismatch`). An administrator with an empty scope
+            cannot act at all — the sign-in refuses them — so writing that state
+            would be a way to lock somebody out silently.
+
+        `If-Match` is honoured when sent and ignored when not (architecture 7.1):
+        a client that wants to be safe against a concurrent edit sends the `ETag`
+        it last saw and gets `412` if somebody else got there first.
+      x-permission: admin.write
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminUpdateRequest'
+      responses:
+        '200':
+          description: The administrator as it is now.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Admin'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No such administrator (`admin.not_found`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: The last superuser may not be demoted (`admin.last_superuser`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          description: |
+            The request does not satisfy the schema, a password rule
+            (`auth.password_*`), the role/scope rule
+            (`admin.role_scope_mismatch`) or names a domain that does not exist
+            (`admin.unknown_domain`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      operationId: deleteAdmin
+      tags:
+        - admins
+      summary: Delete an administrator
+      description: |
+        Removes the `adminuser` row together with everything keyed by the same
+        name: the `domainadmin` assignments, the legacy `settings` preferences —
+        webcyradm deleted those too, and leaving them would let a later
+        administrator of the same name inherit them — and this application's own
+        `mailadmin_admin_setting` rows. All in one transaction.
+
+        Every refresh token family of the deleted administrator is revoked. Their
+        access token stops working at once regardless: role and scope are read
+        from the database on every request (architecture 5.3), and a name that is
+        no longer there yields `401`.
+
+        Two refusals:
+
+          * **the last superuser** (`admin.last_superuser`) — the system would be
+            unmanageable;
+          * **oneself** (`admin.self_deletion`) — an accidental click should not
+            end the session it was made in, and there is always another superuser
+            who can do it.
+      x-permission: admin.delete
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted. No body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No such administrator (`admin.not_found`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: |
+            The last superuser (`admin.last_superuser`) or the caller themselves
+            (`admin.self_deletion`).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'

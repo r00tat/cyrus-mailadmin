@@ -1,0 +1,43 @@
+# pam_mysql against the view `allusers` — the middle link of the authentication
+# chain (architecture 12.1).
+#
+# TWO LINES, AS IN PRODUCTION. pam_mysql can check one hash format per line, and
+# `accountuser` holds two: DES-crypt (13 characters) and SHA1 hex (40). Hence:
+#
+#   crypt=1   crypt(3). On Debian that is libxcrypt, which reads DES-crypt,
+#             md5crypt ($1$), bcrypt ($2y$), sha256crypt ($5$) and sha512crypt
+#             ($6$). This one line therefore covers both the legacy accounts and
+#             everything CLAUDE.md allows for new ones.
+#   crypt=4   SHA1 hex. Not a crypt(3) format, so it needs its own line.
+#
+# WHAT IS DELIBERATELY NOT CONFIGURED: `crypt=0` (plaintext) and `crypt=2`
+# (MySQL PASSWORD()). Production has neither line, so an account stored that way
+# cannot authenticate — and the fixtures contain one of each so that the limit
+# shows up in a test rather than in a support ticket.
+#
+# The order matters only for speed: a SHA1 account fails the crypt=1 line first
+# and succeeds on the second. `sufficient` means either is enough; pam_deny
+# closes the stack so an unmatched user cannot fall through.
+#
+# The database password stands here in the clear. That is finding S-4 in
+# production and unavoidable — pam_mysql has no other way to be given one. Here
+# it is a test value and the account is read-only on four objects (see
+# docker/db/init/20-grants.sql).
+#
+# `sqllog=0`: pam_mysql may not write. The `log` table stays empty, as it is in
+# production, and mailadmin keeps its own trail in `mailadmin_audit`.
+#
+# Generated at container start from this template by entrypoint.sh — the
+# placeholders come from the compose file.
+
+auth       sufficient   pam_mysql.so user=__DB_USER__ passwd=__DB_PASSWORD__ host=__DB_HOST__ db=__DB_NAME__ table=allusers usercolumn=username passwdcolumn=password crypt=1 sqllog=0
+auth       sufficient   pam_mysql.so user=__DB_USER__ passwd=__DB_PASSWORD__ host=__DB_HOST__ db=__DB_NAME__ table=allusers usercolumn=username passwdcolumn=password crypt=4 sqllog=0
+auth       required     pam_deny.so
+
+# The account stack is not pam_mysql's job here. Its account management wants an
+# expiry column (`statcolumn`, `sqlexpire`) that the legacy schema does not have,
+# and asking for one would be a schema change (rule one). Authentication is the
+# only decision this stack makes; whether an account is allowed to use IMAP, POP
+# or SMTP is what `accountuser.imap/pop/sieve/smtpauth` is for, and that belongs
+# in the application.
+account    required     pam_permit.so

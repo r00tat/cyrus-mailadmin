@@ -1,0 +1,21 @@
+#
+# Level 8 for the whole project (U-16). Level 8 is the one that treats a nullable
+# value reached without a check as an error — the most likely defect class when
+# mapping the legacy schema onto the domain model without an ORM.
+#
+# src/Domain is analysed a second time at level max, see phpstan-domain.neon.dist.
+# `composer analyse` runs both.
+#
+parameters:
+    level: 8
+
+    paths:
+        - bin
+        - config
+        - public
+        - src
+        - tests
+
+    tmpDir: var/cache/phpstan
+
+    treatPhpDocTypesAsCertain: false

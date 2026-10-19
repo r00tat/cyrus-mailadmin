@@ -1,0 +1,364 @@
+#
+# Mail accounts (A2). See `openapi/README.md` for the file conventions and
+# `docs/03-architektur.md`, sections 3.3, 7.2 and 8.1, for the reasoning.
+#
+# Nothing cross-cutting belongs here: `Problem`, `PaginationMeta`, `IfMatch`,
+# `Page`, `PerPage` and the reusable error responses come from
+# `components/common.yaml` through internal pointers.
+#
+components:
+  schemas:
+    # ------------------------------------------------------------------
+    # Values
+    # ------------------------------------------------------------------
+
+    AccountNamingScheme:
+      type: string
+      description: |
+        The scheme of **this** account's Cyrus user name, recognised from the
+        stored name — an `@` means `fqun`, anything else `dotted` (architecture
+        3.3, E-14). It may differ from the domain's setting, which only decides
+        what new accounts get.
+      enum:
+        - dotted
+        - fqun
+
+    AccountPasswordFormat:
+      type: string
+      description: |
+        The format of the stored password hash, recognised from its shape
+        (architecture 5.5). New passwords are always `bcrypt`. The legacy
+        formats stay valid (E-13); `mysql_password` and `plaintext` are readable
+        by mailadmin but not by `pam_mysql`, so such an account cannot log in to
+        IMAP or SMTP until its password is set again.
+      enum:
+        - argon2id
+        - bcrypt
+        - md5crypt
+        - sha256crypt
+        - sha512crypt
+        - descrypt
+        - sha1hex
+        - mysql_password
+        - plaintext
+        - unknown
+
+    AccountServices:
+      type: object
+      description: |
+        `accountuser.imap`, `pop`, `sieve` and `smtpauth`. Carried and editable,
+        **not enforced** by the authentication chain — the same as under
+        webcyradm (U-78).
+      required:
+        - imap
+        - pop
+        - sieve
+        - smtp_auth
+      properties:
+        imap:
+          type: boolean
+        pop:
+          type: boolean
+        sieve:
+          type: boolean
+        smtp_auth:
+          type: boolean
+
+    AccountServicesChange:
+      type: object
+      description: The flags to change. An absent flag is left as it is.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        imap:
+          type: boolean
+        pop:
+          type: boolean
+        sieve:
+          type: boolean
+        smtp_auth:
+          type: boolean
+
+    AccountSetupStep:
+      type: string
+      description: |
+        A step of the account creation that did not complete although the
+        account works. A stable key; the frontend translates (E-16). The step is
+        also a repair-queue entry.
+      enum:
+        - default_folders
+
+    # ------------------------------------------------------------------
+    # Representations
+    # ------------------------------------------------------------------
+
+    Account:
+      type: object
+      description: |
+        An account as the database knows it. The list and the single resource
+        carry the same fields: none of them costs a round trip to Cyrus.
+
+        `resolvable` is false for a stored user name that contradicts its
+        `domain_name`. Such a row is shown (U-22) and can be read, but not
+        changed through this API: the mailbox it belongs to cannot be derived.
+
+        `enabled` is enforced, unlike `services`: a disabled account is left
+        out of the view `allusers` and cannot log in anywhere (U-127).
+      required:
+        - id
+        - domain
+        - address
+        - local_part
+        - naming_scheme
+        - resolvable
+        - services
+        - password_format
+        - password_format_current
+        - password_format_weak
+        - legacy_prefix
+        - enabled
+        - disabled_at
+        - disabled_by
+      properties:
+        id:
+          type: string
+          description: |
+            The stored Cyrus user name (`accountuser.username`), exactly as
+            stored. It is the identifier in `/accounts/{account}` and must be
+            URL-encoded there. It is never taken apart: where the local part
+            ends is only known from `domain` (architecture 3.3).
+          example: anna.example.test
+        domain:
+          type: string
+          example: example.test
+        address:
+          type: string
+          nullable: true
+          description: The account's own address. `null` when `resolvable` is false.
+          example: anna@example.test
+        local_part:
+          type: string
+          nullable: true
+          description: '`null` when `resolvable` is false.'
+          example: anna
+        naming_scheme:
+          $ref: '#/components/schemas/AccountNamingScheme'
+        resolvable:
+          type: boolean
+        services:
+          $ref: '#/components/schemas/AccountServices'
+        password_format:
+          $ref: '#/components/schemas/AccountPasswordFormat'
+        password_format_current:
+          type: boolean
+          description: Whether the hash is in the format new passwords get.
+        password_format_weak:
+          type: boolean
+          description: Whether the format is one an attacker with the hash breaks cheaply.
+        legacy_prefix:
+          type: string
+          readOnly: true
+          description: |
+            `accountuser.prefix`. New accounts get the domain's `prefix`, the
+            way webcyradm filled it (U-84). Shown, never accepted.
+        enabled:
+          type: boolean
+          description: |
+            Whether the account may log in (U-127). `false` means the view
+            `allusers` leaves it out, so `saslauthd`/`pam_mysql` refuses it on
+            IMAP, POP, ManageSieve and SMTP-AUTH. Mail is still delivered to the
+            mailbox. Connections already open stay open until the client
+            disconnects.
+        disabled_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the account was disabled, UTC. `null` while it is enabled.
+        disabled_by:
+          type: string
+          nullable: true
+          description: |
+            The administrator who disabled it. `null` while it is enabled, or
+            when nobody is recorded.
+
+    AccountCollection:
+      type: object
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    AccountCreated:
+      type: object
+      required:
+        - account
+        - incomplete_steps
+      properties:
+        account:
+          $ref: '#/components/schemas/Account'
+        incomplete_steps:
+          type: array
+          description: |
+            Empty when everything was done. Otherwise the steps after the
+            database write that failed; the account works without them, and the
+            repair queue records each.
+          items:
+            $ref: '#/components/schemas/AccountSetupStep'
+
+    AccountQuota:
+      type: object
+      description: |
+        The quota of the account's mailbox, as Cyrus reports it, in kibibytes —
+        the unit of `SETQUOTA … STORAGE`.
+      required:
+        - limit_kib
+        - used_kib
+      properties:
+        limit_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: |
+            `null` is no limit. `0` is a real limit of zero; this API does not
+            set one (U-79), but a mailbox may carry one from elsewhere.
+        used_kib:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: '`null` when Cyrus reports no usage, which it does for a mailbox without a quota root.'
+
+    # ------------------------------------------------------------------
+    # Requests
+    # ------------------------------------------------------------------
+
+    AccountCreateRequest:
+      type: object
+      required:
+        - local_part
+        - password
+      additionalProperties: false
+      properties:
+        local_part:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            The part before the `@`. Letters, digits, `.`, `-`, `_` and `+`; it
+            is stored in lower case (U-77). There is no numbering scheme: the
+            name is always chosen.
+          example: anna
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          writeOnly: true
+          description: The initial password. Never returned, logged or audited.
+        quota_kib:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: |
+            The quota limit in kibibytes. Absent means the domain's
+            `default_account_quota_kib`; `null` means no limit (U-79).
+        services:
+          $ref: '#/components/schemas/AccountServicesChange'
+
+    AccountUpdateRequest:
+      type: object
+      description: At least one of the two; an absent one is left as it is.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        services:
+          $ref: '#/components/schemas/AccountServicesChange'
+        enabled:
+          type: boolean
+          description: |
+            `false` disables the account's logins, `true` allows them again
+            (U-127). Enforced through the view `allusers`; the change is refused
+            with `account.status_not_enforced` when the deployed view does not
+            honour it.
+
+    AccountPasswordRequest:
+      type: object
+      required:
+        - password
+      additionalProperties: false
+      properties:
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          writeOnly: true
+
+    AccountQuotaRequest:
+      type: object
+      required:
+        - limit_kib
+      additionalProperties: false
+      properties:
+        limit_kib:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: The new limit in kibibytes, or `null` for none (U-79).
+
+  # --------------------------------------------------------------------
+  # Parameters
+  # --------------------------------------------------------------------
+
+  parameters:
+    AccountIdPath:
+      name: account
+      in: path
+      required: true
+      description: |
+        The stored Cyrus user name, URL-encoded (`anna.example.test`,
+        `hans%40beispiel.invalid`). An account outside the actor's scope
+        answers `404`, the same document as an account that does not exist
+        (CLAUDE.md, U-44).
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+    AccountSort:
+      name: sort
+      in: query
+      required: false
+      description: |
+        The field to sort by — an enumeration, never a free string (CLAUDE.md,
+        rule two).
+      schema:
+        type: string
+        enum:
+          - name
+          - password_format
+        default: name
+
+    AccountNameFilter:
+      name: name
+      in: query
+      required: false
+      description: Substring match on the stored user name.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+    AccountPasswordFormatFilter:
+      name: password_format
+      in: query
+      required: false
+      description: |
+        Only accounts whose stored hash has this format (E-13). Recognised in
+        the query by the same rules `PasswordFormatDetector` applies, so the
+        filter and the `password_format` field always agree.
+      schema:
+        $ref: '#/components/schemas/AccountPasswordFormat'

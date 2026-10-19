@@ -1,0 +1,178 @@
+#
+# Schemas owned by S2 — authentication and session handling.
+#
+# The security scheme itself (`bearerAuth`) lives in `components/common.yaml`,
+# because every operation in the contract refers to it. What is here is the
+# handful of representations the four `/auth/*` operations exchange.
+#
+# Nothing in this file names a hash, an algorithm or a key. The contract
+# describes what a client sends and receives; how a password is verified and how
+# a token is signed is not the client's business and would only date the
+# document.
+#
+components:
+  schemas:
+    # ------------------------------------------------------------------
+    # Requests
+    # ------------------------------------------------------------------
+
+    Credentials:
+      type: object
+      description: |
+        The administrator's user name and password.
+
+        There is no end-user login (E-7): only rows in `adminuser` can
+        authenticate here. A mailbox owner has no account in this interface.
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 190
+          description: The `adminuser` name. Compared case-sensitively, as the legacy table stores it.
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 4096
+          description: |
+            The plaintext password. The upper bound is a denial-of-service guard,
+            not a policy: Argon2id over an unbounded string is a free way to
+            spend a server's memory.
+        refresh_delivery:
+          $ref: '#/components/schemas/RefreshDelivery'
+
+    RefreshDelivery:
+      type: string
+      description: |
+        Where the refresh token is to be delivered — the client says so rather
+        than the server guessing from a header.
+
+        `cookie` (the default) puts it in an HttpOnly cookie with
+        `SameSite=Strict` and a path narrowed to the `/auth` endpoints, and the
+        response body then carries **no** refresh token at all. That is what a
+        browser must use: the whole point of E-15 is that a script which reaches
+        the access token in `localStorage` still cannot reach the refresh token.
+
+        `body` returns it in the response body and sets no cookie, for `curl`,
+        tests and any client that is not a browser.
+      enum:
+        - cookie
+        - body
+      default: cookie
+
+    RefreshRequest:
+      type: object
+      description: |
+        Optional body for `POST /auth/refresh`.
+
+        A browser sends nothing here — its refresh token travels in the cookie.
+        A client that asked for `body` delivery sends the token it was given. If
+        both are present the body wins, because it was sent deliberately.
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: The refresh token from a previous response body. Omit it when using the cookie.
+
+    # ------------------------------------------------------------------
+    # Responses
+    # ------------------------------------------------------------------
+
+    Session:
+      type: object
+      description: |
+        A freshly issued access token, and the refresh token when the client
+        asked for `body` delivery.
+
+        `expires_in` is stated so that a client need not decode the token to
+        know when to refresh. Sixty minutes is a decision, not a default
+        (E-10, architecture 5.2), and it is not raised to save logins.
+      required:
+        - access_token
+        - token_type
+        - expires_in
+      properties:
+        access_token:
+          type: string
+          description: "Signed JWT. Send it as `Authorization: Bearer <token>`."
+        token_type:
+          type: string
+          enum:
+            - Bearer
+        expires_in:
+          type: integer
+          minimum: 1
+          description: Remaining lifetime of the access token in seconds.
+        refresh_token:
+          type: string
+          description: |
+            Present **only** when `refresh_delivery` was `body`. With cookie
+            delivery this member is absent — not empty, absent.
+
+    CurrentSession:
+      type: object
+      description: |
+        Who the bearer of this token is, as the server sees them *now*.
+
+        The domain scope is deliberately not a token claim (architecture 5.3):
+        it is read per request, so a withdrawn assignment takes effect at once
+        instead of after up to an hour. This endpoint therefore answers with the
+        current state of the database, not with the contents of the token.
+      required:
+        - username
+        - role
+        - permissions
+        - domains
+        - expires_at
+      properties:
+        username:
+          type: string
+        role:
+          $ref: '#/components/schemas/AdminRole'
+        permissions:
+          type: array
+          description: |
+            Every `x-permission` value this administrator holds, sorted (S3,
+            architecture 7.2).
+
+            **For rendering, not for deciding.** The server checks the same list
+            on every request; a client that hides a button it should not show is
+            being polite, and a client that shows one anyway gets `403`. Sending
+            the list means the frontend does not have to reimplement the
+            role-to-permission mapping and then drift from it.
+
+            The list is what the *role* carries. It says nothing about which
+            objects the permission reaches — a domain master holds
+            `account.write` and may still use it only inside `domains`.
+          items:
+            type: string
+          example:
+            - account.read
+            - account.write
+            - session.read
+        domains:
+          type: array
+          description: |
+            The domains this administrator may see. **Absent scoping is expressed
+            by `role: superuser`, not by an empty list** — an empty list for a
+            domain master means they may see nothing, and the two must not look
+            alike. For a superuser the list is empty and carries no meaning.
+          items:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+          description: When the presented access token expires. ISO 8601, UTC.
+
+    AdminRole:
+      type: string
+      description: |
+        The two roles the system knows (E-18). `superuser` sees every domain;
+        `domainmaster` sees the domains assigned in `domainadmin`.
+      enum:
+        - superuser
+        - domainmaster

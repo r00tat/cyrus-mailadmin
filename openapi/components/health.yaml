@@ -1,0 +1,68 @@
+#
+# Components for the health endpoint (F2).
+#
+# Deliberately a separate file from `common.yaml`, as an example of the rule every
+# package follows: cross-cutting things go in `common.yaml`, everything that
+# belongs to one endpoint group goes in that group's own file.
+#
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      description: |
+        Reachability of the service and of the systems it depends on.
+
+        Deliberately thin. This endpoint is reachable without a token, so it must
+        not reveal anything a monitoring system does not need: no version string,
+        no host names, no error messages, no counts. `component` names are
+        generic terms that follow from the architecture, not from this
+        installation.
+      required:
+        - status
+        - checks
+      properties:
+        status:
+          type: string
+          description: |
+            `ok` when every check passed, `degraded` when at least one did not.
+            The response status code says the same thing, for monitoring that
+            looks no further.
+          enum:
+            - ok
+            - degraded
+        checks:
+          type: array
+          description: |
+            One entry per dependency that was probed: a query for the database,
+            an administrator login for IMAP, a verified TLS session for
+            ManageSieve (A6, U-121). The answer may be up to ten seconds old —
+            every round costs a login at Cyrus, and this endpoint needs no
+            token — and older while a round is running, because only one
+            round runs at a time and other requests are answered from the
+            last report (U-123). Without a usable cache every component is
+            reported as `error` rather than probed per request. Codes and
+            durations are only in the authenticated `/maintenance/health`.
+          items:
+            $ref: '#/components/schemas/HealthCheck'
+
+    HealthCheck:
+      type: object
+      required:
+        - component
+        - status
+      properties:
+        component:
+          type: string
+          enum:
+            - database
+            - imap
+            - managesieve
+        status:
+          type: string
+          description: |
+            `skipped` is a first-class answer: a probe that was not run says so
+            rather than reporting `ok`.
+          enum:
+            - ok
+            - error
+            - skipped

@@ -1,0 +1,57 @@
+#
+# Root of the API contract — the single truth for routing, validation, frontend
+# types, documentation and contract tests (CLAUDE.md, rule 3).
+#
+# This file holds only what the whole API shares: version, metadata, servers,
+# the global security requirement and the tag list is *not* here — see below.
+# Paths and components live in `paths/` and `components/`, one file per package
+# (U-3), and are merged into a single document by `bin/openapi-bundle.php`.
+#
+# **A package never edits this file.** It adds `paths/<package>.yaml` and, if it
+# needs its own schemas, `components/<package>.yaml`. Conventions and the reason
+# for every rule: `openapi/README.md`.
+#
+# OpenAPI 3.0.3, not 3.1 (U-2): `league/openapi-psr7-validator` supports 3.0
+# fully and 3.1 only in part, and request validation at the input boundary is
+# worth more than the 3.1 keywords this API does not use.
+#
+openapi: 3.0.3
+
+info:
+  title: mailadmin API
+  version: 1.0.0
+  description: |
+    Administration interface for a mail server built from Postfix, Cyrus IMAP
+    and MySQL.
+
+    **The API is language-neutral.** Every error carries a stable `code` field
+    from the `ErrorCode` enumeration; `title` and `detail` are English fallback
+    texts and are not part of the contract. Clients translate on the code.
+
+    Times are ISO 8601 in UTC with a `Z` suffix. Formatting for a locale is the
+    client's business.
+  license:
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  # U-10: the version lives in the path. A future v2 runs in parallel under
+  # `/api/v2`; there is no hard cut-over, because a generated client hangs off
+  # this contract. The compiled route table carries this prefix, not the handler
+  # namespace.
+  - url: /api/v1
+    description: Current version.
+
+# Bearer token on every operation unless the operation opts out with
+# `security: []` — which only a genuinely public endpoint may do. Enforcement of
+# `x-permission` is S3's job; the contract only declares.
+security:
+  - bearerAuth: []
+
+# `paths` and `components` stay empty here. The bundler fills them from the
+# per-package files, so that eight packages can work in parallel without ever
+# touching the same file. `tags` is assembled the same way: each path file
+# declares the tags it introduces.
+paths: {}
+
+components: {}

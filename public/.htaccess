@@ -1,0 +1,84 @@
+# mailadmin — the only publicly readable directory (U-25, layer 3)
+#
+# Re-grants access, because the project root may deny it, and routes requests:
+#   /api/…   → index.php   (front controller)
+#   anything else that is not a real file → index.html (SPA, architecture 11.1)
+
+<IfModule mod_authz_core.c>
+    Require all granted
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Allow from all
+</IfModule>
+
+Options -Indexes -MultiViews
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Hand the Authorization header to PHP. mod_proxy_fcgi (PHP-FPM) and
+    # mod_cgi drop it unless told otherwise, and without it every bearer token
+    # is "missing". CGIPassAuth would be the direct switch, but it needs
+    # AllowOverride AuthConfig and answers 500 for the whole directory where
+    # that is not granted; this rule only needs FileInfo, which the rewrites
+    # below need anyway. After the internal rewrite PHP may see the variable as
+    # REDIRECT_HTTP_AUTHORIZATION; ServerRequestFactory reads both.
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # The API. Sent to the front controller even when the path looks like a
+    # directory, so that /api/v1/domains/ does not get a directory listing.
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^api(/|$) index.php [L]
+
+    # Client-side routing: unknown paths render the SPA shell.
+    # index.html is produced by the frontend build (W1); before that build has
+    # run, these requests return 404 — which is correct, there is no UI yet.
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.html [L]
+</IfModule>
+
+# --- Security headers (architecture 5.7, O-13) -------------------------------
+#
+# Until W1 these were set only by SecurityHeadersMiddleware, that is only on
+# /api/*. The statically served index.html — the one document in which an XSS
+# hole would actually be exploitable — carried none, which made the whole
+# trade-off in U-35 (`style-src 'unsafe-inline'` for Material UI) pointless: the
+# half of the policy that carries the load is `script-src`, and it was not being
+# sent to the browser at all.
+#
+# The values are the same list, verbatim, that src/Http/SecurityHeaders.php
+# holds. Applying them here too is harmless for /api/*: mod_headers runs after
+# PHP and sets identical values. A test keeps the two lists identical
+# (tests/Unit/Deployment/), because two copies that drift are worse than one
+# copy in the wrong place.
+#
+# `Header always set` rather than `Header set`: without `always`, mod_headers
+# skips responses that did not come out of the success path — a 404 for a
+# mistyped asset, for instance — and those are documents a browser renders too.
+<IfModule mod_headers.c>
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+</IfModule>
+
+# --- Caching (architecture 11.3) --------------------------------------------
+<IfModule mod_headers.c>
+    # Built assets carry a content hash in the filename.
+    <FilesMatch "\.(js|mjs|css|woff2?|png|jpe?g|svg|webp|avif|ico|map)$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+
+    # The shell is never cached, so a deployment takes effect immediately.
+    <FilesMatch "^index\.html$">
+        Header set Cache-Control "no-store"
+    </FilesMatch>
+</IfModule>
+
+# API responses set their own no-store header in the application; nothing here
+# may override it — note that the Cache-Control rules above are scoped to file
+# names the front controller never answers under.

@@ -1,0 +1,91 @@
+# Postfix — test environment.
+#
+# Only the parts the application and the tests care about: the four mysql maps
+# that production reads live from the database, SMTP-AUTH through the same
+# saslauthd as Cyrus, and LMTP into Cyrus. No DKIM, no rspamd, no policy
+# service — those are Salt's business and out of scope (F5, Abgrenzung).
+
+compatibility_level = 3.6
+
+myhostname = mail.example.test
+mydomain = example.test
+myorigin = $myhostname
+inet_interfaces = all
+inet_protocols = ipv4
+
+# Only the loopback relays without authenticating. Everything from the docker
+# network — the application container, a test — has to use SMTP-AUTH, which is
+# the point of the exercise.
+mynetworks = 127.0.0.0/8 [::1]/128
+
+# ---------------------------------------------------------------------------
+# The four mysql maps. In production Postfix reads these at request time with no
+# reload, which is why the database schema cannot be reshaped freely (CLAUDE.md,
+# rule one). Same queries here.
+# ---------------------------------------------------------------------------
+mydestination = mysql:/etc/postfix/mysql-mydestination.cf
+virtual_alias_maps = mysql:/etc/postfix/mysql-virtual.cf
+sender_canonical_maps = mysql:/etc/postfix/mysql-canonical.cf
+smtpd_sender_login_maps = mysql:/etc/postfix/mysql-sender.cf
+
+# Accept every recipient in a local domain and let Cyrus decide. Production has
+# the same effect through a wider map; a stricter list here would only produce
+# rejections that say nothing about the application.
+local_recipient_maps =
+
+# ---------------------------------------------------------------------------
+# SMTP-AUTH through saslauthd -> pam_mysql -> allusers. The same chain Cyrus
+# uses, the same socket, the same PAM stack.
+# ---------------------------------------------------------------------------
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_type = cyrus
+smtpd_sasl_path = smtpd
+cyrus_sasl_config_path = /etc/postfix/sasl
+smtpd_sasl_security_options = noanonymous
+smtpd_sasl_local_domain =
+broken_sasl_auth_clients = yes
+
+# ---------------------------------------------------------------------------
+# TLS. `smtpd_tls_auth_only` is the SMTP counterpart of `allowplaintext: no` in
+# imapd.conf: no credential before STARTTLS. The Definition of Done asks for
+# SMTP-AUTH over STARTTLS, so this is the setting that makes it a real test.
+# ---------------------------------------------------------------------------
+smtpd_tls_cert_file = /etc/ssl/mailadmin/server.crt
+smtpd_tls_key_file = /etc/ssl/mailadmin/server.key
+smtpd_tls_CAfile = /etc/ssl/mailadmin/ca.crt
+smtpd_tls_security_level = may
+smtpd_tls_auth_only = yes
+smtpd_tls_mandatory_protocols = >=TLSv1.2
+smtpd_tls_loglevel = 1
+
+# ---------------------------------------------------------------------------
+# Restrictions.
+#
+# `reject_authenticated_sender_login_mismatch` is what makes
+# `smtpd_sender_login_maps`, and therefore the `validsenders` view, do
+# something: an authenticated user may only put an address into MAIL FROM that
+# the view ties to their login. Without it the view would be decoration.
+# ---------------------------------------------------------------------------
+smtpd_relay_restrictions =
+    permit_mynetworks
+    permit_sasl_authenticated
+    reject_unauth_destination
+
+smtpd_sender_restrictions =
+    reject_authenticated_sender_login_mismatch
+    permit_mynetworks
+    permit_sasl_authenticated
+    permit
+
+# ---------------------------------------------------------------------------
+# Delivery into Cyrus over LMTP.
+# ---------------------------------------------------------------------------
+mailbox_transport = lmtp:unix:/run/cyrus/socket/lmtp
+virtual_transport = lmtp:unix:/run/cyrus/socket/lmtp
+
+# Small queue lifetimes: a test that produces a bounce should see it in seconds,
+# not in days.
+maximal_queue_lifetime = 1h
+bounce_queue_lifetime = 1h
+
+maillog_file = /dev/stdout

@@ -1,0 +1,9 @@
+# `smtpd_sender_login_maps` — which login may send as which address. Read
+# together with `reject_authenticated_sender_login_mismatch` in main.cf, this is
+# the anti-spoofing rule, and the only consumer of the `validsenders` view.
+# Production query, unchanged.
+hosts = __DB_HOST__
+user = __DB_USER__
+password = __DB_PASSWORD__
+dbname = __DB_NAME__
+query = SELECT username FROM validsenders WHERE alias='%s'

@@ -164,7 +164,7 @@ das einzelne Paket hinausreichen.
 | Neue Composer- oder npm-Abhängigkeit | Die schlanke Abhängigkeitsliste ist eine Entscheidung (E-12), kein Zufall. |
 | Änderung am Passwortverfahren für `accountuser` | Muss `crypt(3)`-lesbar bleiben, sonst brechen IMAP und SMTP-AUTH. |
 | Änderung an Token-Laufzeit, Speicherort oder Erneuerungsmechanismus | E-10 und E-15 sind abgewogene Entscheidungen inklusive Restrisiko. |
-| Lockerung der Content-Security-Policy | Sie trägt das Risiko aus E-15. |
+| Jede weitere Lockerung der Content-Security-Policy | Sie trägt das Risiko aus E-15. `style-src 'unsafe-inline'` ist mit U-35 für Material UI bereits entschieden und damit erledigt; alles darüber hinaus — insbesondere an `script-src` — wird eskaliert. |
 | Änderung der Reihenfolge bei Operationen über Datenbank und Mailstore | Die Reihenfolge folgt dem Schadensbild, nicht der Bequemlichkeit. |
 | Brechende Änderung am OpenAPI-Vertrag nach dem ersten Release | Clients und generierte Typen hängen daran. |
 | Jeder schreibende Zugriff auf ein Produktivsystem | Braucht ausdrückliche Freigabe für den konkreten Vorgang. |

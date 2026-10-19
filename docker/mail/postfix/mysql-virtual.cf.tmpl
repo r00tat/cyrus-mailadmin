@@ -1,0 +1,9 @@
+# `virtual_alias_maps` — address rewriting. This is where aliases, catchalls and
+# forwards all become the same lookup, which is why one table carries four
+# meanings (architecture 3.4).
+# Production query, unchanged.
+hosts = __DB_HOST__
+user = __DB_USER__
+password = __DB_PASSWORD__
+dbname = __DB_NAME__
+query = SELECT dest FROM virtual WHERE alias='%s' AND status='1'

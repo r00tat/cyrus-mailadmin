@@ -1,0 +1,287 @@
+#
+# Schemas, parameters and headers owned by A5 — mailing lists.
+#
+# The resource is the legacy table `lists`, unchanged: `name`, `tag`, `address`,
+# `members` (E-1, analysis 4.1). Nothing here adds a column, and nothing here
+# renames one.
+#
+# Two things about this resource are unlike every other one in the contract, and
+# both are visible in the schemas below:
+#
+#   * **The name is the identifier.** `lists` has no surrogate key, so the path
+#     carries the URL-encoded name (U-60) and `name` is absent from the update
+#     request: renaming a list is a delete and a create.
+#   * **A write does not take effect at once.** The application writes the
+#     database; the aliases file is rendered from it by the configuration
+#     management (E-4). Every state-changing answer says so through
+#     `MailingListEffect` (U-59).
+#
+components:
+  schemas:
+    MailingList:
+      type: object
+      description: |
+        One mailing list.
+
+        `members` is delivered as an array although the column is a single text
+        field. That is deliberate: the separator the existing rows use was never
+        captured, so the API does not make a client guess it. A list saved
+        without changing its membership is written back **byte for byte**,
+        whatever the stored separator and spacing were — only a list whose
+        membership actually changed is re-rendered (U-56).
+      required:
+        - name
+        - tag
+        - address
+        - members
+        - unusable_members
+        - address_usable
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: |
+            The list name — the primary key of `lists` and the identifier in the
+            path. Immutable: to rename a list, delete it and create it again.
+          example: team-example
+        tag:
+          type: string
+          maxLength: 255
+          description: |
+            A free-text label.
+
+            **The application does not interpret it.** What the column means to
+            the tool that has been writing it was never recorded and could not be
+            established from the schema, so it is carried, shown and changed on
+            request — and used to decide nothing (U-58). Inventing a meaning for
+            a column another tool writes is how two tools come to disagree about
+            one field.
+          example: team
+        address:
+          type: string
+          maxLength: 255
+          description: The address that delivers to this list.
+          example: team-list@example.test
+        members:
+          type: array
+          description: |
+            Everyone the list delivers to, in stored order. Duplicates are kept:
+            two identical entries mean two deliveries, and removing one silently
+            would change behaviour nobody asked to change.
+          items:
+            type: string
+          example:
+            - anna@example.test
+            - bernd@example.test
+        unusable_members:
+          type: array
+          description: |
+            The subset of `members` that is not a mail address — shown, not
+            removed (U-22).
+
+            An aliases file may legitimately contain a local user name, a file
+            path or a pipe, and rows written before this application existed may
+            hold any of them. They stay readable and stay visible. What no client
+            can do is **add** one: a member being added must be a mail address,
+            because this column is rendered into a file where the other shapes
+            are commands and file names.
+          items:
+            type: string
+        address_usable:
+          type: boolean
+          description: |
+            `false` when the stored `address` is not a mail address. The same
+            rule as `unusable_members`: reported, never corrected behind an
+            administrator's back.
+
+    MailingListCollection:
+      type: object
+      description: One page of mailing lists (U-20).
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MailingList'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    MailingListCreateRequest:
+      type: object
+      description: |
+        A new mailing list.
+
+        `members` may be omitted or empty — a list with an address and nobody in
+        it yet is a legitimate state, and demanding a member would mean an
+        administrator cannot create a list before knowing who belongs to it.
+      required:
+        - name
+        - address
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: '^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$'
+          description: |
+            Letters, digits and `. - _ +`, beginning and ending with a letter or
+            a digit.
+
+            Stricter than what the table can hold, on purpose: the name becomes
+            the key of an entry in an aliases file, where whitespace and `:` are
+            structure. Existing rows are not held to this — they are shown as
+            they are (U-22).
+          example: team-example
+        tag:
+          type: string
+          maxLength: 255
+          default: ''
+          description: Free-text label. See `MailingList.tag`.
+        address:
+          type: string
+          minLength: 3
+          maxLength: 255
+          description: The address that will deliver to this list, once the configuration has run.
+          example: team-list@example.test
+        members:
+          type: array
+          description: |
+            Every entry has to be a mail address. This is not tidiness: the
+            column is rendered into an aliases file, where `|command` and
+            `/path/to/file` are instructions rather than recipients.
+          items:
+            type: string
+            minLength: 3
+            maxLength: 255
+          default: []
+
+    MailingListUpdateRequest:
+      type: object
+      description: |
+        The fields to change. **A field that is absent is left alone** — that is
+        the difference between `PATCH` and `PUT` here, and it is a safety catch
+        rather than a convention: with `PUT`, a request that only corrected a tag
+        would clear the member list.
+
+        `{"members": []}` therefore empties the list and `{}` changes nothing.
+
+        `name` is not among the fields: it identifies the list (U-60).
+      minProperties: 1
+      properties:
+        tag:
+          type: string
+          maxLength: 255
+        address:
+          type: string
+          minLength: 3
+          maxLength: 255
+        members:
+          type: array
+          items:
+            type: string
+            minLength: 3
+            maxLength: 255
+
+    MailingListSort:
+      type: string
+      description: |
+        The field to sort by. An enumeration and not a free string — the legacy
+        system pasted its `ORDER BY` together from a session value, and this is
+        that lesson in contract form (`CLAUDE.md`, rule 2).
+      enum:
+        - name
+        - tag
+        - address
+      default: name
+
+  parameters:
+    MailingListName:
+      name: listName
+      in: path
+      required: true
+      description: |
+        The list name, URL-encoded. `lists` has no surrogate key, so the name is
+        the identifier (U-60) — the same reasoning as U-18 for accounts.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+    MailingListSortField:
+      name: sort
+      in: query
+      required: false
+      description: Field to sort by. Pair it with `order`.
+      schema:
+        $ref: '#/components/schemas/MailingListSort'
+
+    MailingListNameFilter:
+      name: name
+      in: query
+      required: false
+      description: Substring match on the list name.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+    MailingListTagFilter:
+      name: tag
+      in: query
+      required: false
+      description: Exact match on the tag. Exact and not a substring, because the tag is a label and not prose.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+    MailingListAddressFilter:
+      name: address
+      in: query
+      required: false
+      description: Substring match on the list address — `@example.test` finds every list of one domain.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+    MailingListMemberFilter:
+      name: member
+      in: query
+      required: false
+      description: |
+        Substring match on the stored member text: "which lists deliver to this
+        address?".
+
+        A substring match over one column, so it can in principle match across a
+        separator (`a@x,b@y` contains `x,b`). Said here rather than hidden,
+        because the alternative — a second table — is a schema change to a table
+        another tool writes.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+  headers:
+    MailingListEffect:
+      description: |
+        Present on every answer that changed something. The one value is
+        `pending-configuration-run`.
+
+        Saving a mailing list writes the database and nothing else: the aliases
+        file is rendered from `lists` by the configuration management (E-4), so
+        until the next configuration run a new list does not deliver and a
+        deleted one still does. A stable keyword rather than a sentence — the
+        frontend translates it (E-16).
+
+        A header rather than a body field because `DELETE` answers `204`, and the
+        write with the most surprising delay is the one that would otherwise have
+        no place to say so (U-59).
+      schema:
+        type: string
+        enum:
+          - pending-configuration-run
+      example: pending-configuration-run

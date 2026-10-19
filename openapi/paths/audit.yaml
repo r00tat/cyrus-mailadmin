@@ -1,0 +1,82 @@
+#
+# The audit trail (S4). See `openapi/README.md` for the file conventions and
+# `docs/03-architektur.md`, section 13, for the reasoning.
+#
+# One operation, and deliberately one. There is no `POST` — an entry is written
+# as a side effect of an operation that changed something, never by a client —
+# and no `DELETE`: a trail that can be edited through the application it audits
+# is not evidence of anything. Retention is unbounded and there is no pruning job
+# (U-61).
+#
+tags:
+  - name: audit
+    description: |
+      Who changed what, when, and from where.
+
+      Reading is superuser-only (U-43): an entry names administrators across
+      domain boundaries, so a scoped view would be a view of other people's
+      operations wherever a domain master shares a domain with someone. The
+      domain of each object *is* recorded, so that a narrower view remains
+      possible later without the data having been lost in the meantime.
+
+      Reads are not audited. Sign-ins, refused sign-ins and refused operations
+      are — those are attempts on the system, not readings of it.
+
+paths:
+  /audit:
+    get:
+      operationId: listAuditEntries
+      tags:
+        - audit
+      summary: List audit entries
+      description: |
+        The trail, filtered and paged, **newest first by default**.
+
+        Every filter is `AND`-joined. `action` matches as a prefix, everything
+        else exactly; `since` and `until` bound `recorded_at` inclusively and are
+        interpreted in UTC whatever zone they are written in.
+
+        Two ways to read a single incident:
+
+        - **by request** — `?request_id=…` gives everything one HTTP request
+          recorded, and the same id in the application log gives the rest of what
+          happened during it.
+        - **by operation** — `?part_of=…` gives the entries of one batch, for
+          instance every account touched by a domain rename.
+
+        The states in `before` and `after` are already redacted; there is no
+        parameter that returns them otherwise.
+      x-permission: audit.read
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - $ref: '#/components/parameters/AuditSort'
+        - $ref: '#/components/parameters/AuditOrder'
+        - $ref: '#/components/parameters/AuditActor'
+        - $ref: '#/components/parameters/AuditAction'
+        - $ref: '#/components/parameters/AuditObjectType'
+        - $ref: '#/components/parameters/AuditObjectId'
+        - $ref: '#/components/parameters/AuditDomain'
+        - $ref: '#/components/parameters/AuditOutcomeFilter'
+        - $ref: '#/components/parameters/AuditRequestId'
+        - $ref: '#/components/parameters/AuditPartOf'
+        - $ref: '#/components/parameters/AuditSince'
+        - $ref: '#/components/parameters/AuditUntil'
+      responses:
+        '200':
+          description: One page of the trail.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'

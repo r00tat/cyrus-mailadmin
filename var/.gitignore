@@ -1,0 +1,11 @@
+# Runtime and build directory (U-13).
+#
+# Everything in here is generated: build artefacts under cache/ (bundled
+# specification, compiled route table, checksum) and tool caches. Nothing is
+# checked in — but the directory itself is, because U-13 requires it to exist and
+# be writable, and a deployment that had to create it would fail on first request.
+*
+!.gitignore
+# Exception: the deny rule from U-25 must travel with the checkout, otherwise a
+# deployment into the web root would expose build artefacts and tool caches.
+!.htaccess

@@ -1,0 +1,85 @@
+# mailadmin — Apache vHost, variant A: public/ as DocumentRoot (recommended, U-25)
+#
+# Nothing outside public/ is reachable by construction. No .htaccess is involved.
+# Placeholders: mail.example.test, /srv/mailadmin, the certificate paths.
+
+<VirtualHost *:80>
+    ServerName mail.example.test
+    Redirect permanent / https://mail.example.test/
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName mail.example.test
+
+    DocumentRoot /srv/mailadmin/public
+
+    SSLEngine on
+    SSLCertificateFile      /etc/ssl/certs/mail.example.test.pem
+    SSLCertificateKeyFile   /etc/ssl/private/mail.example.test.key
+
+    <Directory /srv/mailadmin/public>
+        # The application ships public/.htaccess with the rewrite rules. Either
+        # allow it, or set AllowOverride None and copy those rules in here — the
+        # latter is faster and one less moving part.
+        AllowOverride All
+        Require all granted
+
+        Options -Indexes -MultiViews
+
+        # mod_proxy_fcgi drops the Authorization header; without this every
+        # bearer token arrives as "missing" and the UI cannot sign in.
+        # public/.htaccess achieves the same with a RewriteRule, because
+        # CGIPassAuth is not allowed there without AllowOverride AuthConfig.
+        # Needed here if you set AllowOverride None (Apache 2.4.13 or later).
+        CGIPassAuth On
+    </Directory>
+
+    # Security headers (architecture 5.7, O-13).
+    #
+    # The application ships these in public/.htaccess. Repeat them here if you
+    # set AllowOverride None, because then no .htaccess is read and the SPA
+    # shell would be served without a Content-Security-Policy — which is the one
+    # document where an XSS hole becomes exploitable, and the reason `script-src
+    # 'self'` exists at all (E-15, U-35).
+    #
+    # `always` matters: without it the headers are omitted on error responses.
+    <IfModule mod_headers.c>
+        Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+        Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        Header always set X-Content-Type-Options "nosniff"
+        Header always set Referrer-Policy "no-referrer"
+        Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    </IfModule>
+
+    # PHP-FPM with its own pool (E-8, finding S-3).
+    <FilesMatch "\.php$">
+        SetHandler "proxy:unix:/run/php/mailadmin.sock|fcgi://localhost"
+    </FilesMatch>
+
+    # Only the front controller is a PHP entry point. Should an asset ever be
+    # named *.php, this keeps it from being executed.
+    <Files "index.php">
+        Require all granted
+    </Files>
+
+    # Configuration comes from the environment (U-11). These reach PHP-FPM only if
+    # the pool passes them through (clear_env = no), otherwise set them in the
+    # pool configuration instead — that is the better place.
+    SetEnv MAILADMIN_ENV prod
+    SetEnv MAILADMIN_BASE_PATH ""
+
+    ErrorLog  /var/log/apache2/mailadmin-error.log
+    CustomLog /var/log/apache2/mailadmin-access.log combined
+</VirtualHost>
+
+# ---------------------------------------------------------------------------
+# Variant B: the whole project directory inside the web root.
+#
+# Then the directory below the web root needs AllowOverride, otherwise every
+# .htaccess the project ships is ignored and the entire tree becomes readable —
+# without any error message. Verify with bin/check-deployment.php.
+#
+# <Directory /var/www/html/mailadmin>
+#     AllowOverride All
+#     Require all granted
+# </Directory>

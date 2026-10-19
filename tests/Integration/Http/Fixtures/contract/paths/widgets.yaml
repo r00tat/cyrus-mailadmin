@@ -1,0 +1,61 @@
+tags:
+  - name: widgets
+    description: An invented resource, so that the tests do not collide with a real one.
+
+paths:
+  /widgets:
+    get:
+      operationId: listWidgets
+      tags:
+        - widgets
+      # Public, so that the query-parameter cases can be tested without a token.
+      # The value has to be one the Permission enum knows (S3) — the route
+      # compiler refuses to build a table from an invented one.
+      x-permission: public
+      security: []
+      parameters:
+        - name: per_page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: A page of widgets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WidgetList'
+
+    post:
+      operationId: createWidget
+      tags:
+        - widgets
+      x-permission: domain.write
+      # No `security` override, so the global bearer requirement applies.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Widget'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+        # Both refusals are declared because response validation runs in this
+        # suite: the route middleware answers inside the dispatcher, so its
+        # responses pass back out through the validator. An undeclared status
+        # would be reported as a contract violation instead of as the refusal
+        # it is.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        # `domain.write` is superuser-only (S3).
+        '403':
+          $ref: '#/components/responses/Forbidden'

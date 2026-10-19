@@ -1,0 +1,537 @@
+#
+# Addresses, aliases, catchall, forwards and the vacation notice (A3). See
+# `openapi/README.md` for the file conventions and `docs/03-architektur.md`,
+# sections 3.4, 8.1 and 9.4, for the reasoning.
+#
+# Nothing cross-cutting belongs here: `Problem`, `PaginationMeta`, `IfMatch`,
+# `Page`, `PerPage` and the reusable error responses come from
+# `components/common.yaml`, `DomainNamePath` from `components/domain.yaml` and
+# `AccountIdPath` from `components/account.yaml`.
+#
+components:
+  schemas:
+    # ------------------------------------------------------------------
+    # Values
+    # ------------------------------------------------------------------
+
+    AddressEntryType:
+      type: string
+      description: |
+        What a row of `virtual` is, decided once by its field pattern
+        (architecture 3.4). `unknown` is a row that fits no pattern; it is
+        listed, never skipped (U-22).
+      enum:
+        - mailbox_address
+        - alias
+        - catchall
+        - forward
+        - unknown
+
+    AddressUnknownReason:
+      type: string
+      description: Why a row fits no pattern. A stable key; the frontend translates (E-16).
+      enum:
+        - no_alias
+        - no_destination
+        - alias_is_not_an_address
+        - catchall_without_domain
+        - unusable_value
+
+    AddressDestination:
+      type: string
+      minLength: 1
+      maxLength: 255
+      description: |
+        A mail address, or the stored user name of an account (local
+        delivery). An account name is matched without regard to case and
+        written in the spelling `accountuser` has. A name without `@` that is
+        no account is refused (`address.invalid_destination`): Postfix would
+        complete it with its own domain (U-104).
+      example: anna@example.test
+
+    AddressDestinations:
+      type: array
+      minItems: 1
+      maxItems: 50
+      description: |
+        Written comma-separated without spaces, the spelling every legacy row
+        has. A duplicate, a destination that points back at the address
+        itself, or one that leads back to it through other enabled rows — a
+        loop Postfix would defer — is refused (`address.invalid_destination`,
+        U-104, U-112).
+      items:
+        $ref: '#/components/schemas/AddressDestination'
+
+    AddressSenderAccount:
+      type: string
+      nullable: true
+      minLength: 1
+      maxLength: 255
+      description: |
+        The account that may **send** as this address — the account written to
+        `virtual.username`, which the view `validsenders` joins against
+        `accountuser` (U-106). It must be one of the destinations. `null`: nobody.
+      example: anna.example.test
+
+    # ------------------------------------------------------------------
+    # Representations
+    # ------------------------------------------------------------------
+
+    AddressEntry:
+      type: object
+      description: |
+        One row of `virtual`, exactly as stored, with its classification. The
+        table has no key; `id` is a fingerprint over the four fields and
+        changes when the row does (U-103).
+      required:
+        - id
+        - type
+        - alias
+        - destinations
+        - enabled
+        - username
+        - sender_account
+        - reserved
+        - unknown_reason
+      properties:
+        id:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: The identifier in `DELETE /domains/{domain}/addresses/{entry}`.
+        type:
+          $ref: '#/components/schemas/AddressEntryType'
+        alias:
+          type: string
+          description: '`virtual.alias` verbatim — an address, `@domain`, or a Cyrus user name.'
+        destinations:
+          type: array
+          description: '`virtual.dest`, split at the commas.'
+          items:
+            type: string
+        enabled:
+          type: boolean
+          description: '`status = 1`. Postfix reads only enabled rows.'
+        username:
+          type: string
+          description: '`virtual.username` verbatim.'
+        sender_account:
+          type: string
+          nullable: true
+          description: |
+            The account `username` names, when it is one — the account
+            `validsenders` lets send as `alias`. `null` otherwise.
+        reserved:
+          type: boolean
+          description: The local part is one of the reserved names (postmaster, abuse, …).
+        unknown_reason:
+          type: string
+          nullable: true
+          description: |
+            Set when `type` is `unknown`: why the row fits no pattern. A stable
+            key; the frontend translates (E-16). The values are those of
+            `AddressUnknownReason`.
+          enum:
+            - no_alias
+            - no_destination
+            - alias_is_not_an_address
+            - catchall_without_domain
+            - unusable_value
+
+    AddressEntryCollection:
+      type: object
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AddressEntry'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    Alias:
+      type: object
+      description: |
+        Every row under one address. Legacy data spreads an alias over several
+        rows; Postfix answers with all of them, so the destinations are their
+        union. `editable` is false when the rows are not all aliases naming the
+        same sending account with the same status — they are then shown in
+        `entries` and changed one by one (U-105, U-111).
+      required:
+        - address
+        - domain
+        - destinations
+        - enabled
+        - sender_account
+        - reserved
+        - requires_confirmation
+        - editable
+        - entries
+      properties:
+        address:
+          type: string
+          example: info@example.test
+        domain:
+          type: string
+          example: example.test
+        destinations:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+          description: Every alias row is enabled.
+        sender_account:
+          type: string
+          nullable: true
+          description: The account every alias row names as its sender, or `null`.
+        reserved:
+          type: boolean
+        requires_confirmation:
+          type: boolean
+          description: |
+            `postmaster` or `abuse` (RFC 2142): removing or disabling the alias
+            needs `confirm_reserved` (U-109).
+        editable:
+          type: boolean
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AddressEntry'
+
+    Catchall:
+      type: object
+      description: |
+        The rows with `alias = '@<domain>'`. Postfix uses them for an address
+        of the domain that has no row of its own — and for one whose only rows
+        are disabled (U-108).
+      required:
+        - domain
+        - configured
+        - destinations
+        - enabled
+        - sender_account
+        - editable
+        - entries
+      properties:
+        domain:
+          type: string
+        configured:
+          type: boolean
+        destinations:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+        sender_account:
+          type: string
+          nullable: true
+        editable:
+          type: boolean
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AddressEntry'
+
+    Forwards:
+      type: object
+      description: |
+        The forward rows of one account — `alias` is its stored user name,
+        `username` is empty (architecture 3.4). Kept in `virtual`, never as a
+        Sieve `redirect` (U-107).
+      required:
+        - account
+        - configured
+        - destinations
+        - keep_copy
+        - copy_required
+        - enabled
+        - editable
+        - entries
+      properties:
+        account:
+          type: string
+        configured:
+          type: boolean
+        destinations:
+          type: array
+          description: Where mail goes **besides** the mailbox.
+          items:
+            type: string
+        keep_copy:
+          type: boolean
+          description: |
+            The mailbox receives the mail too — stored as the account's own
+            user name among the destinations. Without a copy the vacation
+            notice never answers: the mail never reaches the mailbox.
+        copy_required:
+          type: boolean
+          description: |
+            The account is in the `fqun` scheme, where its address row has the
+            same key and Postfix always delivers into the mailbox. `keep_copy:
+            false` is refused there (`forward.copy_required`).
+        enabled:
+          type: boolean
+        editable:
+          type: boolean
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AddressEntry'
+
+    VacationState:
+      type: string
+      description: |
+        What the account's active Sieve script means for the notice (U-102):
+
+        - `none` — no active script, or one of ours without a notice;
+        - `active` — one of ours with a notice;
+        - `foreign` — written by someone else; shown read-only in `script`,
+          replaced only with `take_over`;
+        - `unreadable` — ours by its marker, but what it holds cannot be read
+          back; shown in `script` and replaced by the next `PUT`.
+      enum:
+        - none
+        - active
+        - foreign
+        - unreadable
+
+    Vacation:
+      type: object
+      required:
+        - account
+        - state
+        - message
+        - subject
+        - interval_days
+        - addresses
+        - script_name
+        - script
+      properties:
+        account:
+          type: string
+        state:
+          $ref: '#/components/schemas/VacationState'
+        message:
+          type: string
+          nullable: true
+        subject:
+          type: string
+          nullable: true
+        interval_days:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 60
+        addresses:
+          type: array
+          nullable: true
+          items:
+            type: string
+        script_name:
+          type: string
+          nullable: true
+          description: The name of the active script, whoever wrote it.
+        script:
+          type: string
+          nullable: true
+          description: The script itself — only for `foreign` and `unreadable`.
+
+    # ------------------------------------------------------------------
+    # Requests
+    # ------------------------------------------------------------------
+
+    AliasCreateRequest:
+      type: object
+      required:
+        - local_part
+        - destinations
+      additionalProperties: false
+      properties:
+        local_part:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: The part before the `@`; stored in lower case.
+          example: info
+        destinations:
+          $ref: '#/components/schemas/AddressDestinations'
+        sender_account:
+          $ref: '#/components/schemas/AddressSenderAccount'
+        enabled:
+          type: boolean
+          default: true
+
+    AliasUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: |
+        Only what is sent changes. Without `sender_account` the stored sending
+        account stays — unless it no longer receives the alias's mail, in
+        which case nobody may send as the alias any more (U-106).
+      properties:
+        destinations:
+          $ref: '#/components/schemas/AddressDestinations'
+        sender_account:
+          $ref: '#/components/schemas/AddressSenderAccount'
+        enabled:
+          type: boolean
+        confirm_reserved:
+          type: boolean
+          default: false
+          description: Required to disable `postmaster` or `abuse` (U-109).
+
+    CatchallRequest:
+      type: object
+      required:
+        - destinations
+      additionalProperties: false
+      properties:
+        destinations:
+          $ref: '#/components/schemas/AddressDestinations'
+        enabled:
+          type: boolean
+          default: true
+        sender_account:
+          $ref: '#/components/schemas/AddressSenderAccount'
+
+    ForwardsRequest:
+      type: object
+      required:
+        - destinations
+      additionalProperties: false
+      properties:
+        destinations:
+          $ref: '#/components/schemas/AddressDestinations'
+        keep_copy:
+          type: boolean
+          default: true
+        enabled:
+          type: boolean
+          default: true
+
+    VacationRequest:
+      type: object
+      required:
+        - message
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: |
+            The reply text. 4000 characters, well below Cyrus's limit for a
+            whole script (`sieve_maxscriptsize`). Not written to the audit
+            trail; its length is.
+        subject:
+          type: string
+          nullable: true
+          maxLength: 255
+          pattern: '^[^\x00-\x1F\x7F]*$'
+          description: |
+            No control characters: a line break would reach the header of
+            every auto-reply (`sieve.invalid_rule` when it gets past the
+            schema, U-114).
+        interval_days:
+          type: integer
+          minimum: 1
+          maximum: 60
+          default: 7
+          description: How long the same sender is spared a second reply.
+        addresses:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: |
+            The recipient addresses the notice answers for. Absent: the
+            account's own address.
+          items:
+            type: string
+            minLength: 3
+            maxLength: 255
+        take_over:
+          type: boolean
+          default: false
+          description: |
+            Replace a foreign active script. Without it, a foreign script is
+            never overwritten (`vacation.foreign_script`, architecture 9.4).
+
+  # --------------------------------------------------------------------
+  # Parameters
+  # --------------------------------------------------------------------
+
+  parameters:
+    AliasPath:
+      name: alias
+      in: path
+      required: true
+      description: |
+        The address, URL-encoded (`info%40example.test`). An address outside
+        the actor's scope answers `404`, the same document as one without an
+        alias (U-44).
+      schema:
+        type: string
+        minLength: 3
+        maxLength: 255
+
+    AddressEntryPath:
+      name: entry
+      in: path
+      required: true
+      description: The `id` of an `AddressEntry`. A row that changed since it was read has another one and is `404`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+
+    AddressSort:
+      name: sort
+      in: query
+      required: false
+      description: The field to sort by — an enumeration, never a free string (CLAUDE.md, rule two).
+      schema:
+        type: string
+        enum:
+          - alias
+          - type
+        default: alias
+
+    AddressTypeFilter:
+      name: type
+      in: query
+      required: false
+      description: Only rows of this type.
+      schema:
+        $ref: '#/components/schemas/AddressEntryType'
+
+    AddressAliasFilter:
+      name: alias
+      in: query
+      required: false
+      description: Substring match on `alias`, without regard to case.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+    ConfirmReserved:
+      name: confirm_reserved
+      in: query
+      required: false
+      description: Required to remove `postmaster` or `abuse` (U-109).
+      schema:
+        type: boolean
+        default: false
+
+    TakeOver:
+      name: take_over
+      in: query
+      required: false
+      description: Withdraw a foreign active script (it is deactivated, not deleted).
+      schema:
+        type: boolean
+        default: false

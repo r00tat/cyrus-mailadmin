@@ -1,0 +1,266 @@
+#
+# Administrator accounts (A4). See `openapi/README.md` for the file conventions
+# and `docs/03-architektur.md`, section 7.2, for where these endpoints sit.
+#
+# `adminuser` and `accountuser` are two different worlds: an administrator signs
+# in to *this* interface and has no mailbox, a mailbox owner has no row here and
+# never signs in at all (E-7). Nothing in this file describes a mailbox.
+#
+components:
+  schemas:
+    Admin:
+      type: object
+      description: |
+        One administrator, as `adminuser` plus `domainadmin` describe them.
+
+        Three fields exist because the legacy database is allowed to contain
+        states this application would not create, and U-22 says such a state is
+        **shown**, not filtered away:
+
+          * `all_domains` — webcyradm writes „every domain" as a `domainadmin`
+            row with `domain_name = '*'`. It is normally true for a superuser and
+            false for a domain master, but an installation may carry the row for
+            a domain master too, and U-43 honours it. Reading the field is
+            therefore not the same as reading `role`.
+          * `orphaned_domains` — assignments naming a domain that has no row in
+            `domain`. A subset of `domains`, never a separate set.
+          * `password_format` — the format the stored hash is in. A legacy hash
+            keeps working and is rewritten as Argon2id the next time this
+            administrator signs in (E-13); until then it is visible here rather
+            than invisible everywhere.
+      required:
+        - username
+        - role
+        - all_domains
+        - domains
+        - orphaned_domains
+        - password_format
+        - password_legacy
+      properties:
+        username:
+          $ref: '#/components/schemas/AdminUsername'
+        role:
+          $ref: '#/components/schemas/AdminRole'
+        all_domains:
+          type: boolean
+          description: A `domainadmin` row with the wildcard `*` exists for this administrator.
+        domains:
+          type: array
+          description: |
+            The named domain assignments, sorted, wildcard excluded. Empty for an
+            administrator whose only assignment is the wildcard.
+          items:
+            $ref: '#/components/schemas/AdminDomainName'
+        orphaned_domains:
+          type: array
+          description: |
+            The subset of `domains` that names a domain with no row in `domain`
+            (U-22). Shown so that a stale assignment is visible instead of silently
+            dropped; it is not removed by this API.
+          items:
+            $ref: '#/components/schemas/AdminDomainName'
+        password_format:
+          $ref: '#/components/schemas/AdminPasswordFormat'
+        password_legacy:
+          type: boolean
+          description: |
+            `true` while the stored hash is in one of the formats webcyradm left
+            behind. Derived from `password_format`, and sent so that a client does
+            not have to carry the mapping.
+
+    AdminCollection:
+      type: object
+      description: One page of administrators.
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Admin'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    AdminCreateRequest:
+      type: object
+      description: |
+        A new administrator.
+
+        `domains` and `role` have to agree: a domain master needs at least one
+        domain, a superuser must be given none. Disagreement is
+        `admin.role_scope_mismatch` rather than something the schema could
+        express, because OpenAPI 3.0 has no way to make one property's
+        requiredness depend on another's value.
+      required:
+        - username
+        - password
+        - role
+      additionalProperties: false
+      properties:
+        username:
+          $ref: '#/components/schemas/AdminNewUsername'
+        password:
+          $ref: '#/components/schemas/AdminPassword'
+        role:
+          $ref: '#/components/schemas/AdminRole'
+        domains:
+          type: array
+          description: |
+            The domains a domain master may see. Every one has to exist in
+            `domain`; an unknown name is `admin.unknown_domain`.
+          items:
+            $ref: '#/components/schemas/AdminDomainName'
+
+    AdminUpdateRequest:
+      type: object
+      description: |
+        A partial change. Every member is optional; sending none is accepted and
+        changes nothing, which keeps a retried request harmless.
+
+        Setting `password` here is a superuser resetting **somebody else's**
+        password and needs `admin.write`. Changing one's own password is
+        `PUT /admins/me/password`, which every role may call — the two are
+        deliberately different operations with different permissions.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        role:
+          $ref: '#/components/schemas/AdminRole'
+        password:
+          $ref: '#/components/schemas/AdminPassword'
+        domains:
+          type: array
+          description: |
+            Replaces the whole assignment list. Sending it is not a merge: what
+            is absent is removed.
+          items:
+            $ref: '#/components/schemas/AdminDomainName'
+
+    AdminOwnPasswordRequest:
+      type: object
+      description: |
+        Changing one's own password. The current one is required even though the
+        caller is already authenticated: a token in the wrong hands must not be
+        enough to lock the rightful owner out of their own account.
+      required:
+        - current_password
+        - new_password
+      additionalProperties: false
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          description: The password in use now. Wrong value is `admin.wrong_current_password`.
+        new_password:
+          $ref: '#/components/schemas/AdminPassword'
+
+    # `AdminRole` is not declared here. S2 already owns it in
+    # `components/auth.yaml`, where `CurrentSession` uses it, and a second
+    # declaration of the same name breaks the bundle (`openapi/README.md`, 7).
+    # It is referenced below as `#/components/schemas/AdminRole`.
+
+    AdminUsername:
+      type: string
+      minLength: 1
+      maxLength: 50
+      description: |
+        The `adminuser.username` as it is stored. The column is `latin1_bin`, so
+        `Admin` and `admin` are two different administrators and this API does not
+        fold case either.
+      pattern: '^[^\s/]+$'
+
+    AdminNewUsername:
+      type: string
+      minLength: 1
+      maxLength: 50
+      description: |
+        The name of an administrator being created. Narrower than
+        `AdminUsername`, which has to be able to address every row an existing
+        installation may already hold.
+      pattern: '^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$'
+
+    AdminPassword:
+      type: string
+      minLength: 12
+      maxLength: 4096
+      description: |
+        A cleartext password for an administrator account. Twelve characters
+        minimum (U-21) — stricter than a mailbox password, because this account
+        governs every domain. No character-class requirement and no expiry; a
+        block list of common passwords and a check against the user's own name
+        apply instead, and a violation is one of the `auth.password_*` codes.
+
+    AdminDomainName:
+      type: string
+      minLength: 1
+      maxLength: 255
+      description: |
+        A domain name as `domain.domain_name` holds it. The wildcard `*` is not
+        accepted here: „all domains" is what a superuser is, not something a
+        domain master can be given.
+      pattern: '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'
+
+    AdminPasswordFormat:
+      type: string
+      description: |
+        The format of the stored hash. `argon2id` is the target for `adminuser`;
+        everything else is a hash webcyradm or an older tool left behind and is
+        rewritten on the next successful sign-in (E-13).
+      enum:
+        - argon2id
+        - bcrypt
+        - md5crypt
+        - sha256crypt
+        - sha512crypt
+        - descrypt
+        - sha1hex
+        - mysql_password
+        - plaintext
+        - unknown
+
+  parameters:
+    AdminUsernamePath:
+      name: username
+      in: path
+      required: true
+      description: |
+        The administrator's name. Compared byte for byte, as the `latin1_bin`
+        column does.
+      schema:
+        $ref: '#/components/schemas/AdminUsername'
+
+    AdminSort:
+      name: sort
+      in: query
+      required: false
+      description: |
+        Field to sort by. An enumeration and not a free string, because the old
+        system interpolated the sort field from the session straight into
+        `ORDER BY` (`CLAUDE.md`, rule 2). The list has to match the repository's
+        allowlist; a contract test compares the two.
+      schema:
+        type: string
+        enum:
+          - username
+          - role
+        default: username
+
+    AdminRoleFilter:
+      name: role
+      in: query
+      required: false
+      description: Show only administrators with this role.
+      schema:
+        $ref: '#/components/schemas/AdminRole'
+
+    AdminUsernameFilter:
+      name: username
+      in: query
+      required: false
+      description: Show only administrators whose name contains this text.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 50

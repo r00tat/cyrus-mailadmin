@@ -1,6 +1,38 @@
 # production
 /build
 
+# Abhaengigkeiten
+/vendor/
+/node_modules/
+
+# Build-Artefakte und Laufzeitverzeichnis (U-13).
+# Der Inhalt von var/ wird vom Build erzeugt (composer build), nicht eingecheckt.
+# Das Verzeichnis selbst bleibt getrackt — U-13 verlangt, dass es existiert und
+# beschreibbar ist; siehe var/.gitignore.
+/var/*
+!/var/.gitignore
+
+# Gebautes Frontend-Bundle (W1). `npm run build` schreibt beides nach public/;
+# die Shell traegt einen Inhalts-Hash in den Asset-Namen, ist also nicht
+# reproduzierbar zu versionieren und gehoert ins Deployment, nicht ins Repo.
+/public/assets/
+/public/index.html
+
+# Frontend-Abhaengigkeiten und erzeugte Vertragstypen (W1).
+# schema.d.ts entsteht aus var/cache/openapi.bundled.yaml (`npm run api:types`,
+# laeuft als prebuild). Eingecheckt waere es die zweite Wahrheit neben dem
+# Vertrag — genau das, was Regel 3 ausschliesst.
+/frontend/node_modules/
+/frontend/src/api/schema.d.ts
+
+# Werkzeug-Caches
+.php-cs-fixer.cache
+.phpunit.result.cache
+
+# Konfiguration kommt aus der Umgebung. .env ist nur Entwicklung (U-11) und
+# enthaelt Zugangsdaten — .env.example bleibt getrackt.
+.env
+
 # misc
 .DS_Store
 *.pem

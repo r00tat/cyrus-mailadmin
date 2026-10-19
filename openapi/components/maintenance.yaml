@@ -1,0 +1,373 @@
+#
+# Components of A6 — reconciliation, repair queue, detailed health. See
+# `openapi/README.md` for the file conventions.
+#
+components:
+  schemas:
+    Reconciliation:
+      type: object
+      description: |
+        One reconciliation run. `checked` says what was compared — "no findings"
+        over zero mailboxes is a different statement from "no findings" over
+        four thousand. `summary` lists every category, with `0` where nothing
+        was found.
+      required:
+        - checked_at
+        - checked
+        - summary
+        - findings
+      properties:
+        checked_at:
+          type: string
+          format: date-time
+        checked:
+          type: object
+          required:
+            - accounts
+            - mailboxes
+            - virtual_rows
+          properties:
+            accounts:
+              type: integer
+              minimum: 0
+            mailboxes:
+              type: integer
+              minimum: 0
+              description: User roots in Cyrus, both namespaces together.
+            virtual_rows:
+              type: integer
+              minimum: 0
+        summary:
+          type: object
+          description: Number of findings per category; every category is present.
+          required:
+            - account_without_mailbox
+            - mailbox_without_account
+            - shadow_mailbox
+            - unresolvable_account
+            - ambiguous_username
+            - virtual_owner_missing
+            - virtual_target_missing
+            - virtual_unclassified
+          properties:
+            account_without_mailbox:
+              type: integer
+              minimum: 0
+            mailbox_without_account:
+              type: integer
+              minimum: 0
+            shadow_mailbox:
+              type: integer
+              minimum: 0
+            unresolvable_account:
+              type: integer
+              minimum: 0
+            ambiguous_username:
+              type: integer
+              minimum: 0
+            virtual_owner_missing:
+              type: integer
+              minimum: 0
+            virtual_target_missing:
+              type: integer
+              minimum: 0
+            virtual_unclassified:
+              type: integer
+              minimum: 0
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationFinding'
+
+    ReconciliationFinding:
+      type: object
+      description: |
+        One disagreement. `subject` is what is wrong, spelled as stored — a
+        mailbox name, a user name, an alias. `related` is the other half when
+        there is one: the account a shadow mailbox shadows, the destination that
+        leads nowhere, the subdomain that makes a user name ambiguous.
+      required:
+        - category
+        - subject
+        - domain
+        - related
+        - reason
+      properties:
+        category:
+          $ref: '#/components/schemas/ReconciliationCategory'
+        subject:
+          type: string
+        domain:
+          type: string
+          nullable: true
+          description: The domain the finding belongs to, when one can be named without guessing.
+        related:
+          type: string
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+          description: |
+            A stable `snake_case` key refining the category — for
+            `virtual_unclassified` the classifier's reason (`no_destination`, …),
+            for `virtual_target_missing` `no_account` or `no_address`, for a
+            shadow mailbox the scheme it is in. Not a message.
+
+    ReconciliationCategory:
+      type: string
+      description: |
+        - `account_without_mailbox` — a row in `accountuser` without its mailbox; mail to it bounces.
+        - `mailbox_without_account` — a mailbox no row claims.
+        - `shadow_mailbox` — a mailbox under the other naming scheme's name of an existing account.
+        - `unresolvable_account` — a row whose user name does not belong to its `domain_name`.
+        - `ambiguous_username` — a dotted user name an account of an existing subdomain could also have (U-96).
+        - `virtual_owner_missing` — `virtual.username` names no account and is not a domain placeholder (U-106).
+        - `virtual_target_missing` — a destination that leads nowhere: a user name no account has, reported as written, or an address in a locally delivered domain that nothing answers.
+        - `virtual_unclassified` — a row that fits none of the four types (architecture 3.4).
+      enum:
+        - account_without_mailbox
+        - mailbox_without_account
+        - shadow_mailbox
+        - unresolvable_account
+        - ambiguous_username
+        - virtual_owner_missing
+        - virtual_target_missing
+        - virtual_unclassified
+
+    RepairEntry:
+      type: object
+      description: |
+        What a half-finished operation left behind (architecture 8.2).
+        `intended`, `reached` and `reason` are English for an operator and **not
+        a contract** — never render them as a message to a user (E-16).
+        `parameters` are what a retry uses; they never hold a secret (U-28).
+
+        `retryable` is worked out when the entry is read (U-118) and is `false`
+        for every resolved entry.
+      required:
+        - id
+        - recorded_at
+        - operation
+        - step
+        - subject
+        - intended
+        - reached
+        - reason
+        - parameters
+        - request_id
+        - status
+        - retryable
+        - attempts
+        - last_attempt_at
+        - last_error
+        - resolved_at
+        - resolved_by
+        - resolution
+        - note
+      properties:
+        id:
+          type: integer
+          format: int64
+        recorded_at:
+          type: string
+          format: date-time
+        operation:
+          type: string
+          description: What was being done — `domain.rename`, `account.create`, `alias.update`, …
+          example: account.create
+        step:
+          type: string
+          description: The step that failed — `mailstore.delete_mailbox`, `virtual.restore`, …
+          example: mailstore.default_folders
+        subject:
+          type: string
+        intended:
+          type: string
+        reached:
+          type: string
+        reason:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+        request_id:
+          type: string
+          nullable: true
+          description: The request whose operation failed — the key into the log and the audit trail.
+        status:
+          type: string
+          enum:
+            - open
+            - resolved
+        retryable:
+          type: boolean
+        attempts:
+          type: integer
+          minimum: 0
+          description: Failed retries so far.
+        last_attempt_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
+          description: The stable error code of the last failed retry.
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+        resolved_by:
+          type: string
+          nullable: true
+        resolution:
+          type: string
+          nullable: true
+          enum:
+            - retried
+            - dismissed
+        note:
+          type: string
+          nullable: true
+
+    RepairPage:
+      type: object
+      required:
+        - items
+        - meta
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RepairEntry'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    RepairResolveRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        note:
+          type: string
+          maxLength: 500
+          description: What was done instead, for whoever reads the queue later.
+
+    RepairSort:
+      type: string
+      description: |
+        The field to sort by. Every ordering is broken by `id`, ascending. The
+        default is `id`, which is the order the entries were recorded in;
+        `recorded_at` has second resolution.
+      enum:
+        - id
+        - recorded_at
+        - operation
+      default: id
+
+    HealthDetails:
+      type: object
+      description: The probes with their codes and durations. Only for a superuser.
+      required:
+        - status
+        - checked_at
+        - checks
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - degraded
+        checked_at:
+          type: string
+          format: date-time
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/HealthCheckDetails'
+
+    HealthCheckDetails:
+      type: object
+      required:
+        - component
+        - status
+        - code
+        - duration_ms
+      properties:
+        component:
+          type: string
+          enum:
+            - database
+            - imap
+            - managesieve
+        status:
+          type: string
+          enum:
+            - ok
+            - error
+            - skipped
+        code:
+          type: string
+          nullable: true
+          description: |
+            Why the probe failed — a value of `ErrorCode`, for instance
+            `mailstore.unavailable` or `migration.database_unavailable`. `null`
+            when it did not.
+        duration_ms:
+          type: integer
+          minimum: 0
+
+  parameters:
+    RepairPath:
+      name: repair
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[1-9][0-9]{0,18}$'
+
+    RepairSort:
+      name: sort
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/RepairSort'
+
+    RepairOrder:
+      name: order
+      in: query
+      required: false
+      description: Sort direction. **Defaults to `desc`**, as for the audit trail — the recent end is the interesting one.
+      schema:
+        allOf:
+          - $ref: '#/components/schemas/SortOrder'
+        default: desc
+
+    RepairStatusFilter:
+      name: status
+      in: query
+      required: false
+      schema:
+        type: string
+        enum:
+          - open
+          - resolved
+
+    RepairOperationFilter:
+      name: operation
+      in: query
+      required: false
+      description: Matched as a prefix.
+      schema:
+        type: string
+        maxLength: 64
+        pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*\.?$'
+
+    RepairStepFilter:
+      name: step
+      in: query
+      required: false
+      schema:
+        type: string
+        maxLength: 64
+        pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$'

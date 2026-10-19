@@ -1,0 +1,90 @@
+#
+# Per-administrator interface preferences (W2). See `openapi/README.md` for the
+# file conventions and `docs/features/W2-mehrsprachigkeit.md`.
+#
+# Two operations on the caller's own preferences, held by **both** roles and
+# therefore declaring no `403`. There is no `/admins/{username}/preferences`:
+# which language somebody reads the interface in is nobody else's business, and
+# a superuser who wants to change it can ask.
+#
+# The tag is A4's `admins` — used here, not declared — because the resource is
+# the administrator's own account, exactly like `/admins/me/password`. The
+# handlers therefore live in `Http\Handler\Admins`.
+#
+# **The API stays language-neutral** (E-16). Storing which language the
+# interface should use is not translating the API: nothing the server says
+# depends on this value. It is read by the frontend and by nobody else.
+#
+paths:
+  /admins/me/preferences:
+    get:
+      operationId: getOwnPreferences
+      tags:
+        - admins
+      summary: Read one's own interface preferences
+      description: |
+        What the caller has chosen for themselves. `locale: null` means „nothing
+        chosen": the frontend then follows the browser's language list — the
+        same list the browser sends as `Accept-Language` — and falls back to
+        German (U-90).
+
+        A stored value this build does not offer — written by a newer release,
+        then rolled back — reads as `null` rather than failing the response.
+      x-permission: profile.preferences.read
+      responses:
+        '200':
+          description: The caller's preferences.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPreferences'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    put:
+      operationId: setOwnPreferences
+      tags:
+        - admins
+      summary: Replace one's own interface preferences
+      description: |
+        Replaces the whole set; there is one member today, and a `PUT` stays
+        honest when a second one arrives — an omitted member is a validation
+        error, not „leave as is".
+
+        No `If-Match`: the only writer is the administrator themselves, and two
+        of their own tabs racing for the language is not a conflict worth a
+        `412`. The last write wins, and the audit trail records each change.
+
+        Answers with the stored state, so a client need not read it back.
+      x-permission: profile.preferences.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminPreferences'
+      responses:
+        '200':
+          description: Stored.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminPreferences'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
