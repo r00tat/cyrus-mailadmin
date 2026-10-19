@@ -58,7 +58,11 @@ final class AccountStatusEnforcementIntegrationTest extends DatabaseTestCase
 
     protected function tearDown(): void
     {
-        $this->pdo->exec('DROP VIEW IF EXISTS `allusers`');
+        // Unset when setUp skipped the test for want of a database — PHPUnit
+        // still runs tearDown then.
+        if (isset($this->pdo)) {
+            $this->pdo->exec('DROP VIEW IF EXISTS `allusers`');
+        }
 
         parent::tearDown();
     }
