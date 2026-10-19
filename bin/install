@@ -7,6 +7,16 @@
 # by hand; the script adds nothing the manual path does not have, it only makes
 # the order impossible to get wrong.
 #
+# Two sources:
+#
+#   release   (--release TAG|latest) a GitHub release, built by
+#             .github/workflows/release.yml. Downloaded, checked against
+#             SHA256SUMS and optionally its build attestation, unpacked. The
+#             server needs no git, Composer or Node. This is the default when
+#             the script does not sit in a git checkout and no --repo is given
+#             — the copy attached to a release, or <prefix>/current/bin/install.
+#   source    (--repo, --ref) a git clone, built on the server.
+#
 # Layout on the server (deployment variant A, U-25):
 #
 #   <prefix>/releases/<id>/   one directory per installed revision
@@ -22,9 +32,12 @@
 #    2. configuration   the env file; on the first run it is created with a
 #                       fresh signing key and the script stops so that it can be
 #                       completed
-#    3. fetch           git clone into a new release directory
+#    3. fetch           git clone into a new release directory, or download,
+#                       verify and unpack a release archive
 #    4. build           composer (no dev) and the frontend, as an unprivileged
-#                       user; the release is root-owned afterwards
+#                       user — or, for a release archive, only the base path
+#                       written into the prebuilt frontend; the release is
+#                       root-owned afterwards
 #    5. migrate         from the NEW release while the OLD one still serves.
 #                       Migrations are additive (CLAUDE.md, rule 1), so the old
 #                       code keeps working; the new code refuses service until
@@ -55,6 +68,11 @@ readonly REQUIRED_KEYS=(
     MAILADMIN_IMAP_HOST MAILADMIN_IMAP_ADMIN_USER MAILADMIN_IMAP_ADMIN_PASSWORD
 )
 readonly CLI_COMMANDS='migrate|db-check|prune-tokens|check-deployment'
+readonly DEFAULT_GITHUB_REPO='r00tat/cyrus-mailadmin'
+# The release workflow builds the frontend with this as its base path; the
+# installer replaces it with the installation's own (U-71). A <base> element
+# would be simpler, and `base-uri 'none'` in the CSP rules it out.
+readonly BASE_PLACEHOLDER='/__MAILADMIN_BASE__/'
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
@@ -62,6 +80,10 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 repo=''
 ref=''
+release_ref=''
+release_dir=''
+github_repo=$DEFAULT_GITHUB_REPO
+verify_attestation=0
 prefix='/srv/mailadmin'
 env_file='/etc/mailadmin/mailadmin.env'
 base_path=''
@@ -92,7 +114,20 @@ Usage: bin/install [options]
 Install or update mailadmin: fetch, build, migrate, activate.
 See docs/deployment/installation.md.
 
-Source
+Source: a prebuilt GitHub release
+  --release TAG|latest    download and install this release; the default when
+                          this script is not in a git checkout and no --repo
+                          is given
+  --github-repo OWNER/NAME
+                          where the releases are published
+                          (default: r00tat/cyrus-mailadmin)
+  --verify-attestation    also verify the build provenance with
+                          'gh attestation verify' (needs the GitHub CLI)
+  --release-dir DIR       take the release files from DIR instead of
+                          downloading them (a server without internet access);
+                          needs --release TAG
+
+Source: build from git
   --repo URL|PATH         git repository to clone
                           (default: 'origin' of the checkout this script is in)
   --ref REF               branch, tag or commit (default: the default branch)
@@ -102,7 +137,7 @@ Target
   --env-file FILE         configuration (default: /etc/mailadmin/mailadmin.env)
   --base-path PATH        URL prefix such as /mailadmin (default: none)
   --keep-releases N       releases to keep, at least 2 (default: 3)
-  --keep-node-modules     keep frontend/node_modules after the build
+  --keep-node-modules     keep frontend/node_modules after the build (git only)
 
 System
   --no-system             only fetch, build and migrate, as the current user;
@@ -111,7 +146,8 @@ System
   --web-group NAME        group of the web server (default: www-data)
   --php-version X.Y       php-fpm version (default: that of the php CLI)
   --fpm-socket PATH       pool socket (default: /run/php/mailadmin.sock)
-  --install-packages      install git, composer, node and php-fpm via apt-get
+  --install-packages      install php-fpm (and, to build from git, git,
+                          composer and node) via apt-get
   --skip-migrate          do not run database migrations
 
 Web server
@@ -141,6 +177,10 @@ parse_args() {
         case "$1" in
             --repo)              need_value "$@"; repo=$2; shift ;;
             --ref)               need_value "$@"; ref=$2; shift ;;
+            --release)           need_value "$@"; release_ref=$2; shift ;;
+            --github-repo)       need_value "$@"; github_repo=$2; shift ;;
+            --verify-attestation) verify_attestation=1 ;;
+            --release-dir)       need_value "$@"; release_dir=$2; shift ;;
             --prefix)            need_value "$@"; prefix=$2; shift ;;
             --env-file)          need_value "$@"; env_file=$2; shift ;;
             --base-path)         need_value "$@"; base_path=$2; shift ;;
@@ -177,8 +217,39 @@ parse_args() {
     if [ -n "$base_path" ] && [ "${base_path#/}" = "$base_path" ]; then
         base_path="/$base_path"
     fi
+    [[ $base_path =~ ^(/[A-Za-z0-9._~-]+)*$ ]] \
+        || die "--base-path '$base_path': only letters, digits and . _ ~ - between slashes"
     prefix=${prefix%/}
+
+    if [ -n "$release_ref" ]; then
+        [ -z "$repo" ] && [ -z "$ref" ] || die '--release cannot be combined with --repo or --ref'
+        [ "$keep_node_modules" -eq 0 ] || die '--keep-node-modules only applies to a build from git'
+        [[ $release_ref =~ ^[A-Za-z0-9._+-]+$ ]] || die "--release '$release_ref' is not a valid tag"
+        if [ -n "$release_dir" ]; then
+            [ "$release_ref" != 'latest' ] || die '--release-dir needs a concrete --release TAG, not latest'
+            [ -d "$release_dir" ] || die "--release-dir '$release_dir' is not a directory"
+        fi
+    elif [ "$verify_attestation" -eq 1 ] || [ -n "$release_dir" ]; then
+        die '--verify-attestation and --release-dir only apply to --release'
+    fi
+    [[ $github_repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+        || die "--github-repo '$github_repo' is not OWNER/NAME"
 }
+
+# Without --release, --repo or a checkout to build from, the latest release is
+# what there is to install.
+choose_source() {
+    [ -z "$release_ref" ] || return 0
+    [ -z "$repo" ] || return 0
+    repo=$(default_repo)
+    if [ -z "$repo" ]; then
+        [ -z "$ref" ] || die "--ref needs a git repository: give --repo, or use --release"
+        release_ref='latest'
+        info "not in a git checkout and no --repo: installing the latest release of $github_repo"
+    fi
+}
+
+from_release() { [ -n "$release_ref" ]; }
 
 # --- helpers --------------------------------------------------------------------
 
@@ -401,10 +472,14 @@ step_install_packages() {
     log 'installing packages (apt-get)'
     command -v apt-get >/dev/null || die '--install-packages supports Debian and Ubuntu (apt-get) only.'
     local v=${php_version:-8.3}
+    local packages=(ca-certificates "php$v-cli" "php$v-fpm" "php$v-mysql" "php$v-mbstring")
+    if from_release; then
+        packages+=(curl tar)
+    else
+        packages+=(git unzip composer nodejs npm)
+    fi
     run apt-get update
-    run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        git unzip ca-certificates composer nodejs npm \
-        "php$v-cli" "php$v-fpm" "php$v-mysql" "php$v-mbstring"
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
 }
 
 step_preflight() {
@@ -413,8 +488,12 @@ step_preflight() {
         die 'a server installation needs root. Use --no-system to only fetch, build and migrate.'
     fi
 
-    local tool
-    for tool in git php composer node npm; do
+    local tool tools=(git php composer node npm)
+    if from_release; then
+        tools=(php curl tar sha256sum)
+        [ "$verify_attestation" -eq 0 ] || tools+=(gh)
+    fi
+    for tool in "${tools[@]}"; do
         command -v "$tool" >/dev/null \
             || die "'$tool' not found in PATH (docs/deployment/installation.md, step 1; or --install-packages)"
     done
@@ -437,11 +516,13 @@ step_preflight() {
     [ "${#missing[@]}" -eq 0 ] \
         || die "PHP extensions missing: ${missing[*]} (Debian/Ubuntu: php$php_version-mysql, php$php_version-mbstring)"
 
-    local node
-    node=$(node --version)
-    [[ $node =~ ^v([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -ge "$MIN_NODE" ] \
-        || die "Node $MIN_NODE or newer is required for the build, found $node"
-    info "node $node"
+    if ! from_release; then
+        local node
+        node=$(node --version)
+        [[ $node =~ ^v([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -ge "$MIN_NODE" ] \
+            || die "Node $MIN_NODE or newer is required for the build, found $node"
+        info "node $node"
+    fi
 
     if [ "$system" -eq 1 ]; then
         command -v "php-fpm$php_version" >/dev/null || [ "$dry_run" -eq 1 ] \
@@ -495,6 +576,7 @@ release=''
 staging=''
 activated=0
 git_trust=''
+download_dir=''
 env_created=0
 
 # A run that fails before the switch leaves the active release untouched; the
@@ -502,6 +584,7 @@ env_created=0
 on_exit() {
     local status=$?
     [ -n "$git_trust" ] && rm -f "$git_trust"
+    [ -n "$download_dir" ] && rm -rf "$download_dir"
     if [ "$status" -ne 0 ] && [ "$env_created" -eq 0 ] && [ "$activated" -eq 0 ] && [ "$dry_run" -eq 0 ]; then
         [ -n "$staging" ] && rm -rf "$staging"
         [ -n "$release" ] && [ -d "$release" ] && rm -rf "$release"
@@ -564,6 +647,117 @@ step_fetch() {
     info "release $(basename "$release")"
 }
 
+# The tag behind "latest": github.com redirects /releases/latest to
+# /releases/tag/<tag>. No API call, so no rate limit and no jq.
+resolve_release() {
+    [ "$release_ref" = 'latest' ] || return 0
+    local url
+    url=$(curl -fsSLI --proto '=https' -o /dev/null -w '%{url_effective}' \
+            "https://github.com/$github_repo/releases/latest") \
+        || die "cannot resolve the latest release of $github_repo (none published yet?)"
+    case "$url" in
+        */releases/tag/*) release_ref=${url##*/} ;;
+        *) die "$github_repo has no published release yet" ;;
+    esac
+    [[ $release_ref =~ ^[A-Za-z0-9._+-]+$ ]] || die "unexpected release tag '$release_ref'"
+}
+
+step_download() {
+    resolve_release
+    local asset="mailadmin-$release_ref.tar.gz"
+    local base="https://github.com/$github_repo/releases/download/$release_ref"
+    local releases="$prefix/releases"
+    local source=$base
+    [ -z "$release_dir" ] || source=$release_dir
+    log "release $release_ref of $github_repo from $source"
+
+    if [ "$dry_run" -eq 1 ]; then
+        info "[dry-run] fetch $source/$asset, verify, unpack -> $releases/<timestamp>-$release_ref"
+        release="$releases/<new>"
+        return 0
+    fi
+
+    download_dir=$(mktemp -d)
+    local file
+    for file in "$asset" SHA256SUMS "$asset.sigstore.json"; do
+        if [ -n "$release_dir" ]; then
+            [ ! -f "$release_dir/$file" ] || cp "$release_dir/$file" "$download_dir/$file"
+        else
+            curl -fsSL --proto '=https' --retry 3 -o "$download_dir/$file" "$base/$file" 2>/dev/null || true
+        fi
+    done
+    for file in "$asset" SHA256SUMS; do
+        [ -s "$download_dir/$file" ] || die "could not fetch $source/$file"
+    done
+
+    # Only the line for this archive, and it has to be there: --ignore-missing
+    # would wave through a SHA256SUMS that does not mention the file at all.
+    # This catches a damaged download. A tampered release would come with a
+    # matching checksum; that is what the attestation is for.
+    local sums
+    sums=$(awk -v f="$asset" '$2 == f || $2 == "*" f' "$download_dir/SHA256SUMS")
+    [ -n "$sums" ] || die "SHA256SUMS of $release_ref does not list $asset"
+    (cd "$download_dir" && printf '%s\n' "$sums" | sha256sum --check --strict --quiet -) \
+        || die "$asset does not match SHA256SUMS"
+    info 'checksum ok'
+
+    if [ "$verify_attestation" -eq 1 ]; then
+        # The bundle travels with the release, so the check needs no API
+        # lookup; without it, gh asks GitHub for the attestation.
+        local bundle=()
+        if [ -s "$download_dir/$asset.sigstore.json" ]; then
+            bundle=(--bundle "$download_dir/$asset.sigstore.json")
+        fi
+        gh attestation verify "$download_dir/$asset" --repo "$github_repo" \
+                --signer-workflow "$github_repo/.github/workflows/release.yml" "${bundle[@]}" \
+            || die "the build attestation of $asset could not be verified"
+        info 'build attestation ok: built by .github/workflows/release.yml'
+    else
+        info 'build attestation not checked (--verify-attestation)'
+    fi
+
+    # Exactly one directory, mailadmin-<tag>/, and nothing beside it.
+    local top
+    top=$(tar -tzf "$download_dir/$asset" | cut -d/ -f1 | LC_ALL=C sort -u)
+    [ "$top" = "mailadmin-$release_ref" ] || die "$asset: unexpected layout (top level: $top)"
+
+    mkdir -p "$releases"
+    if [ "$system" -eq 1 ]; then
+        chmod 0755 "$prefix" "$releases"
+    fi
+    staging="$releases/.incoming-$$"
+    rm -rf "$staging"
+    mkdir "$staging"
+    tar -xzf "$download_dir/$asset" -C "$staging" --strip-components=1 --no-same-owner
+    [ -f "$staging/REVISION" ] || die "$asset carries no REVISION file"
+
+    local stamp
+    stamp=$(date -u +%Y%m%d%H%M%S)
+    release="$releases/$stamp-$release_ref"
+    mv "$staging" "$release"
+    staging=''
+    info "release $(basename "$release") (commit $(head -c 10 "$release/REVISION"))"
+}
+
+# The prebuilt frontend carries BASE_PLACEHOLDER wherever Vite put its base:
+# the shell's script and style URLs, BASE_URL in the bundle, font URLs in the
+# CSS. Same length or not does not matter, nothing in there is offset-based.
+step_base_path() {
+    log "frontend base path: ${base_path:-/}"
+    if [ "$dry_run" -eq 1 ]; then
+        info "[dry-run] replace $BASE_PLACEHOLDER in public/index.html and public/assets/"
+        return 0
+    fi
+
+    local public="$release/public" files=()
+    grep -qF "$BASE_PLACEHOLDER" "$public/index.html" 2>/dev/null \
+        || die "$public/index.html carries no base path placeholder; this archive was not built by the release workflow"
+    mapfile -t files < <(grep -rlF "$BASE_PLACEHOLDER" "$public/index.html" "$public/assets")
+    sed -i "s|$BASE_PLACEHOLDER|$base_path/|g" "${files[@]}"
+    ! grep -rqF "$BASE_PLACEHOLDER" "$public" || die "the base path placeholder is still present in $public"
+    info "${#files[@]} file(s) adjusted"
+}
+
 step_build() {
     local build_env=(
         'COMPOSER_NO_INTERACTION=1'
@@ -595,7 +789,9 @@ step_build() {
         run rm -rf "$release/frontend/node_modules"
     fi
     run rm -rf "$release/.git"
+}
 
+step_ownership() {
     if [ "$system" -eq 1 ]; then
         log 'ownership: code root-owned and read-only, var/ writable for the pool'
         run chown -R root:root "$release"
@@ -758,6 +954,10 @@ step_apache() {
     local example="$release/docs/deployment/apache-vhost.conf.example"
     [ "$dry_run" -eq 0 ] || example="$(dirname "$script_dir")/docs/deployment/apache-vhost.conf.example"
     guard_generated "$target"
+    if [ "$dry_run" -eq 1 ] && [ ! -f "$example" ]; then
+        info "[dry-run] write $target from the release's docs/deployment/apache-vhost.conf.example"
+        return 0
+    fi
 
     run a2enmod -q rewrite headers proxy_fcgi setenvif ssl
 
@@ -840,12 +1040,19 @@ main() {
         exit 0
     fi
 
+    choose_source
     step_install_packages
     step_preflight
     step_user
     step_config
-    step_fetch
-    step_build
+    if from_release; then
+        step_download
+        step_base_path
+    else
+        step_fetch
+        step_build
+    fi
+    step_ownership
     step_migrate
     step_pool
     step_activate

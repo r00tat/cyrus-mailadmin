@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+#
+# mailadmin — packs a built working tree into the release archive that
+# `bin/install --release` installs. Run by .github/workflows/release.yml.
+#
+#   bin/package-release TAG [OUTDIR]
+#
+# Expects the build to have run:
+#
+#   composer install --no-dev --optimize-autoloader
+#   MAILADMIN_BASE_PATH=__MAILADMIN_BASE__ (cd frontend && npm ci && npm run build)
+#
+# The frontend carries a placeholder instead of a base path; bin/install writes
+# the installation's own into it (U-71).
+#
+# The archive holds the tracked files (without tests/, docker/, .github/) and
+# the build output — vendor/, the frontend in public/ and the contract
+# artefacts in var/cache/. Nothing untracked from the working tree: no
+# node_modules, no .env, no tool caches. Everything sits below mailadmin-TAG/.
+#
+# Writes OUTDIR/mailadmin-TAG.tar.gz, OUTDIR/install and OUTDIR/SHA256SUMS.
+
+set -euo pipefail
+
+readonly BASE_PLACEHOLDER='/__MAILADMIN_BASE__/'
+readonly CACHE_ARTEFACTS=(var/cache/openapi.bundled.yaml var/cache/openapi.bundled.json var/cache/routes.php)
+
+die() { printf 'package-release: %s\n' "$*" >&2; exit 1; }
+
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || die 'usage: bin/package-release TAG [OUTDIR]'
+tag=$1
+out=${2:-dist}
+[[ $tag =~ ^[A-Za-z0-9._+-]+$ ]] || die "'$tag' is not a valid tag"
+
+root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$root"
+
+# --- the build must have run, and run for a release ---------------------------
+[ -f vendor/autoload.php ] || die 'vendor/ is missing: composer install --no-dev'
+[ ! -d vendor/phpunit ] || die 'vendor/ holds dev dependencies: composer install --no-dev'
+for file in "${CACHE_ARTEFACTS[@]}"; do
+    [ -f "$file" ] || die "$file is missing: composer install runs composer build"
+done
+grep -qF "$BASE_PLACEHOLDER" public/index.html 2>/dev/null \
+    || die 'public/index.html is not built with MAILADMIN_BASE_PATH=__MAILADMIN_BASE__'
+[ -d public/assets ] || die 'public/assets/ is missing: the frontend is not built'
+[ -z "$(git status --porcelain --untracked-files=no)" ] \
+    || die 'tracked files are modified; a release is built from a clean checkout'
+
+name="mailadmin-$tag"
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+
+# --- the file list --------------------------------------------------------------
+{
+    git ls-files -z | grep -zv -E '^(tests|docker|\.github)/'
+    find vendor public/assets \( -type f -o -type l \) -print0
+    printf '%s\0' public/index.html "${CACHE_ARTEFACTS[@]}"
+} | LC_ALL=C sort -zu >"$stage/files"
+
+git rev-parse HEAD >"$stage/REVISION"
+
+# Reproducible metadata: root-owned, sorted, the commit time as mtime.
+mtime="@$(git log -1 --format=%ct)"
+tar_options=(--owner=0 --group=0 --numeric-owner --mtime="$mtime" --sort=name)
+
+tar -cf "$stage/$name.tar" "${tar_options[@]}" \
+    --transform="flags=rh;s,^,$name/," --null --no-recursion --files-from="$stage/files"
+tar -rf "$stage/$name.tar" "${tar_options[@]}" \
+    -C "$stage" --transform="flags=rh;s,^,$name/," REVISION
+gzip -n -9 <"$stage/$name.tar" >"$out/$name.tar.gz"
+
+# The installer goes along on its own, so that a server needs nothing else to
+# start: curl it, run it.
+cp bin/install "$out/install"
+
+(cd "$out" && sha256sum "$name.tar.gz" install >SHA256SUMS)
+
+printf 'package-release: %s (%s files, commit %s)\n' \
+    "$out/$name.tar.gz" "$(tr -cd '\0' <"$stage/files" | wc -c | tr -d ' ')" "$(head -c 10 "$stage/REVISION")"

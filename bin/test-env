@@ -115,6 +115,7 @@ create_fixture_mailboxes() {
         | tr -d '\r')
 
     if [ -z "$accounts" ]; then
+        # shellcheck disable=SC2016  # backticks are literal, not a substitution
         echo >&2 'No accounts in `accountuser` — did the fixtures load?'
         exit 1
     fi
@@ -165,6 +166,7 @@ case "$command" in
         # supposed to meet (architecture 12.3).
         echo '==> removing containers and volumes'
         compose down --volumes "$@"
+        # shellcheck disable=SC2016  # backticks are literal, not a substitution
         echo 'Reset. `bin/test-env up` starts from the baseline schema again.'
         ;;
 

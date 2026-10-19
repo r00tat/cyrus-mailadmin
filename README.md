@@ -21,37 +21,39 @@ Hintergrund, Architektur und Entscheidungen: [docs/README.md](docs/README.md).
 
 ## Schnellstart: Installation auf einem Server
 
-Voraussetzungen: Debian oder Ubuntu mit **PHP 8.3+** (FPM, `pdo_mysql`, `sodium`), **Node 20+**
-und Composer zum Bauen, Apache oder nginx, eine MariaDB mit dem web-cyradm-Schema und ein
-Cyrus-IMAP-Server. Details: [Installationsanleitung](docs/deployment/installation.md).
+Voraussetzungen: Debian oder Ubuntu mit **PHP 8.3+** (FPM, `pdo_mysql`, `sodium`), Apache oder
+nginx, eine MariaDB mit dem web-cyradm-Schema und ein Cyrus-IMAP-Server. Details:
+[Installationsanleitung](docs/deployment/installation.md).
 
 ```bash
-# 1. Installer holen
-git clone https://github.com/r00tat/cyrus-mailadmin.git /usr/local/src/cyrus-mailadmin
-cd /usr/local/src/cyrus-mailadmin
+# 1. Installer des neuesten Releases holen
+curl -fsSLO https://github.com/r00tat/cyrus-mailadmin/releases/latest/download/install
 
 # 2. Erster Lauf: legt /etc/mailadmin/mailadmin.env mit frischem Signaturschlüssel an und hält an
-sudo bin/install
+sudo bash install
 
 # 3. Konfiguration ausfüllen (Datenbank, Cyrus), dann installieren
 sudo editor /etc/mailadmin/mailadmin.env
-sudo bin/install --server-name mail.example.org \
+sudo bash install --server-name mail.example.org \
      --apache --tls-cert /etc/ssl/certs/mail.example.org.pem \
               --tls-key  /etc/ssl/private/mail.example.org.key
 ```
 
-Der Installer holt den Code, baut Backend und Frontend und führt die Datenbankmigrationen aus.
+Der Installer lädt das fertig gebaute Release herunter und prüft es gegen die Prüfsumme;
+`--verify-attestation` prüft zusätzlich, dass der Release-Workflow es gebaut hat. Danach führt er
+die Datenbankmigrationen aus.
 Außerdem richtet er einen eigenen PHP-FPM-Pool, den Cronjob und optional den Apache-vHost ein und
 prüft am Ende, dass keine internen Pfade über das Web erreichbar sind. Jede Version landet in
-einem eigenen Verzeichnis; `sudo bin/install --rollback` schaltet auf die vorige zurück.
-`--dry-run` zeigt vorher, was passieren würde.
+einem eigenen Verzeichnis; `--rollback` schaltet auf die vorige zurück. `--dry-run` zeigt
+vorher, was passieren würde. Auf dem Server sind weder git noch Composer noch Node nötig. Wer
+lieber aus dem Quelltext baut, klont das Repository und ruft `sudo bin/install` darin auf.
 
 Vor dem ersten Lauf müssen der eigene Datenbankbenutzer und zwei Cyrus-Einstellungen
 vorhanden sein — siehe [Installationsanleitung, Schritte 3 und 4](docs/deployment/installation.md#3-datenbankbenutzer-anlegen).
 Angemeldet wird mit einem bestehenden web-cyradm-Administrator.
 
-**Aktualisieren:** im Installer-Verzeichnis `git pull`, dann `sudo bin/install` mit denselben
-Optionen.
+**Aktualisieren:** `sudo /srv/mailadmin/current/bin/install` mit denselben Optionen holt das
+neueste Release.
 
 ---
 
@@ -113,10 +115,23 @@ PHP läuft im App-Container (`docker compose -f docker/compose.yaml exec -T app 
 | Codestil | `php vendor/bin/php-cs-fixer fix --dry-run --diff` |
 | Statische Analyse | `php vendor/bin/phpstan analyse --memory-limit=1G` und `php vendor/bin/phpstan analyse -c phpstan-domain.neon.dist` |
 | Frontend-Typen, Lint, Tests | `cd frontend && npm run typecheck && npm run lint && npm test` |
-| Installer | `shellcheck bin/install bin/test-env` |
+| Shell-Skripte | `shellcheck bin/install bin/package-release bin/test-env` |
 
 Die Integrationstests melden sich als *übersprungen*, nicht als bestanden, wenn die
 Testumgebung nicht läuft.
+
+### Release veröffentlichen
+
+```bash
+git tag -a v1.2.0 -m "mailadmin 1.2.0"
+git push origin v1.2.0
+```
+
+Der Tag startet [`.github/workflows/release.yml`](.github/workflows/release.yml). Der Workflow
+führt alle Prüfungen aus, baut Backend und Frontend und packt das Ergebnis mit
+`bin/package-release`. Danach veröffentlicht er Archiv, Installer, `SHA256SUMS` und eine
+Build-Attestation als GitHub-Release. Ein Tag mit Bindestrich (`v1.2.0-rc.1`) wird zum
+Pre-Release, und das nimmt der Installer ohne ausdrückliches `--release` nie.
 
 ### Aufbau
 
@@ -127,7 +142,8 @@ src/            Backend: Http (Handler je operationId), Application (Anwendungsf
 migrations/     rein additive SQL-Migrationen, Tabellen mit Präfix mailadmin_
 frontend/       React-SPA; der Build schreibt nach public/
 public/         einziges öffentliches Verzeichnis: index.php, index.html, assets/
-bin/            Kommandozeilenwerkzeuge, Installer und Testumgebung
+bin/            Kommandozeilenwerkzeuge, Installer, Release-Paketierung und Testumgebung
+.github/        Release-Workflow
 docker/         die lokale Testumgebung
 docs/           Architektur, Umsetzungsentscheidungen, Arbeitspakete, Deployment
 ```

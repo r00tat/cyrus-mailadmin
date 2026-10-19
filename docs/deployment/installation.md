@@ -1,4 +1,4 @@
-<!-- markdownlint-disable MD013 MD024 -->
+<!-- markdownlint-disable MD013 MD024 MD060 -->
 
 # Installation
 
@@ -7,7 +7,9 @@ einer laufenden mailadmin-Installation. Es gibt zwei Wege:
 
 - **Mit dem Installer** (`bin/install`): Er führt die Schritte 5 bis 11 selbst aus und erledigt
   auch Aktualisierung und Rollback. Die Schritte 1 bis 4 bleiben Handarbeit, weil sie
-  Datenbank-Administratorrechte und die Cyrus-Konfiguration betreffen.
+  Datenbank-Administratorrechte und die Cyrus-Konfiguration betreffen. Den Code holt er als
+  fertig gebautes Release von GitHub (empfohlen, der Server braucht dann weder git noch Composer
+  noch Node) oder baut ihn aus einem git-Checkout.
 - **Von Hand**: alle Schritte einzeln, etwa für nginx, eine andere Distribution oder ein
   Verzeichnis unterhalb eines bestehenden Web-Roots.
 
@@ -23,12 +25,12 @@ Verzeichnis.
 
 | Schritt | Was | Installer |
 |---|---|---|
-| 1 | Pakete: PHP 8.3+ mit FPM, Composer, Node 20+, git | mit `--install-packages` |
+| 1 | Pakete: PHP 8.3+ mit FPM; zum Bauen aus git zusätzlich Composer, Node 20+, git | mit `--install-packages` |
 | 2 | Server-Anforderungen prüfen | ja |
 | 3 | Datenbankbenutzer anlegen | **nein** — braucht DB-Administratorrechte |
 | 4 | Cyrus vorbereiten | **nein** — Konfiguration des Mailservers |
 | 5 | Konfigurationsdatei | legt sie an, du füllst sie aus |
-| 6 | Code holen und bauen | ja |
+| 6 | Code holen und bauen | ja — Release herunterladen und prüfen, oder aus git bauen |
 | 7 | Datenbank migrieren und prüfen | ja |
 | 8 | PHP-FPM-Pool | ja |
 | 9 | Webserver | mit `--apache`; nginx von Hand |
@@ -45,9 +47,11 @@ Verzeichnis.
 |---|---|---|
 | PHP | 8.3 oder neuer, CLI und FPM | `php8.3-cli php8.3-fpm` |
 | PHP-Erweiterungen | `pdo_mysql`, `sodium`, `openssl`, `json`, `iconv`, `filter`; `mbstring` empfohlen | `php8.3-mysql php8.3-mbstring` (der Rest steckt in `php8.3-common`) |
-| Composer | 2.x | `composer` |
-| Node.js | 20 oder neuer, **nur zum Bauen** | `nodejs npm` |
-| git | | `git unzip` |
+| curl, tar | zum Herunterladen eines Releases | `curl tar` |
+| Composer | 2.x, **nur zum Bauen aus git** | `composer` |
+| Node.js | 20 oder neuer, **nur zum Bauen aus git** | `nodejs npm` |
+| git | **nur zum Bauen aus git** | `git unzip` |
+| GitHub CLI | optional, für `--verify-attestation` (ab 2.49) | `gh` aus dem [Paketarchiv von GitHub](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) |
 | Webserver | Apache 2.4 mit `mod_rewrite`, `mod_headers`, `mod_proxy_fcgi`, `mod_ssl` — oder nginx | `apache2` |
 | Datenbank | MariaDB mit dem web-cyradm-Schema | — |
 
@@ -57,8 +61,8 @@ bringt PHP 8.3 mit, Debian 13 PHP 8.4.
 
 **Node 20 auf älteren Distributionen:** Debian 12 und Ubuntu 24.04 liefern Node 18. Node 20 kommt
 aus [NodeSource](https://github.com/nodesource/distributions) oder einer Node-Versionsverwaltung.
-Node wird nur für den Bau gebraucht. Wer es nicht auf dem Mailserver haben will, baut auf einem
-anderen Rechner (siehe [Bauen auf einem anderen Rechner](#bauen-auf-einem-anderen-rechner)).
+Node wird nur für den Bau gebraucht. Wer ein Release installiert, braucht es nicht, ebenso wenig
+Composer und git.
 
 `sudo bin/install --install-packages` installiert die Pakete über `apt-get`. Ob die
 Distribution die nötigen Versionen hat, prüft der Installer danach. Ist eine Version zu alt,
@@ -136,22 +140,45 @@ Begründung und Messungen: [U-38](../05-umsetzungsentscheidungen.md).
 
 ## Mit dem Installer
 
-Der Installer ist ein Bash-Skript im Repository. Es läuft als root und führt alles, was
-Composer und npm ausführen, als unprivilegierter Benutzer `mailadmin` aus.
+Der Installer ist ein Bash-Skript. Es läuft als root, weil es Systembenutzer, FPM-Pool, Cronjob
+und Webserver einrichtet. Den Code holt es auf einem von zwei Wegen.
+
+**Aus einem Release (empfohlen).** Jedes Release auf GitHub enthält das fertig gebaute Archiv,
+den Installer selbst, `SHA256SUMS` und eine Build-Attestation. Der Server braucht dafür weder
+git noch Composer noch Node:
+
+```bash
+curl -fsSLO https://github.com/r00tat/cyrus-mailadmin/releases/latest/download/install
+sudo bash install --dry-run         # zeigt jeden Schritt, ändert nichts
+sudo bash install                   # erster Lauf: legt die Konfiguration an und hält an
+```
+
+Liegt das Skript nicht in einem git-Checkout und ist kein `--repo` angegeben, installiert es das
+neueste Release. Eine bestimmte Version wählst du mit `--release v1.2.0`. Vor dem Entpacken
+prüft der Installer das Archiv gegen `SHA256SUMS`. Das erkennt einen beschädigten Download, aber
+keinen manipulierten Release, denn die Prüfsumme liegt im selben Release. Dagegen hilft
+`--verify-attestation`. Damit prüft die GitHub CLI, dass genau der Release-Workflow dieses
+Repositorys das Archiv gebaut hat.
+
+Das Frontend im Archiv ist mit einem Platzhalter statt eines Basispfads gebaut. Der Installer
+schreibt beim Entpacken den Wert aus `--base-path` hinein. Deshalb passt dasselbe Archiv für
+Variante A und Variante B.
+
+**Aus git gebaut.** Der Installer klont das Repository und baut auf dem Server. Alles, was
+Composer und npm ausführen, läuft dabei als unprivilegierter Benutzer `mailadmin`:
 
 ```bash
 git clone https://github.com/r00tat/cyrus-mailadmin.git /usr/local/src/cyrus-mailadmin
 cd /usr/local/src/cyrus-mailadmin
-sudo bin/install --dry-run          # zeigt jeden Schritt, ändert nichts
-sudo bin/install                    # erster Lauf: legt die Konfiguration an und hält an
+sudo bin/install                    # baut den Stand von origin; --ref wählt Zweig, Tag oder Commit
 ```
 
-Der erste Lauf legt `/etc/mailadmin/mailadmin.env` an. Den Signaturschlüssel für die Tokens
-erzeugt er dabei frisch. Danach hält er mit Exit-Code `2` an. Fülle jeden Wert `CHANGEME` aus
-(Schritt 5 erklärt die Felder) und starte erneut:
+In beiden Fällen legt der erste Lauf `/etc/mailadmin/mailadmin.env` an. Den Signaturschlüssel
+für die Tokens erzeugt er dabei frisch. Danach hält er mit Exit-Code `2` an. Fülle jeden Wert
+`CHANGEME` aus (Schritt 5 erklärt die Felder) und starte erneut:
 
 ```bash
-sudo bin/install --server-name mail.example.org \
+sudo bash install --server-name mail.example.org \
      --apache --tls-cert /etc/ssl/certs/mail.example.org.pem \
               --tls-key  /etc/ssl/private/mail.example.org.key
 ```
@@ -163,8 +190,12 @@ FPM-Socket für deine eigene Konfiguration.
 
 | Option | Standard | Bedeutung |
 |---|---|---|
-| `--repo URL` | `origin` des Checkouts, in dem das Skript liegt | Quelle des Codes |
-| `--ref REF` | Standardzweig | Zweig, Tag oder Commit |
+| `--release TAG` | `latest`, wenn kein git-Checkout und kein `--repo` | Release installieren, z. B. `v1.2.0` oder `latest` |
+| `--github-repo OWNER/NAME` | `r00tat/cyrus-mailadmin` | wo die Releases liegen |
+| `--verify-attestation` | aus | Build-Attestation mit `gh attestation verify` prüfen |
+| `--release-dir DIR` | — | Release-Dateien aus `DIR` statt aus dem Netz, braucht `--release TAG` |
+| `--repo URL` | `origin` des Checkouts, in dem das Skript liegt | aus git bauen: Quelle des Codes |
+| `--ref REF` | Standardzweig | aus git bauen: Zweig, Tag oder Commit |
 | `--prefix DIR` | `/srv/mailadmin` | Installationsverzeichnis |
 | `--env-file FILE` | `/etc/mailadmin/mailadmin.env` | Konfiguration |
 | `--base-path PATH` | leer | URL-Präfix bei Variante B, z. B. `/mailadmin` |
@@ -175,9 +206,9 @@ FPM-Socket für deine eigene Konfiguration.
 | `--php-version X.Y` | Version der PHP-CLI | welcher php-fpm |
 | `--fpm-socket PATH` | `/run/php/mailadmin.sock` | Socket des Pools |
 | `--keep-releases N` | 3 | aufbewahrte Versionen (mindestens 2) |
-| `--install-packages` | aus | Pakete per `apt-get` installieren |
+| `--install-packages` | aus | Pakete per `apt-get` installieren (beim Bauen aus git auch git, Composer, Node) |
 | `--skip-migrate` | aus | Migrationen nicht ausführen |
-| `--no-system` | aus | nur holen, bauen, migrieren — als aktueller Benutzer, ohne Systemänderungen |
+| `--no-system` | aus | nur holen, bauen, migrieren — ohne Systembenutzer, Pool, Cron und Webserver |
 | `--rollback` | — | auf die vorige Version zurückschalten |
 | `--dry-run` | — | nur anzeigen |
 
@@ -187,7 +218,8 @@ Konfigurationsdatei vor.
 ### Was er anlegt
 
 ```text
-/srv/mailadmin/releases/<zeit>-<commit>/   eine Version je Lauf, root gehört, nur var/ dem Pool
+/srv/mailadmin/releases/<zeit>-<tag>/      eine Version je Lauf (aus git: <zeit>-<commit>),
+                                           root gehört, nur var/ dem Pool
 /srv/mailadmin/current                     Symlink auf die aktive Version
 /etc/mailadmin/mailadmin.env               Konfiguration (0640 root:mailadmin)
 /etc/php/8.3/fpm/pool.d/mailadmin.conf     FPM-Pool, aus der Konfiguration erzeugt (0640)
@@ -202,11 +234,25 @@ geschriebene Datei, bricht er ab.
 
 ### Aktualisieren und zurückrollen
 
+Aus einem Release: Jede installierte Version bringt den Installer mit, und der holt ohne
+`--release` das neueste Release.
+
+```bash
+sudo /srv/mailadmin/current/bin/install --server-name mail.example.org   # dieselben Optionen wie bei der Installation
+sudo /srv/mailadmin/current/bin/install --rollback                       # falls nötig
+```
+
+Aus git gebaut:
+
 ```bash
 cd /usr/local/src/cyrus-mailadmin && git pull
 sudo bin/install --server-name mail.example.org     # dieselben Optionen wie bei der Installation
 sudo bin/install --rollback                         # falls nötig
 ```
+
+Der Installer in `/srv/mailadmin/current/bin/` liegt in keinem git-Checkout. Er installiert
+deshalb immer ein Release, auch wenn die bisherige Version aus git gebaut wurde. Willst du beim
+Bauen aus git bleiben, rufst du den Installer aus deinem Checkout auf.
 
 Eine neue Version wird vollständig gebaut und migriert, **während die alte weiterläuft**.
 Migrationen sind rein additiv, deshalb arbeitet die alte Version auf dem neuen Schema weiter.
@@ -219,7 +265,7 @@ nicht nötig, aus demselben Grund.
 ### Nach einer Änderung der Konfiguration
 
 Der FPM-Pool wird aus `/etc/mailadmin/mailadmin.env` erzeugt. Nach einer Änderung führst du
-`sudo bin/install` erneut aus. Das baut zwar eine neue Version, ist aber der sichere Weg: Der
+den Installer erneut aus, wie unter [Aktualisieren](#aktualisieren-und-zurückrollen). Das baut zwar eine neue Version, ist aber der sichere Weg: Der
 Pool wird nur übernommen, wenn `php-fpm -t` ihn akzeptiert.
 
 ---
@@ -283,10 +329,23 @@ Ohne diese Rechte startet die Anwendung nicht.
 
 #### Bauen auf einem anderen Rechner
 
-Ein Rechner mit PHP 8.3, Composer und Node 20 baut genauso. Danach überträgst du das ganze
-Verzeichnis, einschließlich `vendor/`, `var/cache/`, `public/index.html` und `public/assets/`,
-aber ohne `frontend/node_modules/`. Alternativ baut `bin/install --no-system --prefix <dir>` dort
-in ein eigenes Verzeichnis.
+Am einfachsten nimmst du ein Release (siehe [Mit dem Installer](#mit-dem-installer)). Hat der
+Server keinen Zugang zu GitHub, lädst du die Dateien eines Releases woanders herunter, kopierst
+sie in ein Verzeichnis auf dem Server und installierst mit
+`sudo bash install --release v1.2.0 --release-dir <verzeichnis>`.
+
+Ein eigenes Archiv baust du wie der Release-Workflow
+([`.github/workflows/release.yml`](../../.github/workflows/release.yml)) in einem sauberen
+Checkout:
+
+```bash
+composer install --no-dev --optimize-autoloader
+(cd frontend && npm ci && MAILADMIN_BASE_PATH=__MAILADMIN_BASE__ npm run build)
+bin/package-release v1.2.0-local dist     # GNU tar; schreibt Archiv, install und SHA256SUMS
+```
+
+Der Wert `__MAILADMIN_BASE__` ist kein Pfad, sondern der Platzhalter, den der Installer
+ersetzt.
 
 ### 7. Datenbank migrieren und prüfen
 

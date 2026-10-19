@@ -1,0 +1,140 @@
+# mailadmin — release.
+#
+# A tag v* runs every check, builds the release archive and publishes it as a
+# GitHub release, together with the installer, SHA256SUMS and a build
+# provenance attestation. A server installs it with
+#
+#   curl -fsSLO https://github.com/r00tat/cyrus-mailadmin/releases/latest/download/install
+#   sudo bash install
+#
+# (docs/deployment/installation.md). A tag with a hyphen (v1.0.0-rc.1) becomes
+# a pre-release, which /releases/latest — and so `bin/install` without
+# --release — never picks.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, sodium, mbstring
+          tools: composer:v2
+          coverage: none
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Backend dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Coding style
+        run: composer lint
+
+      - name: Static analysis
+        run: composer analyse
+
+      # The integration suite reports itself skipped without the Docker
+      # environment (bin/test-env).
+      - name: Tests
+        run: composer test
+
+      - name: Frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+          npm run lint
+          npm test
+
+      - name: Shell scripts
+        run: shellcheck bin/install bin/package-release bin/test-env
+
+  release:
+    needs: check
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, sodium, mbstring
+          tools: composer:v2
+          coverage: none
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Backend (no dev dependencies)
+        run: |
+          composer install --no-dev --prefer-dist --optimize-autoloader --no-progress --no-interaction
+          composer check-platform-reqs --no-dev
+
+      # The steps `npm run build` chains through prebuild and postbuild, spelled
+      # out as bin/install does — the CSP check of the result must not depend on
+      # an npmrc.
+      - name: Frontend
+        working-directory: frontend
+        env:
+          # A placeholder, not a path: bin/install writes the installation's
+          # base path into the shell and the bundle.
+          MAILADMIN_BASE_PATH: __MAILADMIN_BASE__
+        run: |
+          npm ci
+          node scripts/clean-output.mjs
+          npm run api:types
+          npx --no-install tsc --build --force
+          npx --no-install vite build
+          node scripts/check-build.mjs
+
+      - name: Package
+        run: bin/package-release "$GITHUB_REF_NAME" dist
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            dist/mailadmin-*.tar.gz
+            dist/install
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" "dist/mailadmin-$GITHUB_REF_NAME.tar.gz.sigstore.json"
+          prerelease=()
+          case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag --title "mailadmin $GITHUB_REF_NAME" --generate-notes "${prerelease[@]}"
