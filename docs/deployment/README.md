@@ -114,6 +114,10 @@ Liegt die Anwendung in einem Unterverzeichnis des Web-Roots, gehört derselbe We
 MAILADMIN_BASE_PATH=/mailadmin npm run build
 ```
 
+Die GitHub-Releases bauen mit dem Platzhalter `__MAILADMIN_BASE__`, und `bin/install --release`
+ersetzt ihn beim Entpacken durch den Basispfad der Installation. So passt ein Archiv für beide
+Varianten. Ein `<base>`-Element wäre einfacher, aber die CSP verbietet es mit `base-uri 'none'`.
+
 `npm run build` schlägt fehl, wenn das Ergebnis ein Inline-Skript, eine Referenz auf einen
 fremden Ursprung oder eine Datei ohne Inhalts-Hash enthält. Das ist Absicht: die
 Content-Security-Policy trägt das Restrisiko aus E-15, und ein Bündler, der sie bricht, wird
