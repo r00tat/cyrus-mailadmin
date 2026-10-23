@@ -133,6 +133,8 @@ export const deErrors = {
   'errors.list.invalid_member': 'Mindestens eine Mitgliedsadresse ist unzulässig.',
   'errors.list.invalid_name': 'Der Listenname ist unzulässig.',
   'errors.list.invalid_tag': 'Das Kennzeichen ist unzulässig.',
+  'errors.list.member_not_deliverable':
+    'Mindestens ein Mitglied ist keine Adresse, an die der Verteiler zustellen kann, etwa wegen Umlauten in der Adresse oder einer Domain ohne Punkt.',
   'errors.list.member_outside_latin1':
     'Mindestens ein Mitglied enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
   'errors.list.name_outside_latin1': 'Der Listenname enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',

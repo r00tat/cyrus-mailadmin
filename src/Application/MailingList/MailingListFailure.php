@@ -132,7 +132,8 @@ final class MailingListFailure extends RuntimeException
             DomainErrorCode::LIST_INVALID_TAG, DomainErrorCode::LIST_TAG_OUTSIDE_LATIN1 => 'tag',
             DomainErrorCode::LIST_INVALID_ADDRESS => 'address',
             DomainErrorCode::LIST_INVALID_MEMBER => 'members',
-            DomainErrorCode::LIST_MEMBER_OUTSIDE_LATIN1 => self::memberField($error),
+            DomainErrorCode::LIST_MEMBER_OUTSIDE_LATIN1,
+            DomainErrorCode::LIST_MEMBER_NOT_DELIVERABLE => self::memberField($error),
             default => 'name',
         };
     }

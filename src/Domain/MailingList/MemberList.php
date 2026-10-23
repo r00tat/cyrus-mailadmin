@@ -40,8 +40,10 @@ use Mailadmin\Domain\Model\EmailAddress;
  * address (U-57, see {@see InvalidMailingList::memberNotAnAddress()}) or would
  * not read back as exactly themselves — a `,`, `;` or `<br>` in a display name
  * is a separator on the way in and would split the member in two, and an entity
- * would be decoded into something else. Members that are already stored are
- * reported by {@see unusableMembers()} and never rejected (U-22).
+ * would be decoded into something else. A mail address the delivery script
+ * would skip or send elsewhere is refused too, at its position (U-137, see
+ * {@see InvalidMailingList::memberNotDeliverable()}). Members that are already
+ * stored are reported by {@see unusableMembers()} and never rejected (U-22).
  *
  * The column is read solely by the delivery script `maillist.py`; the aliases
  * file only ever held the pipe line to it, never the members.
@@ -133,11 +135,11 @@ final readonly class MemberList
     }
 
     /**
-     * Members that are not mail addresses — shown, not removed (U-22).
+     * Members mail is not delivered to — shown, not removed (U-22).
      *
      * Whatever odd entries the existing rows hold (a local user name, a file
-     * path, a pipe), an administrator has to be able to see them; what they may
-     * not do is add one.
+     * path, a pipe, an address the delivery script skips), an administrator has
+     * to be able to see them; what they may not do is add one.
      *
      * @return list<string>
      */
@@ -145,17 +147,25 @@ final readonly class MemberList
     {
         return array_values(array_filter(
             $this->members,
-            static fn (string $member): bool => !self::isUsableMember($member),
+            static fn (string $member): bool => !self::isDeliverableMember($member),
         ));
     }
 
     /**
      * The addresses mail is delivered to, in order, one per usable member.
      *
-     * The address part of `Name <address>`, entries that are not addresses left
-     * out, duplicates (compared case-insensitively, first spelling wins) left
-     * out. Gives the same result as `normalize_recipients()` in `maillist.py` for
-     * every case in `tests/Fixtures/MemberFormat`, which keep the two in step.
+     * The address part of `Name <address>`; entries the delivery script would
+     * not deliver to as written left out (U-137); duplicates (compared
+     * case-insensitively, first spelling wins) left out. Gives the same result
+     * as `normalize_recipients()` in `maillist.py` for every case in
+     * `tests/Fixtures/MemberFormat`, which keep the two in step.
+     *
+     * For every entry this class accepts the two agree by construction: the
+     * rule here is `_is_plain_address()` plus a display name without the
+     * syntax `getaddresses()` reads differently. On stored text nobody checked,
+     * this side errs towards strictness — a stored `Jan (Vertrieb) <j@…>` is
+     * delivered by the script but reported as unusable here, never the other
+     * way round, so this method never names an address that gets no mail.
      *
      * @return list<string>
      */
@@ -165,7 +175,7 @@ final readonly class MemberList
         $seen = [];
 
         foreach ($this->members as $member) {
-            if (!self::isUsableMember($member)) {
+            if (!self::isDeliverableMember($member)) {
                 continue;
             }
 
@@ -222,17 +232,25 @@ final readonly class MemberList
             }
         }
 
-        foreach ($clean as $member) {
+        foreach (array_values($requested) as $index => $value) {
+            $member = trim($value);
+
             // Already in the list: left alone, whatever it is. Being added: has
             // to be an address, and has to read back as exactly itself — a `,`,
             // `;` or `<br>` (a display name such as "Doe, John") is a separator
             // on the way in, and an entity would be decoded into other text.
-            if ($this->contains($member)) {
+            if ($member === '' || $this->contains($member)) {
                 continue;
             }
 
             if (!self::isUsableMember($member) || self::parse($member) !== [$member]) {
                 throw InvalidMailingList::memberNotAnAddress($member);
+            }
+
+            // An address, but one the delivery script would skip or send to
+            // somebody else (U-137). By position, like the latin1 rule.
+            if (!self::isDeliverableMember($member)) {
+                throw InvalidMailingList::memberNotDeliverable($index);
             }
         }
 
@@ -295,6 +313,74 @@ final readonly class MemberList
         }
 
         return $member;
+    }
+
+    /**
+     * Would `maillist.py` deliver to this entry, and to exactly its address?
+     *
+     * The address has to pass the script's `_is_plain_address()`, and a display
+     * name in front of `<address>` must not use the syntax `getaddresses()`
+     * reads as something else: unquoted, it carries none of `()<>[]:;@\"`; quoted,
+     * it is one quoted string without an inner quote or backslash. A colon
+     * outside quotes is group syntax there — `user:x@example.org` is mail to
+     * `x@example.org`.
+     */
+    private static function isDeliverableMember(string $member): bool
+    {
+        if (!self::isUsableMember($member)) {
+            return false;
+        }
+
+        if (preg_match('/^(.*)<([^<>]*)>\s*$/s', $member, $match) === 1) {
+            if (!self::isPlainDisplayName(trim($match[1]))) {
+                return false;
+            }
+
+            return self::isPlainAddress(trim($match[2]));
+        }
+
+        return self::isPlainAddress($member);
+    }
+
+    private static function isPlainDisplayName(string $name): bool
+    {
+        if ($name === '' || preg_match('/^"[^"\\\\]*"$/', $name) === 1) {
+            return true;
+        }
+
+        return preg_match('/[()<>\[\]:;@\\\\"]/', $name) === 0;
+    }
+
+    /**
+     * `_is_plain_address()` of `maillist.py`, translated: ASCII without blanks,
+     * control characters or `<>"(),;:\[]`, exactly one `@` with something on
+     * both sides, and a domain with a dot that neither starts nor ends with one
+     * nor holds two in a row. Control characters are refused here although the
+     * script lets most of them through — stricter is the safe direction.
+     */
+    private static function isPlainAddress(string $address): bool
+    {
+        if (preg_match('/[^\x21-\x7e]|[<>"(),;:\\\\\[\]]/', $address) === 1) {
+            return false;
+        }
+
+        $at = strrpos($address, '@');
+
+        if ($at === false) {
+            return false;
+        }
+
+        $local = substr($address, 0, $at);
+        $domain = substr($address, $at + 1);
+
+        if ($local === '' || $domain === '' || str_contains($local, '@')) {
+            return false;
+        }
+
+        return str_contains($domain, '.')
+            && !str_contains($domain, '..')
+            && !str_starts_with($domain, '.')
+            && !str_ends_with($domain, '.');
     }
 
     private static function isUsableMember(string $member): bool

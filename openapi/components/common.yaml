@@ -165,6 +165,7 @@ components:
         - list.invalid_member
         - list.invalid_name
         - list.invalid_tag
+        - list.member_not_deliverable
         - list.member_outside_latin1
         - list.name_outside_latin1
         - list.tag_outside_latin1

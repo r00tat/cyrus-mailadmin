@@ -79,8 +79,9 @@ components:
         unusable_members:
           type: array
           description: |
-            The subset of `members` that is not a mail address — shown, not
-            removed (U-22).
+            The subset of `members` the delivery script sends no mail to — not
+            a mail address, or an address it skips or would read differently
+            (U-137). Shown, not removed (U-22).
 
             An aliases file may legitimately contain a local user name, a file
             path or a pipe, and rows written before this application existed may
@@ -154,7 +155,11 @@ components:
             A display name (`Jürgen <j@example.test>`) is fine, but every entry
             has to fit the latin1 column: an emoji or `€` is
             `list.member_outside_latin1`, reported at the entry's position
-            (`body.members.<n>`). The same rules apply to `tag` and `members`
+            (`body.members.<n>`). A new entry also has to be an address the
+            delivery script sends to as written: plain ASCII, a dotted domain,
+            no quotes, comments, backslashes, domain literals or group syntax
+            (`list.member_not_deliverable`, at the entry's position too).
+            Entries that are already stored are kept as they are. The same rules apply to `tag` and `members`
             on `PATCH`.
           items:
             type: string

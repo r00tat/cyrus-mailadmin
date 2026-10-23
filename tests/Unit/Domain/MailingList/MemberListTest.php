@@ -324,6 +324,75 @@ final class MemberListTest extends TestCase
         self::assertSame($stored, $stored->withMembers($stored->members()));
     }
 
+    /**
+     * Mail addresses the delivery script `maillist.py` would skip, or deliver
+     * somewhere else (`user:x@…` is group syntax there and goes to `x@…`).
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function membersTheScriptCannotDeliverTo(): iterable
+    {
+        yield 'non-ASCII local part' => ['müller@example.de'];
+        yield 'non-ASCII address behind a display name' => ['Jörg <jörg@example.de>'];
+        yield 'domain without a dot' => ['user@localhost'];
+        yield 'empty domain label' => ['user@example..de'];
+        yield 'trailing dot' => ['user@example.de.'];
+        yield 'quote in the local part' => ['a"b@example.de'];
+        yield 'comment parenthesis' => ['us(er@example.de'];
+        yield 'backslash' => ['a\b@example.de'];
+        yield 'domain literal' => ['user@[127.0.0.1]'];
+        yield 'group syntax' => ['user:x@example.de'];
+        yield 'group syntax in the display name' => ['Team: <x@example.de>'];
+        yield 'unbalanced quote in the display name' => ['a"b <j@example.de>'];
+    }
+
+    #[DataProvider('membersTheScriptCannotDeliverTo')]
+    public function testANewMemberTheScriptCannotDeliverToIsRefusedWithItsPosition(string $member): void
+    {
+        try {
+            MemberList::none()->withMembers(['anna@example.test', $member]);
+            self::fail('The member was accepted.');
+        } catch (InvalidMailingList $error) {
+            self::assertSame(DomainErrorCode::LIST_MEMBER_NOT_DELIVERABLE, $error->code());
+            self::assertSame(['index' => 1], $error->context(), 'The position only — never the address.');
+            self::assertStringNotContainsString('@', $error->getMessage());
+        }
+    }
+
+    #[DataProvider('membersTheScriptCannotDeliverTo')]
+    public function testAStoredMemberTheScriptCannotDeliverToIsKeptReportedAndNotCounted(string $member): void
+    {
+        $stored = MemberList::fromStoredValue($member . "\nanna@example.test");
+
+        // Saving the list with another member added leaves the stored line alone.
+        $changed = $stored->withMembers([$member, 'anna@example.test', 'bernd@example.test']);
+
+        self::assertSame([$member, 'anna@example.test', 'bernd@example.test'], $changed->members());
+        self::assertSame([$member], $changed->unusableMembers());
+        self::assertSame(['anna@example.test', 'bernd@example.test'], $changed->deliverableAddresses());
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function membersTheScriptDeliversTo(): iterable
+    {
+        yield 'bare address' => ['a.b-c_d+e@sub.example-x.de', 'a.b-c_d+e@sub.example-x.de'];
+        yield 'display name' => ['Jürgen Groß <juergen@example.test>', 'juergen@example.test'];
+        yield 'quoted display name' => ['"Groß: Jürgen" <juergen@example.test>', 'juergen@example.test'];
+        yield 'display name with dots and ampersand' => ['J. R. & Co <jr@example.test>', 'jr@example.test'];
+        yield 'angle brackets only' => ['<anna@example.test>', 'anna@example.test'];
+    }
+
+    #[DataProvider('membersTheScriptDeliversTo')]
+    public function testAMemberTheScriptDeliversToIsAccepted(string $member, string $address): void
+    {
+        $list = MemberList::none()->withMembers([$member]);
+
+        self::assertSame([], $list->unusableMembers());
+        self::assertSame([$address], $list->deliverableAddresses());
+    }
+
     public function testClearingAListIsAChangeAndIsAllowed(): void
     {
         $list = MemberList::fromStoredValue('anna@example.test');

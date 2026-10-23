@@ -101,6 +101,14 @@ final class DomainErrorCode
     public const string LIST_MEMBER_OUTSIDE_LATIN1 = 'list.member_outside_latin1';
 
     /**
+     * A mail address being added that the delivery script `maillist.py` would
+     * skip or deliver elsewhere: not plain ASCII, no dotted domain, quotes,
+     * comments, group syntax and the like (U-137). Reported at the entry's
+     * position (`body.members.<n>`), never with its text.
+     */
+    public const string LIST_MEMBER_NOT_DELIVERABLE = 'list.member_not_deliverable';
+
+    /**
      * The actor's role does not carry the permission the operation needs (S3).
      *
      * `request.` rather than a resource prefix, and that is the whole point: the

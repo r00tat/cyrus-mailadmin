@@ -266,6 +266,42 @@ def _is_plain_address(address: str) -> bool:
     return "." in domain and ".." not in domain and not domain.startswith(".") and not domain.endswith(".")
 
 
+def _split_entries(line: str) -> list[tuple[str, bool]]:
+    """Split one member line at commas and semicolons outside quotes and angle brackets.
+
+    Each entry comes with a flag that says whether it uses group syntax: a colon outside quotes and angle
+    brackets. getaddresses reads `user:x@example.org` as the group "user" with the member x@example.org, so
+    such an entry would be delivered to an address nobody wrote down. Those entries are skipped instead.
+    """
+    entries: list[tuple[str, bool]] = []
+    current: list[str] = []
+    quoted = escaped = group = False
+    angle = 0
+    for char in line:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char == "<":
+            angle += 1
+        elif char == ">" and angle:
+            angle -= 1
+        elif char in ",;" and not angle:
+            entries.append(("".join(current), group))
+            current, group = [], False
+            continue
+        elif char == ":" and not angle:
+            group = True
+        current.append(char)
+    entries.append(("".join(current), group))
+    return entries
+
+
 def normalize_recipients(members: str, msg_id: str) -> list[str]:
     """Parse the stored member field into unique mailbox addresses, in order.
 
@@ -280,8 +316,13 @@ def normalize_recipients(members: str, msg_id: str) -> list[str]:
         line = line.strip()
         if not line:
             continue
-        # getaddresses honours quotes, so a comma inside "Doe, John" is not a separator.
-        for _name, address in getaddresses([line.replace(";", ",")]):
+        # Split outside quotes, so a comma inside "Doe, John" is not a separator.
+        addresses: list[str] = []
+        for entry, group in _split_entries(line):
+            if not entry.strip():
+                continue
+            addresses.extend([""] if group else [address for _name, address in getaddresses([entry])])
+        for address in addresses:
             address = address.strip()
             if not _is_plain_address(address):
                 logger.warning(f"{msg_id} - Skipping invalid recipient entry in line {line_no}")

@@ -1,7 +1,7 @@
 import type { components } from '../../api/schema';
 import { ApiProblem } from '../../api/problem';
 import { errorAtOrBelow } from '../../components/form';
-import type { Translator } from '../../i18n';
+import type { TranslationKey, Translator } from '../../i18n';
 import { describeUnknownError } from '../../i18n/problemText';
 
 /**
@@ -55,14 +55,19 @@ export function memberLine(raw: string, index: number): number | undefined {
   return undefined;
 }
 
-const MEMBER_OUTSIDE_LATIN1 = 'list.member_outside_latin1';
+/** Member codes reported at an entry's position, and the text that names its line. */
+const MEMBER_LINE_TEXTS: Readonly<Partial<Record<string, TranslationKey>>> = {
+  'list.member_outside_latin1': 'list.form.error.memberOutsideLatin1',
+  'list.member_not_deliverable': 'list.form.error.memberNotDeliverable',
+};
+
 const MEMBER_ENTRY = /^body\.members\.(\d+)$/;
 
 /**
  * The text under the member field for a failed write, or `undefined`.
  *
- * A member the `lists` column cannot store comes back at its position
- * (`body.members.<n>`). It may be an entry stored long ago that nobody typed
+ * A member the `lists` column cannot store, or the delivery script cannot
+ * deliver to, comes back at its position (`body.members.<n>`). It may be an entry stored long ago that nobody typed
  * in this form, so the text names the line it sits on in `raw`, the text area
  * as it was sent.
  */
@@ -75,14 +80,16 @@ export function membersFieldError(error: unknown, raw: string, translator: Trans
     for (const [field, reason] of Object.entries(error.errors)) {
       const entry = MEMBER_ENTRY.exec(field);
 
-      if (entry === null || reason !== MEMBER_OUTSIDE_LATIN1) {
+      const key = MEMBER_LINE_TEXTS[reason];
+
+      if (entry === null || key === undefined) {
         continue;
       }
 
       const line = memberLine(raw, Number(entry[1]));
 
       if (line !== undefined) {
-        return translator.t('list.form.error.memberOutsideLatin1', { line });
+        return translator.t(key, { line });
       }
     }
   }

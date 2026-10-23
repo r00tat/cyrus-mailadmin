@@ -158,7 +158,8 @@ Liste einer fremden Domain ist beim Lesen, Ändern und Löschen `404` (U-44, U-1
 
 Fehlercodes: `list.address_taken` (`409`), `list.address_has_extension`, `list.unknown_domain`,
 `list.invalid_address`, `list.invalid_name`, `list.invalid_tag`, `list.invalid_member`,
-`list.name_outside_latin1`, `list.tag_outside_latin1`, `list.member_outside_latin1` (je `422`).
+`list.name_outside_latin1`, `list.tag_outside_latin1`, `list.member_outside_latin1`,
+`list.member_not_deliverable` (je `422`).
 Die Domainumbenennung kennt dazu `domain.rename_blocked_by_mailing_list` (`409`, U-140).
 
 > **Überholt:** Die Pfade lauteten `/lists/{listName}`, der Konfliktcode war
@@ -174,7 +175,8 @@ mit Verweis auf die neue Entscheidung.
    unverändert gespeicherte Liste behält ihre Originalbytes, samt `NULL`. Golden-Dateien prüfen
    das Format gegen `MemberList` und gegen `normalize_recipients()` in `maillist.py`.
    Neue Einträge mit `,`, `;` oder `<br>` im Anzeigenamen, mit Entities oder mit Zeichen außerhalb
-   von `latin1` werden abgelehnt (U-137).
+   von `latin1` werden abgelehnt (U-137), ebenso Adressen, an die `maillist.py` nicht genau so
+   zustellt, wie sie dastehen (`list.member_not_deliverable`, U-137 Punkt 4).
    **Ersetzt durch U-134:** ~~geschrieben wird komma-separiert. **Annahme, nicht geprüft:** dass
    Komma das Trennzeichen ist, das `maillist.sls` beim Rendern der Aliasdatei erwartet.~~ Die
    Aliasdatei enthielt nie die Mitglieder, nur die Pipe-Zeile auf das Skript, und das trennt an

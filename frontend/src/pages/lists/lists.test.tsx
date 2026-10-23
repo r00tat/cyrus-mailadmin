@@ -174,6 +174,24 @@ describe('the mailing list list', () => {
 
     expect(await within(dialog).findByText(/^Zeile 3: /)).toBeInTheDocument();
   });
+
+  it('names the line of a member the delivery script cannot deliver to', async () => {
+    const { user } = signedIn(SUPERUSER, '/lists', listApi({
+      post: () => problemResponse(422, 'list.member_not_deliverable', { errors: { 'body.members.1': 'list.member_not_deliverable' } }),
+    }));
+
+    await user.click(await screen.findByRole('button', { name: 'Liste anlegen' }));
+
+    const dialog = await screen.findByRole('dialog');
+
+    await user.type(within(dialog).getByRole('textbox', { name: /^Name/ }), 'Team');
+    await user.type(within(dialog).getByRole('textbox', { name: /^Adresse/ }), 'team@example.test');
+    // Entry 1 of the request is line 3 of the field: empty lines are not sent.
+    await user.type(within(dialog).getByRole('textbox', { name: 'Mitglieder' }), 'anna@example.test{Enter}{Enter}bert@localhost');
+    await user.click(within(dialog).getByRole('button', { name: 'Anlegen' }));
+
+    expect(await within(dialog).findByText(/^Zeile 3: An dieses Mitglied kann der Verteiler nicht zustellen/)).toBeInTheDocument();
+  });
 });
 
 describe('one mailing list', () => {
@@ -181,7 +199,7 @@ describe('one mailing list', () => {
     signedIn(SUPERUSER, '/lists/old', listApi());
 
     expect(await screen.findByText(/Die gespeicherte Adresse ist keine Mailadresse/)).toBeInTheDocument();
-    expect(screen.getByText(/Ein Eintrag ist keine Mailadresse: \|\/usr\/bin\/true/)).toBeInTheDocument();
+    expect(screen.getByText(/Ein Eintrag ist keine Mailadresse, an die der Verteiler zustellt: \|\/usr\/bin\/true/)).toBeInTheDocument();
     expect(screen.queryByText(CONFIG_HINT)).toBeNull();
   });
 

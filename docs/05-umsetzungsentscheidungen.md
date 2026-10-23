@@ -4879,6 +4879,31 @@ samt ihren Sicherheitsmängeln.
    nicht Bytes, so wie `varchar(255)` in `latin1`.
 3. Beides gilt nur für **neue oder geänderte** Werte. Gespeicherte werden gelesen, wie sie sind
    (U-22).
+4. **Nachtrag aus dem Abschlussreview: ein neues Mitglied muss zustellbar sein.** Ein
+   hinzukommender Eintrag muss eine Adresse sein, an die `maillist.py` genau so zustellt, wie sie
+   dasteht: die Adresse besteht `_is_plain_address()` (ASCII ohne Leerraum und ohne
+   `<>"(),;:\[]`, Domain mit Punkt, ohne führenden, abschließenden oder doppelten Punkt), und ein
+   Anzeigename vor `<adresse>` ist entweder ein Anführungszeichen-String ohne inneres `"` und `\`
+   oder enthält keines von `()<>[]:;@\"`. Sonst `422 list.member_not_deliverable` an
+   `body.members.<n>`, wie die `latin1`-Regel nur mit der Position, nie mit der Adresse.
+   Gespeicherte Einträge bleiben, wie sie sind: Eine Änderung, die eine solche Zeile unverändert
+   lässt, geht durch; der Eintrag erscheint in `unusable_members`.
+   `MemberList::deliverableAddresses()` und `unusable_members` folgen derselben Regel.
+5. **`maillist.py` liest keine Gruppensyntax mehr.** `getaddresses()` las `user:x@example.org`
+   als Gruppe `user` mit dem Mitglied `x@example.org` und stellte an eine Adresse zu, die niemand
+   eingetragen hatte. Das Skript trennt eine Zeile jetzt selbst an `,` und `;` außerhalb von
+   Anführungszeichen und spitzen Klammern und überspringt einen Eintrag mit `:` außerhalb davon,
+   mit derselben Warnung wie jeden anderen unbrauchbaren Eintrag.
+
+**Warum, für die Zustellbarkeit:** Vorher prüfte mailadmin neue Mitglieder mit der toleranten
+Adressprüfung, das Skript aber mit der strengen. `müller@example.de`, `user@localhost` oder
+`a"b@example.de` wurden gespeichert, angezeigt und gezählt, erhielten aber nie Mail; das Skript
+schrieb nur eine Warnung ins Log. Die Regel ist bewusst so eng, dass beide Seiten für jeden
+angenommenen Eintrag übereinstimmen, ohne `getaddresses()` in PHP nachzubauen. Bei gespeichertem
+Text, den niemand geprüft hat, ist mailadmin die strengere Seite: Ein `Jan (Vertrieb) <j@…>`
+stellt das Skript zu, mailadmin meldet ihn als unbrauchbar — nie umgekehrt. Die Golden-Dateien in
+`tests/Fixtures/MemberFormat` decken Nicht-ASCII, Domain ohne Punkt, Endpunkt, Gruppensyntax,
+Anführungszeichen, Kommentare, Backslash und Domainliteral ab und laufen in beiden Testsuiten.
 
 **Warum, für `+`:** Der Transport übergibt `${user}`, den Local Part ohne Adresserweiterung. Bei
 `recipient_delimiter = +` (Postfix-Standard, auch in Produktion) würde ein `+` im Listenschlüssel
@@ -4900,7 +4925,8 @@ verboten (Regel 1). Oder Zeichen als Entities speichern, wie die Altanwendung: G
 zulassen. Das hätte die Datenbankabfrage von `maillist.py` geändert und Alt- und Neuweg
 während der Umstellung getrennt.
 
-**Korrekturkosten:** Gering. `Latin1Text` und eine Konstante in `CreateMailingList`.
+**Korrekturkosten:** Gering. `Latin1Text` und eine Konstante in `CreateMailingList`; für die
+Zustellbarkeit zwei private Prüfungen in `MemberList` und `_split_entries()` in `maillist.py`.
 
 ---
 

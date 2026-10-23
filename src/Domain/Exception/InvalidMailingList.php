@@ -153,6 +153,24 @@ final class InvalidMailingList extends DomainError
         );
     }
 
+    /**
+     * A member being added is a mail address, but not one the delivery script
+     * delivers to as written (U-137). Position only, for the reason
+     * {@see memberOutsideLatin1()} gives.
+     */
+    public static function memberNotDeliverable(int $index): self
+    {
+        return new self(
+            DomainErrorCode::LIST_MEMBER_NOT_DELIVERABLE,
+            sprintf(
+                'Member entry %d is not an address the delivery script can deliver to: it has to be a plain '
+                . 'ASCII address with a dotted domain, optionally behind a simple display name.',
+                $index,
+            ),
+            ['index' => $index],
+        );
+    }
+
     public static function memberListTooLong(int $length, int $limit): self
     {
         return new self(

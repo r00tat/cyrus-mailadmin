@@ -30,6 +30,8 @@ export const deList = {
     'Freier Anzeigename mit bis zu 255 Zeichen. Leerzeichen und Umlaute sind möglich, Emojis und Steuerzeichen nicht.',
   'list.form.hint.tag': 'Freitext. mailadmin wertet das Kennzeichen nicht aus.',
   'list.form.hint.members': 'Eine Mailadresse pro Zeile.',
+  'list.form.error.memberNotDeliverable':
+    'Zeile {{line}}: An dieses Mitglied kann der Verteiler nicht zustellen. Erlaubt sind Adressen ohne Umlaute mit einer Domain mit Punkt, wahlweise hinter einem Namen in der Form „Name <adresse>“; Anführungszeichen, Klammern, Doppelpunkte und Backslashes gehen nicht.',
   'list.form.error.memberOutsideLatin1':
     'Zeile {{line}}: Dieses Mitglied enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
 
@@ -43,9 +45,9 @@ export const deList = {
   'list.detail.addressUnusable':
     'Die gespeicherte Adresse ist keine Mailadresse. Sie wird angezeigt, aber nicht automatisch korrigiert.',
   'list.detail.unusableMembers#one':
-    'Ein Eintrag ist keine Mailadresse: {{members}}. Er bleibt erhalten, solange die Mitglieder nicht geändert werden; neue Einträge dieser Art nimmt der Server nicht an.',
+    'Ein Eintrag ist keine Mailadresse, an die der Verteiler zustellt: {{members}}. Er bleibt erhalten, solange die Mitglieder nicht geändert werden; neue Einträge dieser Art nimmt der Server nicht an.',
   'list.detail.unusableMembers#other':
-    '{{count}} Einträge sind keine Mailadressen: {{members}}. Sie bleiben erhalten, solange die Mitglieder nicht geändert werden; neue Einträge dieser Art nimmt der Server nicht an.',
+    '{{count}} Einträge sind keine Mailadressen, an die der Verteiler zustellt: {{members}}. Sie bleiben erhalten, solange die Mitglieder nicht geändert werden; neue Einträge dieser Art nimmt der Server nicht an.',
   'list.detail.unchanged': 'Es gibt nichts zu speichern.',
   'list.detail.saved': 'Liste {{name}} gespeichert.',
   'list.detail.savedPendingRun': 'Liste {{name}} gespeichert. Die Änderung wirkt nach dem nächsten Konfigurationslauf.',

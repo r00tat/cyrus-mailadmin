@@ -382,6 +382,45 @@ final class MailingListEndpointTest extends ContractTestCase
     }
 
     /**
+     * @return iterable<string, array{string}>
+     */
+    public static function membersTheScriptCannotDeliverTo(): iterable
+    {
+        yield 'non-ASCII address' => ['müller@example.test'];
+        yield 'group syntax' => ['user:x@example.test'];
+        yield 'domain without a dot' => ['user@localhost'];
+    }
+
+    #[DataProvider('membersTheScriptCannotDeliverTo')]
+    public function testAMemberTheScriptCannotDeliverToIsRefusedAtItsPosition(string $member): void
+    {
+        $writes = $this->lists->writeCount();
+
+        $create = $this->send('POST', '/api/v1/lists', [
+            'name' => 'odd',
+            'address' => 'odd@example.test',
+            'members' => ['anna@example.test', $member],
+        ], $this->tokenFor('root'));
+
+        self::assertSame(422, $create->getStatusCode());
+        $this->assertMatchesContract('post', '/lists', $create);
+        self::assertSame('list.member_not_deliverable', self::bodyOf($create)['code']);
+        self::assertSame(['body.members.1' => 'list.member_not_deliverable'], self::bodyOf($create)['errors']);
+
+        $update = $this->send(
+            'PATCH',
+            '/api/v1/lists/team%40example.test',
+            ['members' => ['anna@example.test', $member]],
+            $this->tokenFor('root'),
+        );
+
+        self::assertSame(422, $update->getStatusCode());
+        $this->assertMatchesContract('patch', '/lists/{address}', $update);
+        self::assertSame(['body.members.1' => 'list.member_not_deliverable'], self::bodyOf($update)['errors']);
+        self::assertSame($writes, $this->lists->writeCount());
+    }
+
+    /**
      * @param array<string, mixed> $fields
      */
     #[DataProvider('fieldsLatin1CannotHold')]
