@@ -4,6 +4,7 @@ from email.message import EmailMessage
 import pytest
 
 import maillist
+from tests.conftest import RAW_MAIL
 
 
 class FakeSMTP:
@@ -295,3 +296,140 @@ def test_notify_delivery_issue_sends_email_report(monkeypatch, settings) -> None
     assert message["To"] == "admins@example.org"
     assert message["From"] == "maillist@example.org"
     assert "MSG-5" in message["Subject"]
+
+
+# --- main(): list key and exit codes ----------------------------------------
+
+
+def test_argument_selects_list_and_wins_over_delivered_to(run_main) -> None:
+    code, connection, smtps = run_main(["other.example.org"])
+    assert code == maillist.EX_OK
+    assert connection.calls[0][1] == ("other.example.org",)
+    sent = [call for s in smtps for call in s.sent]
+    assert sent and sent[0][1] == ["a@example.org", "b@example.org"]
+
+
+def test_delivered_to_is_fallback_without_argument(run_main) -> None:
+    code, connection, _ = run_main([])
+    assert code == maillist.EX_OK
+    assert connection.calls[0][1] == ("list.example.org",)
+
+
+def test_without_argument_and_fallback_disabled_is_usage_error(run_main, config_file) -> None:
+    config_file.write_text(config_file.read_text().replace("[list]", "[list]\ndelivered_to_fallback = no"))
+    code, connection, smtps = run_main([])
+    assert code == maillist.EX_USAGE
+    assert connection.calls == []
+    assert smtps == []
+
+
+def test_without_argument_and_without_delivered_to_is_usage_error(run_main) -> None:
+    raw = RAW_MAIL.replace(b"Delivered-To: list.example.org@maillist.invalid\r\n", b"")
+    code, connection, _ = run_main([], raw=raw)
+    assert code == maillist.EX_USAGE
+    assert connection.calls == []
+
+
+def test_too_many_arguments_is_usage_error(run_main) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        run_main(["one", "two"])
+    assert excinfo.value.code == maillist.EX_USAGE
+
+
+def test_unknown_list_is_nouser(run_main) -> None:
+    code, _, smtps = run_main(["missing.example.org"], rows=())
+    assert code == maillist.EX_NOUSER
+    assert smtps == []
+
+
+def test_database_unreachable_is_tempfail(run_main) -> None:
+    def refuse(**_):
+        raise maillist.mysql.connector.errors.InterfaceError("Can't connect")
+
+    code, _, smtps = run_main(["list.example.org"], connect=refuse)
+    assert code == maillist.EX_TEMPFAIL
+    assert smtps == []
+
+
+def test_database_error_during_query_is_tempfail(run_main) -> None:
+    class BrokenCursor:
+        def execute(self, *_args):
+            raise maillist.mysql.connector.errors.OperationalError("gone away")
+
+        def close(self):
+            pass
+
+    class BrokenConnection:
+        def cursor(self):
+            return BrokenCursor()
+
+        def close(self):
+            pass
+
+    code, _, smtps = run_main(["list.example.org"], connect=lambda **_: BrokenConnection())
+    assert code == maillist.EX_TEMPFAIL
+    assert smtps == []
+
+
+def test_missing_config_is_tempfail(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setenv("MAILLIST_CONFIG", str(tmp_path / "absent.ini"))
+    assert maillist.main(["list.example.org"]) == maillist.EX_TEMPFAIL
+    assert "cannot read" in capsys.readouterr().err
+
+
+def test_incomplete_config_is_tempfail(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "maillist.ini"
+    path.write_text("[database]\nuser = u\n")
+    monkeypatch.setenv("MAILLIST_CONFIG", str(path))
+    assert maillist.main(["list.example.org"]) == maillist.EX_TEMPFAIL
+
+
+def test_unexpected_error_is_software_and_reports(run_main, monkeypatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(maillist, "apply_list_headers", boom)
+    code, _, smtps = run_main(["list.example.org"])
+    assert code == maillist.EX_SOFTWARE
+    reports = [m for s in smtps for m in s.messages]
+    assert len(reports) == 1
+    assert reports[0]["To"] == "admins@example.org"
+    assert reports[0]["From"] == "maillist@example.org"
+
+
+def test_unexpected_error_still_returns_software_when_report_fails(run_main, monkeypatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    def no_smtp(*_args, **_kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(maillist, "apply_list_headers", boom)
+    monkeypatch.setattr(maillist, "notify_unexpected_error", lambda *a, **k: no_smtp())
+    code, _, _ = run_main(["list.example.org"])
+    assert code == maillist.EX_SOFTWARE
+
+
+def test_loop_is_dropped_with_ok(run_main) -> None:
+    raw = RAW_MAIL.replace(
+        b"Subject:", b"X-maillist: mailadmin-maillist\r\nX-Original-To: list@example.org\r\nSubject:"
+    )
+    code, connection, smtps = run_main(["list.example.org"], raw=raw)
+    assert code == maillist.EX_OK
+    assert connection.calls == []
+
+
+def test_bounce_is_dropped_with_ok(run_main) -> None:
+    raw = RAW_MAIL.replace(b"From: Author <author@example.net>", b"From: MAILER-DAEMON@mx.example.org")
+    code, connection, smtps = run_main(["list.example.org"], raw=raw)
+    assert code == maillist.EX_OK
+    assert connection.calls == []
+    assert smtps == []
+
+
+def test_resolve_list_key_prefers_stripped_argument() -> None:
+    msg = EmailMessage()
+    msg["Delivered-To"] = "fallback.example.org@x.invalid"
+    assert maillist.resolve_list_key("  arg.example.org ", msg, True) == "arg.example.org"
+    assert maillist.resolve_list_key("   ", msg, True) == "fallback.example.org"
+    assert maillist.resolve_list_key(None, msg, False) is None

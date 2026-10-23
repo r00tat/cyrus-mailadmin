@@ -32,6 +32,13 @@ DEFAULT_CONFIG_PATH = "/etc/mailadmin-maillist/maillist.ini"
 CONFIG_ENV_VAR = "MAILLIST_CONFIG"
 SMTP_TIMEOUT = 30
 
+# Exit codes from sysexits.h; Postfix pipe(8) maps them to deliver/bounce/defer.
+EX_OK = 0
+EX_USAGE = 64
+EX_NOUSER = 67  # list not found -> bounce
+EX_SOFTWARE = 70  # unexpected error -> bounce, admins notified
+EX_TEMPFAIL = 75  # database/SMTP/config temporarily unusable -> Postfix retries
+
 DBConnection = MySQLConnectionAbstract | PooledMySQLConnection
 
 logger = logging.getLogger("maillist")
@@ -405,78 +412,128 @@ def notify_delivery_issue(
         logger.error(f"{msg_id} - Failed to send error notification: {notify_error}")
 
 
+def notify_unexpected_error(settings: Settings, msg_id: str, error: Exception) -> None:
+    """Best-effort report of an unexpected failure to the configured report mailbox."""
+    report = EmailMessage()
+    report["From"] = settings.lists.error_report_from
+    report["To"] = settings.lists.error_report_to
+    report["Subject"] = f"[maillist] unexpected error for {msg_id}"
+    report.set_content(
+        f"The maillist script failed with an unexpected error.\n\nMessage-Id: {msg_id}\nError: {error!r}\n"
+    )
+    try:
+        with smtplib.SMTP(settings.smtp.host, settings.smtp.port, timeout=SMTP_TIMEOUT) as smtp:
+            smtp.send_message(report)
+    except (smtplib.SMTPException, OSError) as notify_error:
+        logger.error(f"{msg_id} - Failed to send error report: {notify_error}")
+
+
+def resolve_list_key(argument: str | None, incoming: EmailMessage, fallback: bool) -> str | None:
+    """Return the list key: the pipe argument, else (during migration) the Delivered-To local part."""
+    if argument and argument.strip():
+        return argument.strip()
+    if fallback:
+        return extract_delivered_to_local_part(incoming)
+    return None
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self.exit(EX_USAGE, f"{self.prog}: error: {message}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Read a message from stdin and dispatch it to list members.")
+    parser = _Parser(description="Read a message from stdin and dispatch it to list members.")
+    parser.add_argument(
+        "list_key",
+        nargs="?",
+        help="list key: the list address with '@' replaced by '.' (Postfix passes ${user})",
+    )
     return parser
+
+
+def deliver(settings: Settings, args: argparse.Namespace, incoming: EmailMessage, msg_id: str) -> int:
+    """Look up the list and relay the message. Database errors propagate to the caller."""
+    list_key = resolve_list_key(args.list_key, incoming, settings.lists.delivered_to_fallback)
+    if not list_key:
+        logger.error(f"{msg_id} - No list key: no argument and no usable Delivered-To header")
+        return EX_USAGE
+
+    db = settings.database
+    cnx = mysql.connector.connect(
+        user=db.user,
+        password=db.password,
+        host=db.host,
+        port=db.port,
+        database=db.name,
+        raise_on_warnings=True,
+        connection_timeout=10,
+    )
+    with closing(cnx):
+        list_info = get_list_info(cnx, msg_id, list_key)
+
+    if not list_info:
+        logger.warning(f"{msg_id} - No mailing list found for {list_key}")
+        return EX_NOUSER
+
+    logger.info(f"{msg_id} - Found Maillist: {list_info.address} with {len(list_info.members.splitlines())} members")
+    outbound_sender = list_sender_address(list_info.address)
+    recipients = normalize_recipients(list_info.members, msg_id)
+
+    apply_list_headers(incoming, list_info.tag, list_info.address, outbound_sender, settings.lists)
+
+    outgoing_bytes = incoming.as_bytes(policy=policy.SMTP)
+
+    logger.debug(f"{msg_id} - Modified E-Mail headers: {dict(incoming.items())}")
+    send_via_local_postfix(settings, outbound_sender, recipients, outgoing_bytes, msg_id)
+    return EX_OK
 
 
 def main(argv: list[str] | None = None) -> int:
     """Read a message from stdin and dispatch it to list members. Returns the exit code."""
-    build_parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
 
     config_path = os.environ.get(CONFIG_ENV_VAR, DEFAULT_CONFIG_PATH)
-    settings = load_settings(config_path)
+    try:
+        settings = load_settings(config_path)
+    except ConfigError as exc:
+        # Operator error: let the message wait in the queue instead of bouncing it.
+        print(f"maillist: {exc}", file=sys.stderr)
+        return EX_TEMPFAIL
     configure_logging(settings)
 
-    incoming = parse_incoming_message()
-    msg_id = incoming.get("Message-Id", "UNKNOWN")
-    logger.info(f"{msg_id} - starting maillist processing")
-
-    # Check for mail loops and bounce messages
-    if should_drop_for_loop(incoming, settings.lists.loop_marker):
-        logger.error(f"{msg_id} - Mail loop detected, dropping")
-        return 0
-
-    if should_drop_for_bounce(incoming):
-        logger.error(f"{msg_id} - Possible bounce / undeliverable mail")
-        return 0
-
-    logger.debug(f"{msg_id} - Original E-Mail headers: {dict(incoming.items())}")
-
-    db = settings.database
+    msg_id = "UNKNOWN"
     try:
-        cnx = mysql.connector.connect(
-            user=db.user,
-            password=db.password,
-            host=db.host,
-            port=db.port,
-            database=db.name,
-            raise_on_warnings=True,
-            connection_timeout=10,
-        )
+        incoming = parse_incoming_message()
+        msg_id = incoming.get("Message-Id", "UNKNOWN")
+        logger.info(f"{msg_id} - starting maillist processing")
+
+        if should_drop_for_loop(incoming, settings.lists.loop_marker):
+            logger.error(f"{msg_id} - Mail loop detected, dropping")
+            return EX_OK
+
+        if should_drop_for_bounce(incoming):
+            logger.error(f"{msg_id} - Possible bounce / undeliverable mail")
+            return EX_OK
+
+        logger.debug(f"{msg_id} - Original E-Mail headers: {dict(incoming.items())}")
+        return deliver(settings, args, incoming, msg_id)
     except mysql.connector.Error as err:
         if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
             logger.error(f"{msg_id} - Database access denied (check credentials)")
         elif err.errno == errorcode.ER_BAD_DB_ERROR:
             logger.error(f"{msg_id} - Database does not exist")
         else:
-            logger.error(f"{msg_id} - Database connection error: {err}")
-        return 1
-
-    with closing(cnx):
-        delivered_to = extract_delivered_to_local_part(incoming)
-        if not delivered_to:
-            logger.error(f"{msg_id} - Invalid Delivered-To header")
-            return 0
-
-        list_info = get_list_info(cnx, msg_id, delivered_to)
-        if not list_info:
-            logger.warning(f"{msg_id} - No mailing list found for {delivered_to}")
-            return 0
-
-        logger.info(
-            f"{msg_id} - Found Maillist: {list_info.address} with {len(list_info.members.splitlines())} members"
-        )
-        outbound_sender = list_sender_address(list_info.address)
-        recipients = normalize_recipients(list_info.members, msg_id)
-
-        apply_list_headers(incoming, list_info.tag, list_info.address, outbound_sender, settings.lists)
-
-        outgoing_bytes = incoming.as_bytes(policy=policy.SMTP)
-
-        logger.debug(f"{msg_id} - Modified E-Mail headers: {dict(incoming.items())}")
-        send_via_local_postfix(settings, outbound_sender, recipients, outgoing_bytes, msg_id)
-    return 0
+            logger.error(f"{msg_id} - Database error: {err}")
+        return EX_TEMPFAIL
+    except Exception as exc:
+        logger.exception(f"{msg_id} - Unexpected error")
+        try:
+            notify_unexpected_error(settings, msg_id, exc)
+        except Exception:
+            logger.exception(f"{msg_id} - Could not report the unexpected error")
+        return EX_SOFTWARE
 
 
 if __name__ == "__main__":
