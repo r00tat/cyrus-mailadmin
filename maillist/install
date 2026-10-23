@@ -1,0 +1,521 @@
+#!/usr/bin/env python3
+"""Installer and updater for the mailadmin list delivery script (maillist.py).
+
+Standard library only. Layout under the prefix:
+
+    <prefix>/.mailadmin-maillist   marker: this directory is ours
+    <prefix>/releases/<id>/        one directory per installed release
+    <prefix>/current               relative symlink to the active release
+    <prefix>/previous              relative symlink to the release before it
+
+Order: preflight, source, release directory, list user, configuration, log file, verification as the
+list user, atomic activation, pruning, instructions. Nothing is switched before the verification passed.
+
+Exit codes: 0 done, 1 failed, 2 configuration file created and still to be filled in.
+"""
+
+import argparse
+import configparser
+import hashlib
+import io
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.request
+from collections.abc import Callable
+from pathlib import Path, PurePosixPath
+
+EXIT_OK = 0
+EXIT_FAIL = 1
+EXIT_CONFIG = 2
+
+MARKER = ".mailadmin-maillist"
+RELEASE_FILES = ("maillist.py", "maillist.ini.example", "VERSION", "README.md")
+OPTIONAL_FILES = ("README.md",)
+DEFAULT_PREFIX = "/opt/mailadmin-maillist"
+DEFAULT_CONFIG = "/etc/mailadmin-maillist/maillist.ini"
+DEFAULT_REPO = "r00tat/cyrus-mailadmin"
+MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
+
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+class InstallError(Exception):
+    """A step failed; the message is shown to the operator."""
+
+
+class Runner:
+    """System commands. Tests replace this class; nothing else in the installer touches the system."""
+
+    def is_root(self) -> bool:
+        return os.geteuid() == 0
+
+    def user_exists(self, name: str) -> bool:
+        import pwd
+
+        try:
+            pwd.getpwnam(name)
+        except KeyError:
+            return False
+        return True
+
+    def create_user(self, name: str) -> None:
+        cmd = ["useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", "--user-group", name]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+        if result.returncode != 0:
+            raise InstallError(f"useradd failed: {result.stderr.strip()}")
+
+    def chown(self, path: Path, user: str, group: str) -> None:
+        shutil.chown(path, user=user, group=group)
+
+    def check_dependency(self, python: str) -> bool:
+        result = subprocess.run(  # noqa: S603
+            [python, "-c", "import mysql.connector"], capture_output=True, text=True, check=False
+        )
+        return result.returncode == 0
+
+    def run_check(self, python: str, script: Path, config: Path, user: str | None) -> tuple[bool, str]:
+        cmd = [python, str(script), "--check"]
+        if user and self.is_root():
+            wrapper = ["runuser", "-u", user, "--"] if shutil.which("runuser") else ["setpriv"]
+            if wrapper == ["setpriv"]:
+                import pwd
+
+                info = pwd.getpwnam(user)
+                wrapper = [
+                    "setpriv",
+                    f"--reuid={info.pw_uid}",
+                    f"--regid={info.pw_gid}",
+                    "--init-groups",
+                ]
+            cmd = wrapper + cmd
+        env = dict(os.environ, MAILLIST_CONFIG=str(config))
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env, check=False)  # noqa: S603
+        return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+
+def default_fetch(url: str) -> bytes:
+    if not url.startswith("https://"):
+        raise InstallError(f"refusing to download from a non-https URL: {url}")
+    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310
+        return response.read()
+
+
+def default_final_url(url: str) -> str:
+    if not url.startswith("https://"):
+        raise InstallError(f"refusing to follow a non-https URL: {url}")
+    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310
+        return response.geturl()
+
+
+class Installer:
+    def __init__(self, args, runner, fetch, final_url, out=print):
+        self.args = args
+        self.runner = runner
+        self.fetch = fetch
+        self.final_url = final_url
+        self.say = out
+        self.dry = args.dry_run
+        self.prefix = Path(args.prefix)
+        self.config = Path(args.config)
+        self.user = None if args.no_user else args.user
+
+    # -- helpers ---------------------------------------------------------------------------
+
+    def step(self, text: str) -> None:
+        self.say(("would: " if self.dry else "") + text)
+
+    def marker_present(self) -> bool:
+        return (self.prefix / MARKER).is_file()
+
+    def require_ours(self) -> None:
+        if not self.prefix.is_dir() or not self.marker_present():
+            raise InstallError(f"{self.prefix} is not a maillist installation (marker {MARKER} missing)")
+
+    @staticmethod
+    def atomic_symlink(link: Path, target: str) -> None:
+        tmp = link.with_name(f".{link.name}.tmp")
+        if tmp.is_symlink() or tmp.exists():
+            tmp.unlink()
+        os.symlink(target, tmp)
+        os.replace(tmp, link)
+
+    @staticmethod
+    def link_target(link: Path) -> str | None:
+        return os.readlink(link) if link.is_symlink() else None
+
+    # -- 1. preflight ----------------------------------------------------------------------
+
+    def preflight(self) -> None:
+        if sys.version_info < (3, 11):  # noqa: UP036 - the installer may run on an older host Python
+            raise InstallError("the installer needs Python 3.11 or newer")
+        if self.args.keep_releases < 1:
+            raise InstallError("--keep-releases must be at least 1")
+        if self.user and not self.dry and not self.runner.is_root():
+            raise InstallError("run as root, or pass --no-user to install without a dedicated list user")
+        if self.prefix.exists():
+            if not self.prefix.is_dir():
+                raise InstallError(f"{self.prefix} exists and is not a directory")
+            if any(self.prefix.iterdir()) and not self.marker_present():
+                raise InstallError(
+                    f"{self.prefix} is not empty and has no {MARKER} marker; refusing to touch a foreign directory"
+                )
+        if not self.args.no_verify and not self.runner.check_dependency(self.args.python):
+            raise InstallError(
+                f"{self.args.python} cannot import mysql.connector: "
+                "install python3-mysql.connector (Debian) or mysql-connector-python"
+            )
+
+    # -- 2. source -------------------------------------------------------------------------
+
+    def resolve_tag(self) -> str:
+        repo = self.args.repo
+        if not _REPO_RE.match(repo) or ".." in repo:
+            raise InstallError(f"invalid --repo: {repo!r}")
+        tag = self.args.release
+        if tag == "latest":
+            final = self.final_url(f"https://github.com/{repo}/releases/latest")
+            tag = final.rstrip("/").rsplit("/", 1)[-1]
+        if not _ID_RE.match(tag):
+            raise InstallError(f"invalid release tag: {tag!r}")
+        return tag
+
+    def download_release(self, workdir: Path) -> Path:
+        tag = self.resolve_tag()
+        base = f"https://github.com/{self.args.repo}/releases/download/{tag}"
+        name = f"maillist-{tag}.tar.gz"
+        self.say(f"downloading {name} from {self.args.repo}")
+        archive = self.fetch(f"{base}/{name}")
+        sums = self.fetch(f"{base}/SHA256SUMS").decode("utf-8", "replace")
+        expected = None
+        for line in sums.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].lstrip("*") == name:
+                expected = parts[0].lower()
+        if expected is None:
+            raise InstallError(f"SHA256SUMS has no entry for {name}")
+        actual = hashlib.sha256(archive).hexdigest()
+        if actual != expected:
+            raise InstallError(f"checksum mismatch for {name}")
+        self.say("checksum ok")
+        extract_archive(archive, workdir)
+        roots = [p for p in workdir.iterdir() if p.is_dir()]
+        if len(roots) != 1:
+            raise InstallError("the release archive must contain exactly one top-level directory")
+        return roots[0]
+
+    def find_source(self, workdir: Path) -> Path:
+        if self.args.release:
+            return self.download_release(workdir)
+        src = Path(self.args.source) if self.args.source else Path(__file__).resolve().parent
+        if not (src / "maillist.py").is_file():
+            raise InstallError(f"no maillist.py in {src}; use --source DIR or --release TAG")
+        return src
+
+    # -- 3/4. release ----------------------------------------------------------------------
+
+    def release_id(self, src: Path) -> str:
+        version = (src / "VERSION").read_text().strip() if (src / "VERSION").is_file() else "dev"
+        if version == "dev":
+            digest = hashlib.sha256((src / "maillist.py").read_bytes()).hexdigest()[:8]
+            return f"dev-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{digest}"
+        if not _ID_RE.match(version):
+            raise InstallError(f"invalid VERSION {version!r}")
+        return version
+
+    def create_release(self, src: Path, release: str) -> Path:
+        target = self.prefix / "releases" / release
+        if target.exists():
+            for name in RELEASE_FILES:
+                if (src / name).is_file() and (
+                    not (target / name).is_file() or (target / name).read_bytes() != (src / name).read_bytes()
+                ):
+                    raise InstallError(f"release {release} already exists with different content")
+            self.step(f"reuse existing release {release}")
+            return target
+        self.step(f"create release {target}")
+        if self.dry:
+            return target
+        releases = self.prefix / "releases"
+        releases.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.prefix, 0o755)  # noqa: S103 - directories must stay traversable
+        os.chmod(releases, 0o755)  # noqa: S103 - directories must stay traversable
+        marker = self.prefix / MARKER
+        if not marker.exists():
+            marker.write_text("Managed by maillist/install. Do not put other files here.\n")
+            os.chmod(marker, 0o644)
+        staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=releases))
+        try:
+            for name in RELEASE_FILES:
+                source = src / name
+                if not source.is_file():
+                    if name in OPTIONAL_FILES:
+                        continue
+                    raise InstallError(f"{source} is missing")
+                shutil.copyfile(source, staging / name)
+                os.chmod(staging / name, 0o644)
+            os.chmod(staging, 0o755)  # noqa: S103 - directories must stay traversable
+            # Strictly increasing mtimes give pruning a reliable order even on coarse clocks.
+            newest = max((p.stat().st_mtime_ns for p in releases.iterdir() if not p.name.startswith(".")), default=0)
+            stamp = max(time.time_ns(), newest + 1)
+            os.utime(staging, ns=(stamp, stamp))
+            os.rename(staging, target)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return target
+
+    # -- 5. user ---------------------------------------------------------------------------
+
+    def ensure_user(self) -> None:
+        if not self.user:
+            return
+        if self.runner.user_exists(self.user):
+            return
+        self.step(f"create system user {self.user}")
+        if not self.dry:
+            self.runner.create_user(self.user)
+
+    # -- 6/7. configuration and log ----------------------------------------------------------
+
+    def ensure_config(self, release_dir: Path) -> bool:
+        """Return True when the file was just created and has to be filled in."""
+        if self.config.exists():
+            self.step(f"keep existing configuration {self.config} (fixing permissions only)")
+            if not self.dry:
+                os.chmod(self.config, 0o640)
+                if self.user:
+                    self.runner.chown(self.config, "root", self.user)
+            return False
+        self.step(f"create {self.config} from the example (mode 0640)")
+        if self.dry:
+            return True
+        parent = self.config.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(parent, 0o750)  # noqa: S103 - directories must stay traversable
+        shutil.copyfile(release_dir / "maillist.ini.example", self.config)
+        os.chmod(self.config, 0o640)
+        if self.user:
+            self.runner.chown(parent, "root", self.user)
+            self.runner.chown(self.config, "root", self.user)
+        return True
+
+    def log_path(self) -> Path:
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            parser.read(self.config, encoding="utf-8")
+        except (configparser.Error, OSError, UnicodeDecodeError) as exc:
+            raise InstallError(f"cannot read {self.config}: {type(exc).__name__}") from exc
+        return Path(parser.get("log", "file", fallback="/var/log/mail/maillist.log").strip())
+
+    def ensure_log(self) -> None:
+        log = self.log_path()
+        self.step(f"ensure log file {log} (mode 0640)")
+        if self.dry:
+            return
+        log.parent.mkdir(parents=True, exist_ok=True)
+        if not log.exists():
+            fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o640)
+            os.close(fd)
+        os.chmod(log, 0o640)
+        if self.user:
+            self.runner.chown(log, self.user, self.user)
+
+    # -- 8. verify -------------------------------------------------------------------------
+
+    def verify(self, release_dir: Path) -> None:
+        if self.args.no_verify:
+            self.say("skipping verification (--no-verify)")
+            return
+        self.step(f"run {release_dir.name}/maillist.py --check as {self.user or 'the current user'}")
+        if self.dry:
+            return
+        ok, output = self.runner.run_check(self.args.python, release_dir / "maillist.py", self.config, self.user)
+        if output:
+            self.say(output)
+        if not ok:
+            raise InstallError("verification failed; the active release was not changed")
+
+    # -- 9/10. activate and prune --------------------------------------------------------------
+
+    def activate(self, release: str) -> None:
+        new_target = f"releases/{release}"
+        current = self.prefix / "current"
+        old_target = self.link_target(current)
+        self.step(f"switch current -> {new_target}")
+        if self.dry:
+            return
+        if old_target is not None and old_target != new_target:
+            self.atomic_symlink(self.prefix / "previous", old_target)
+        self.atomic_symlink(current, new_target)
+
+    def prune(self) -> None:
+        releases = self.prefix / "releases"
+        if not releases.is_dir():
+            return
+        keep_names = set()
+        for link in ("current", "previous"):
+            target = self.link_target(self.prefix / link)
+            if target:
+                keep_names.add(Path(target).name)
+        entries = sorted(
+            (p for p in releases.iterdir() if p.is_dir() and not p.name.startswith(".")),
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
+        )
+        newest = entries[-self.args.keep_releases :]
+        keep_names.update(p.name for p in newest)
+        for entry in entries:
+            if entry.name not in keep_names:
+                self.step(f"remove old release {entry.name}")
+                if not self.dry:
+                    shutil.rmtree(entry)
+
+    # -- 11. instructions ------------------------------------------------------------------------
+
+    def instructions(self) -> None:
+        user = self.user or "<list user>"
+        self.say("")
+        self.say("Add this service to Postfix master.cf (continuation lines are indented):")
+        self.say("")
+        self.say("maillist  unix  -  n  n  -  -  pipe")
+        self.say(f"  flags=Rq user={user} argv={self.args.python} {self.prefix}/current/maillist.py -- ${{user}}")
+        self.say("")
+        self.say("and in main.cf, so that every list member gets its own delivery:")
+        self.say("")
+        self.say("maillist_destination_recipient_limit = 1")
+        self.say("")
+        self.say("See docs/deployment/maillist.md for the transport map and the rest of the setup.")
+
+    # -- commands --------------------------------------------------------------------------------
+
+    def install(self) -> int:
+        self.preflight()
+        with tempfile.TemporaryDirectory(prefix="maillist-install-") as tmp:
+            src = self.find_source(Path(tmp))
+            release = self.release_id(src)
+            release_dir = self.create_release(src, release)
+            self.ensure_user()
+            if self.ensure_config(release_dir if not self.dry else src):
+                self.say(
+                    f"Configuration created at {self.config}. Fill in the required keys, then run the installer again."
+                )
+                return EXIT_CONFIG
+            self.ensure_log()
+            self.verify(release_dir if not self.dry else src)
+        self.activate(release)
+        self.prune()
+        if not self.dry:
+            self.say(f"installed release {release}")
+        self.instructions()
+        return EXIT_OK
+
+    def rollback(self) -> int:
+        self.require_ours()
+        current, previous = self.prefix / "current", self.prefix / "previous"
+        cur, prev = self.link_target(current), self.link_target(previous)
+        if cur is None or prev is None:
+            raise InstallError("nothing to roll back to: current and previous are both required")
+        if not (self.prefix / prev).is_dir():
+            raise InstallError(f"previous release {prev} no longer exists")
+        self.step(f"switch current -> {prev}, previous -> {cur}")
+        if not self.dry:
+            self.atomic_symlink(current, prev)
+            self.atomic_symlink(previous, cur)
+            self.say(f"rolled back to {prev}")
+        return EXIT_OK
+
+    def status(self) -> int:
+        self.require_ours()
+        for link in ("current", "previous"):
+            target = self.link_target(self.prefix / link)
+            self.say(f"{link:<9}-> {target if target else '(none)'}")
+        self.say("releases:")
+        releases = self.prefix / "releases"
+        names = sorted(p.name for p in releases.iterdir() if p.is_dir() and not p.name.startswith("."))
+        for name in names:
+            self.say(f"  {name}")
+        return EXIT_OK
+
+
+def extract_archive(data: bytes, dest: Path) -> None:
+    """Unpack a release archive after checking every member; refuse anything but files and directories."""
+    if len(data) > MAX_ARCHIVE_BYTES:
+        raise InstallError("release archive is too large")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            _extract_checked(tar, dest)
+    except (tarfile.TarError, EOFError) as exc:
+        raise InstallError(f"cannot read the release archive: {type(exc).__name__}") from exc
+
+
+def _extract_checked(tar: tarfile.TarFile, dest: Path) -> None:
+    members = tar.getmembers()
+    total = 0
+    for member in members:
+        path = PurePosixPath(member.name)
+        if path.is_absolute() or ".." in path.parts or not member.name:
+            raise InstallError(f"unsafe path in archive: {member.name!r}")
+        if not (member.isreg() or member.isdir()):
+            raise InstallError(f"unsupported member type in archive: {member.name!r}")
+        total += member.size
+    if total > MAX_ARCHIVE_BYTES:
+        raise InstallError("release archive expands to too much data")
+    if hasattr(tarfile, "data_filter"):
+        tar.extractall(dest, members=members, filter="data")  # noqa: S202
+    else:  # pragma: no cover - Python without extraction filters
+        tar.extractall(dest, members=members)  # noqa: S202
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Install, update, roll back or inspect the maillist script.")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--source", metavar="DIR", help="directory holding maillist.py (default: next to this script)")
+    source.add_argument("--release", metavar="TAG|latest", help="install a GitHub release")
+    parser.add_argument(
+        "--repo", default=DEFAULT_REPO, help=f"OWNER/NAME of the release repository (default: {DEFAULT_REPO})"
+    )
+    parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    parser.add_argument("--config", default=DEFAULT_CONFIG)
+    user = parser.add_mutually_exclusive_group()
+    user.add_argument("--user", default="maillist", help="list user the script runs as (default: maillist)")
+    user.add_argument("--no-user", action="store_true", help="do not create or use a dedicated user (no root needed)")
+    parser.add_argument("--python", default="/usr/bin/python3", help="interpreter Postfix will run the script with")
+    parser.add_argument("--keep-releases", type=int, default=3)
+    parser.add_argument("--no-verify", action="store_true", help="skip dependency and --check verification")
+    parser.add_argument("--dry-run", action="store_true", help="print every step, change nothing")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--rollback", action="store_true", help="swap current and previous")
+    action.add_argument("--status", action="store_true", help="show current, previous and installed releases")
+    return parser
+
+
+def main(
+    argv: list[str] | None = None,
+    runner: Runner | None = None,
+    fetch: Callable[[str], bytes] | None = None,
+    final_url: Callable[[str], str] | None = None,
+) -> int:
+    args = build_parser().parse_args(argv)
+    installer = Installer(args, runner or Runner(), fetch or default_fetch, final_url or default_final_url)
+    try:
+        if args.rollback:
+            return installer.rollback()
+        if args.status:
+            return installer.status()
+        return installer.install()
+    except InstallError as exc:
+        print(f"install: error: {exc}", file=sys.stderr)
+        return EXIT_FAIL
+    except OSError as exc:
+        print(f"install: error: {exc}", file=sys.stderr)
+        return EXIT_FAIL
+
+
+if __name__ == "__main__":
+    sys.exit(main())
