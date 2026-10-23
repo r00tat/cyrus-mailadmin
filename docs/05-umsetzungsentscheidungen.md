@@ -4900,6 +4900,24 @@ samt ihren Sicherheitsmängeln.
    Ein neuer Eintrag mit `&` ist deshalb `list.member_not_deliverable`; gespeicherte bleiben
    geduldet. `maillist.py` dekodiert nur noch `&name;`, `&#nn;` und `&#xhh;` mit Semikolon, benannte
    Entities nur bei exaktem Treffer in der HTML5-Tabelle. Golden-Fall `entity-without-semicolon`.
+7. **Steuerzeichen.** `str.splitlines()` trennte Zeilen auch an `\x0b`, `\x0c`, `\x1c` bis `\x1e`
+   und `\x85`, mailadmin nur an CR und LF. Aus `"evil@attacker.test\x0b" <victim@example.test>`
+   zeigte mailadmin das Opfer, das Skript stellte an `evil@attacker.test` zu. Jetzt:
+   - `maillist.py` trennt Zeilen nur an `\r\n`, `\r` und `\n`.
+   - Ein Eintrag mit einem C0-Steuerzeichen außer Tab oder mit DEL ist auf beiden Seiten nicht
+     zustellbar. Geprüft wird nach genau dem Trimmen, das PHPs `trim()` vornimmt, damit beide Seiten
+     dieselben Ränder abschneiden. Gespeicherte Einträge werden gemeldet und bleiben erhalten.
+   - Ein neuer Eintrag darf gar kein Steuerzeichen enthalten, auch keinen Tab
+     (`list.member_not_deliverable`).
+   - Numerische Entities dekodiert das Skript nur, wo `html_entity_decode(…, ENT_HTML5)` es auch
+     tut: nicht C0 außer Tab, LF und FF, nicht CR, DEL, C1, Surrogate und Nichtzeichen.
+     `html.unescape()` machte aus `&#128;` ein Euro-Zeichen und ließ `&#11;` verschwinden.
+   - Golden-Fälle `control-vertical-tab`, `control-form-feed`, `control-file-separator` und
+     `control-nul`.
+   - Kein `pattern` im Vertrag: `PATCH` schickt die vollständige Mitgliederliste samt
+     gespeicherter Einträge zurück, und ein Schema-Muster würde eine Liste mit einem geduldeten
+     Alteintrag unbearbeitbar machen. Außerdem melden nur die Fachregeln den Fehler an der Position
+     des Eintrags.
 
 **Warum, für die Zustellbarkeit:** Vorher prüfte mailadmin neue Mitglieder mit der toleranten
 Adressprüfung, das Skript aber mit der strengen. `müller@example.de`, `user@localhost` oder

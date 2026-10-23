@@ -52,3 +52,19 @@ def test_entities_without_semicolon_are_left_alone() -> None:
 def test_an_unknown_named_entity_is_left_alone() -> None:
     # html.unescape("&notit;") decodes the prefix "&not"; PHP leaves the whole entity untouched.
     assert maillist._decode_entities("&notit; &amp; &#x40; &#64;") == "&notit; & @ @"
+
+
+def test_lines_break_only_at_cr_and_lf() -> None:
+    # str.splitlines() would also break at \x0b, \x0c, \x1c-\x1e and \x85, and so read
+    # `"evil@attacker.test\x0b" <victim@example.org>` as mail to evil@attacker.test.
+    stored = '"evil@attacker.test\x0b" <victim@example.org>\r\nok@example.org\rnext@example.org'
+    assert maillist.normalize_recipients(stored, "MSG") == ["ok@example.org", "next@example.org"]
+
+
+def test_numeric_entities_php_leaves_alone_are_left_alone() -> None:
+    # html_entity_decode(..., ENT_HTML5) decodes neither C0/C1 controls (except tab, LF and FF), nor CR,
+    # nor surrogates or noncharacters; html.unescape() maps &#128; to the euro sign and drops &#11;.
+    assert maillist._decode_entities("&#11;&#13;&#128;&#x9F;&#xD800;&#xFDD0;&#xFFFE;&#99999999999;") == (
+        "&#11;&#13;&#128;&#x9F;&#xD800;&#xFDD0;&#xFFFE;&#99999999999;"
+    )
+    assert maillist._decode_entities("&#9;&#10;&#12;&#0064;&#X40;&#xA0;&#xFFFD;") == "\t\n\x0c@@\xa0\ufffd"

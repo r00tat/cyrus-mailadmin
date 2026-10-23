@@ -74,6 +74,18 @@ final readonly class MemberList
     public const int MAX_RENDERED_LENGTH = 65535;
 
     /**
+     * Control characters that make an entry undeliverable on both sides: all
+     * of C0 but tab, line feed and carriage return (those two only ever
+     * separate lines), and DEL. `maillist.py` skips an entry that holds one
+     * after trimming exactly what PHP's `trim()` trims. A new entry may not
+     * carry a tab either ({@see NEW_MEMBER_CONTROL}).
+     */
+    private const string CONTROL = '/[\x00-\x08\x0b-\x1f\x7f]/';
+
+    /** Every C0 control character and DEL — refused in a new entry. */
+    private const string NEW_MEMBER_CONTROL = '/[\x00-\x1f\x7f]/';
+
+    /**
      * @param list<string> $members
      */
     private function __construct(
@@ -252,7 +264,13 @@ final readonly class MemberList
             // in a new entry: `html.unescape()` in the script decodes `&#64`
             // and `&lt` without a semicolon, `html_entity_decode()` does not,
             // so the two would read different addresses out of the same text.
-            if (str_contains($member, '&') || !self::isDeliverableMember($member)) {
+            // No control character either: `str.splitlines()` used to break
+            // lines at `\x0b`, `\x0c` or `\x1c`, which put a hidden address in
+            // front of the shown one; the script now skips such entries.
+            if (str_contains($member, '&')
+                || preg_match(self::NEW_MEMBER_CONTROL, $member) === 1
+                || !self::isDeliverableMember($member)
+            ) {
                 throw InvalidMailingList::memberNotDeliverable($index);
             }
         }
@@ -326,11 +344,12 @@ final readonly class MemberList
      * reads as something else: unquoted, it carries none of `()<>[]:;@\"`; quoted,
      * it is one quoted string without an inner quote or backslash. A colon
      * outside quotes is group syntax there — `user:x@example.org` is mail to
-     * `x@example.org`.
+     * `x@example.org`. A control character other than tab anywhere in the
+     * entry makes it undeliverable ({@see CONTROL}).
      */
     private static function isDeliverableMember(string $member): bool
     {
-        if (!self::isUsableMember($member)) {
+        if (preg_match(self::CONTROL, $member) === 1 || !self::isUsableMember($member)) {
             return false;
         }
 

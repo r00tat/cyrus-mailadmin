@@ -15,5 +15,6 @@ Getestet in `tests/Unit/Domain/MailingList/MemberFormatGoldenTest.php` und
 `maillist/tests/test_member_format.py`.
 
 Die Fälle `non-ascii`, `no-dot-domain`, `trailing-dot`, `group-syntax`, `quotes`, `comments`,
-`backslash`, `domain-literal` und `entity-without-semicolon` halten fest, welche Einträge das Skript überspringt. Für neue
-Mitglieder lehnt `MemberList` genau diese ab (`list.member_not_deliverable`, U-137).
+`backslash`, `domain-literal`, `entity-without-semicolon` und die `control-*`-Fälle halten fest, welche Einträge das Skript überspringt. Für neue
+Mitglieder lehnt `MemberList` genau diese ab (`list.member_not_deliverable`, U-137), dazu jeden
+Eintrag mit einem Steuerzeichen, auch einem Tab, den gespeicherte Einträge tragen dürfen.

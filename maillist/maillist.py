@@ -253,24 +253,48 @@ _BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _ENTITY = re.compile(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);")
 
 
+def _php_decodes(code: int) -> bool:
+    """Whether html_entity_decode(..., ENT_HTML5) decodes this numeric entity, or leaves it as written.
+
+    PHP refuses C0 controls except tab, LF and FF, CR, DEL and C1, surrogates and noncharacters.
+    html.unescape() maps C1 to Windows-1252 and drops others; both would let the two sides read different text.
+    """
+    if code in (0x09, 0x0A, 0x0C) or 0x20 <= code <= 0x7E or 0xA0 <= code <= 0xD7FF:
+        return True
+    return 0xE000 <= code <= 0x10FFFF and (code & 0xFFFF) < 0xFFFE and not 0xFDD0 <= code <= 0xFDEF
+
+
 def _decode_entities(text: str) -> str:
     """Decode HTML entities the way mailadmin's PHP side does: only complete ones, ending in `;`.
 
     html.unescape() also reads `&#64` or `&lt` without a semicolon and decodes the known prefix of an
     unknown name (`&notit;` becomes "¬it;"). mailadmin would then show one address and the script deliver
-    to another, so anything but a complete entity is left as it is.
+    to another, so anything but a complete entity is left as it is, and a numeric one only becomes the
+    character PHP would make of it (see _php_decodes).
     """
 
     def decode(match: re.Match[str]) -> str:
         entity = match.group(0)
         if entity.startswith("&#"):
-            return html.unescape(entity)
+            body = entity[2:-1]
+            code = int(body[1:], 16) if body[:1] in "xX" else int(body)
+            return chr(code) if _php_decodes(code) else entity
         return html.entities.html5.get(entity[1:], entity)
 
     return _ENTITY.sub(decode, text)
 
 
 _ADDRESS_FORBIDDEN = re.compile(r'[\s<>"(),;:\\\[\]]')
+
+# Lines break at CR and LF only, as in mailadmin. str.splitlines() also breaks at \x0b, \x0c, \x1c-\x1e and
+# \x85, which turned `"evil@attacker.test\x0b" <victim@example.org>` into mail to evil@attacker.test.
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+# An entry holding one of these is skipped; mailadmin does the same. Tab is ordinary whitespace.
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+# What PHP's trim() removes; the control check runs after exactly this, so both sides agree on the edges.
+_PHP_TRIM = " \t\n\r\0\x0b"
 
 
 def _is_plain_address(address: str) -> bool:
@@ -332,16 +356,18 @@ def normalize_recipients(members: str, msg_id: str) -> list[str]:
     recipients: list[str] = []
     seen: set[str] = set()
     skipped_lines: list[int] = []
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        line = line.strip()
-        if not line:
+    for line_no, line in enumerate(_LINE_BREAK.split(text), start=1):
+        if not line.strip():
             continue
         # Split outside quotes, so a comma inside "Doe, John" is not a separator.
         addresses: list[str] = []
         for entry, group in _split_entries(line):
             if not entry.strip():
                 continue
-            addresses.extend([""] if group else [address for _name, address in getaddresses([entry])])
+            if group or _CONTROL.search(entry.strip(_PHP_TRIM)):
+                addresses.append("")
+                continue
+            addresses.extend(address for _name, address in getaddresses([entry]))
         for address in addresses:
             address = address.strip()
             if not _is_plain_address(address):

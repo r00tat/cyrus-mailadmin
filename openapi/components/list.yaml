@@ -157,8 +157,11 @@ components:
             `list.member_outside_latin1`, reported at the entry's position
             (`body.members.<n>`). A new entry also has to be an address the
             delivery script sends to as written: plain ASCII, a dotted domain,
-            no quotes, comments, backslashes, `&`, domain literals or group syntax
-            (`list.member_not_deliverable`, at the entry's position too).
+            no quotes, comments, backslashes, `&`, control characters (tab
+            included), domain literals or group syntax
+            (`list.member_not_deliverable`, at the entry's position too). There
+            is no schema `pattern` for the control characters on purpose: a
+            `PATCH` sends stored entries back, and those are tolerated.
             Entries that are already stored are kept as they are. The same rules apply to `tag` and `members`
             on `PATCH`.
           items:

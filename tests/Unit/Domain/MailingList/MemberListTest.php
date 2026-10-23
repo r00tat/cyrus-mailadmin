@@ -344,6 +344,22 @@ final class MemberListTest extends TestCase
         yield 'group syntax' => ['user:x@example.de'];
         yield 'group syntax in the display name' => ['Team: <x@example.de>'];
         yield 'unbalanced quote in the display name' => ['a"b <j@example.de>'];
+        // `str.splitlines()` broke lines at these; a hidden address could
+        // end up in front of the one shown (U-137).
+        yield 'vertical tab in a quoted display name' => ["\"evil@attacker.test\x0b\" <victim@example.test>"];
+        yield 'form feed in a quoted display name' => ["\"a\x0cb\" <victim@example.test>"];
+        yield 'file separator in a display name' => ["a\x1cb <victim@example.test>"];
+        yield 'NUL in a display name' => ["x\x00y <victim@example.test>"];
+        yield 'DEL in a display name' => ["x\x7fy <victim@example.test>"];
+    }
+
+    public function testANewMemberWithATabIsRefusedWhileAStoredOneIsDelivered(): void
+    {
+        $this->testANewMemberTheScriptCannotDeliverToIsRefusedWithItsPosition("Tab\tName <tab@example.de>");
+
+        $stored = MemberList::fromStoredValue("Tab\tName <tab@example.de>\nanna@example.test");
+
+        self::assertSame(['tab@example.de', 'anna@example.test'], $stored->deliverableAddresses());
     }
 
     #[DataProvider('membersTheScriptCannotDeliverTo')]
