@@ -15,13 +15,15 @@ Das Skript besteht aus fünf Modulen, die flach nebeneinander liegen und zusamme
 | Datei | Inhalt |
 |---|---|
 | `maillist.py` | Einstieg, den Postfix aufruft: Argumente, Datenbankabfrage, Zustellablauf, `--check` |
-| `config.py` | Konfiguration, Logging, Exit-Codes |
-| `members.py` | Lesen des Felds `members`; Gegenstück zu `src/Domain/MailingList/MemberList.php` |
-| `headers.py` | Schleifen- und Bounce-Erkennung, Listenköpfe |
-| `delivery.py` | SMTP-Zustellung und Fehlerberichte an die Admins |
+| `maillist_config.py` | Konfiguration, Logging, Exit-Codes |
+| `maillist_members.py` | Lesen des Felds `members`; Gegenstück zu `src/Domain/MailingList/MemberList.php` |
+| `maillist_headers.py` | Schleifen- und Bounce-Erkennung, Listenköpfe |
+| `maillist_delivery.py` | SMTP-Zustellung und Fehlerberichte an die Admins |
 
 `maillist.py` importiert die anderen aus seinem eigenen Verzeichnis, auch wenn der Interpreter mit
-`-I` läuft. Wer ein Modul hinzufügt, trägt es in `CODE_FILES` in `install`, in `MAILLIST_FILES` in
+`-I` läuft, wie in der `master.cf`-Zeile. Fehlt eines oder scheitert ein Import sonst, endet das Skript
+mit `75` und der festen Zeile `maillist: installation unusable`, Postfix versucht es später erneut.
+Wer ein Modul hinzufügt, trägt es in `CODE_FILES` in `install`, in `MAILLIST_FILES` in
 `bin/package-release` und in `py-modules` in `pyproject.toml` ein; ein Test prüft, dass alle drei
 Listen zum Verzeichnis passen.
 
@@ -62,4 +64,4 @@ uv run --project maillist --extra dev ruff format --check maillist maillist/inst
 ```
 
 Die Golden-Tests lesen `tests/Fixtures/MemberFormat` und brauchen deshalb den Checkout. Eine Änderung
-an `members.py` braucht die passende Änderung an `MemberList` und einen Fall in den Golden-Dateien.
+an `maillist_members.py` braucht die passende Änderung an `MemberList` und einen Fall in den Golden-Dateien.

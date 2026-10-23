@@ -118,7 +118,7 @@ Geteilte Dateien, die A5 angefasst hat — jeweils nur der eigene Block:
 | Wartungskommando | `bin/migrate-list-delivery.php` (`composer lists:migrate-delivery`) |
 | Container | `config/di/mailinglists.php` |
 | Oberfläche | `frontend/src/pages/lists/` — Liste mit Anlegedialog (`/lists`), Detail mit Ändern und Löschen (`/lists/:address`); Texte in `frontend/src/i18n/de/list.ts`; jsdom-Tests in `lists.test.tsx`. Listeneinträge in der Adressliste unter `frontend/src/pages/addresses/`, Einstellungen in `frontend/src/pages/health/HealthPage.tsx` |
-| Listenskript | `maillist/` — `maillist.py` mit den Modulen `config.py`, `members.py`, `headers.py`, `delivery.py` (U-147), Installer `maillist/install`, Beispielkonfiguration, Tests; Release-Archiv aus `.github/workflows/release.yml` |
+| Listenskript | `maillist/` — `maillist.py` mit den Modulen `maillist_config.py`, `maillist_members.py`, `maillist_headers.py`, `maillist_delivery.py` (U-147), Installer `maillist/install`, Beispielkonfiguration, Tests; Release-Archiv aus `.github/workflows/release.yml` |
 | Formatvertrag | `tests/Fixtures/MemberFormat/` — Golden-Dateien für `members`, gelesen von `MemberList` und `maillist.py` |
 | Testumgebung | `docker/mail/` — Transport `maillist` mit Stub, Sperre der Pseudodomain |
 
@@ -178,7 +178,7 @@ mit Verweis auf die neue Entscheidung.
 1. **Format des Feldes `members`** → **U-134** (ersetzt U-56). Ein Eintrag pro Zeile; gelesen
    wird an Zeilenumbruch, Komma, Semikolon und `<br>`, nach dem Dekodieren von HTML-Entities. Eine
    unverändert gespeicherte Liste behält ihre Originalbytes, samt `NULL`. Golden-Dateien prüfen
-   das Format gegen `MemberList` und gegen `normalize_recipients()` in `maillist/members.py`.
+   das Format gegen `MemberList` und gegen `normalize_recipients()` in `maillist/maillist_members.py`.
    Neue Einträge mit `,`, `;` oder `<br>` im Anzeigenamen, mit Entities oder mit Zeichen außerhalb
    von `latin1` werden abgelehnt (U-137), ebenso Adressen, an die `maillist.py` nicht genau so
    zustellt, wie sie dastehen (`list.member_not_deliverable`, U-137 Punkt 4).

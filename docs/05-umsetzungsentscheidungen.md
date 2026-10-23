@@ -5344,48 +5344,67 @@ entstünde.
 
 **Frage:** `maillist.py` war auf knapp 900 Zeilen gewachsen: Konfiguration, Lesen von `members`,
 Kopfzeilen, SMTP-Zustellung und Einstieg in einer Datei. Der Teil, der mit `MemberList` übereinstimmen
-muss (U-134, U-137), war darin nicht abgegrenzt. Wie wird das Skript aufgeteilt, ohne dass sich an
-Installation und Aufruf durch Postfix etwas ändert?
+muss (U-134, U-137), war darin nicht abgegrenzt. Wie wird das Skript aufgeteilt, ohne dass Installation
+und Aufruf durch Postfix unsicherer werden?
 
 **Entscheidung:** Fünf Module nebeneinander in `maillist/`, ohne Paketverzeichnis. Der Code ist
-unverändert verschoben, das Verhalten bleibt gleich.
+unverändert verschoben; neu ist nur, wie `maillist.py` seine Module findet und was es tut, wenn das
+misslingt.
 
 | Modul | Inhalt |
 |---|---|
 | `maillist.py` | Einstieg: Argumente, Datenbankabfrage der Liste, `deliver`, `--check`, `main` |
-| `config.py` | Einstellungen, `load_settings`, Logging, Pfadkonstanten und die `sysexits`-Codes |
-| `members.py` | Lesen von `members` — das Gegenstück zu `MemberList`, geprüft mit denselben Golden-Dateien |
-| `headers.py` | Schleifen- und Bounce-Erkennung, Listenköpfe, `sanitize_text` |
-| `delivery.py` | SMTP-Zustellung und die Berichte an die Admins |
+| `maillist_config.py` | Einstellungen, `load_settings`, Logging, Pfadkonstanten und die `sysexits`-Codes |
+| `maillist_members.py` | Lesen von `members` — das Gegenstück zu `MemberList`, geprüft mit denselben Golden-Dateien |
+| `maillist_headers.py` | Schleifen- und Bounce-Erkennung, Listenköpfe, `sanitize_text` |
+| `maillist_delivery.py` | SMTP-Zustellung und die Berichte an die Admins |
 
-- **Abhängigkeiten nur in eine Richtung:** `config` importiert keines der anderen Module, `headers`
-  nur `config`, `delivery` `config` und `headers`, `maillist` alle. Die Exit-Codes stehen deshalb in
-  `config` und nicht im Einstieg: `delivery` gibt sie auch zurück, und ein Import aus `maillist.py`
-  lüde das als Skript gestartete Programm ein zweites Mal.
+- **Namen mit Präfix:** `config` oder `headers` sind allgemein genug, um mit einem Modul gleichen
+  Namens anderswo auf `sys.path` zusammenzustoßen. `maillist_` macht die Namen eindeutig; keiner ist
+  ein Modul der Standardbibliothek.
+- **Abhängigkeiten nur in eine Richtung:** `maillist_config` importiert keines der anderen Module,
+  `maillist_headers` nur `maillist_config`, `maillist_delivery` `maillist_config` und
+  `maillist_headers`, `maillist` alle. Die Exit-Codes stehen deshalb in `maillist_config` und nicht im
+  Einstieg: `maillist_delivery` gibt sie auch zurück, und ein Import aus `maillist.py` lüde das als
+  Skript gestartete Programm ein zweites Mal.
 - **Importpfad:** `maillist.py` setzt sein eigenes, aufgelöstes Verzeichnis an die erste Stelle von
-  `sys.path`, bevor es die Module importiert. Postfix startet das Skript ohne `-I`, dann steht das
-  Verzeichnis dort ohnehin; der Installer startet `--check` mit `-I`, und `-I` lässt es weg. So finden
-  beide Aufrufe dieselben Dateien, und weil der `current`-Symlink aufgelöst wird, kommen die Module aus
-  demselben Release-Verzeichnis wie `maillist.py`.
+  `sys.path`, bevor es irgendetwas außer `os` und `sys` importiert. Python setzt das Verzeichnis des
+  Skripts nur ohne `-I` selbst dorthin; die `master.cf`-Zeile und `--check` des Installers starten mit
+  `-I`, und `-I` lässt es weg.
+- **Fast immer ein Release:** Weil der `current`-Symlink aufgelöst wird, kommen die Module fast immer
+  aus demselben Release-Verzeichnis wie `maillist.py`. Es bleibt ein kurzes Fenster: Schaltet ein
+  Update `current` um, nachdem Python `maillist.py` geöffnet hat und bevor das Skript den Pfad
+  auflöst, kommen die Module aus dem neuen Release.
+- **Unbrauchbare Installation:** Scheitert ein Import — ein fehlendes Modul, eine fehlende
+  `mysql.connector`, oder eine Mischung aus zwei Releases, die nicht zusammenpasst —, schreibt das
+  Skript nur die feste Zeile `maillist: installation unusable` nach stderr und endet mit `75`
+  (`EX_TEMPFAIL`). Postfix behält die Mail und versucht es erneut, statt dem Absender einen Traceback
+  zurückzuschicken. Die `75` steht dort als Zahl, weil gerade `maillist_config` das Modul sein kann,
+  das fehlt.
+- **Postfix startet mit `-I`:** Die `master.cf`-Zeile lautet
+  `<python> -I <prefix>/current/maillist.py -- ${user}`. So wirken weder Umgebungsvariablen noch ein
+  Benutzer-`site-packages` des Listenbenutzers auf das Skript, und Postfix startet es genauso wie die
+  Prüfung des Installers.
 - **Installer und Release:** Der Installer führt die fünf Dateien als `CODE_FILES`. Jede wird
   kopiert, mit einem bestehenden Release verglichen und bekommt Mode `0644`; die Kennung eines
   `dev`-Releases ist ein Hash über alle fünf. Eine Quelle oder ein Archiv ohne eines der Module wird
-  abgelehnt. `bin/package-release` packt alle in `maillist-<tag>.tar.gz`, damit deckt die Prüfsumme
-  in `SHA256SUMS` sie mit ab.
+  abgelehnt. Abhängigkeitsprüfung und `--check` laufen zusätzlich mit `-B`, damit eine Prüfung als
+  Root kein `__pycache__` im Release-Verzeichnis hinterlässt. `bin/package-release` packt alle Module
+  in `maillist-<tag>.tar.gz`, damit deckt die Prüfsumme in `SHA256SUMS` sie mit ab.
 
 **Warum flach:** Ein Paketverzeichnis bräuchte einen Starter, der das Paket importiert, oder
-`python3 -m`, und damit eine andere `argv`-Zeile in `master.cf`. Flache Module lassen den Aufruf
-`python3 <prefix>/current/maillist.py -- ${user}` unverändert, und der Installer behandelt sie wie
-die übrigen Release-Dateien. Keiner der Modulnamen ist ein Modul der Standardbibliothek.
+`python3 -m`, und damit eine andere Form der `argv`-Zeile. Flache Module lassen das Skript eine
+einzelne Datei sein, die Postfix aufruft, und der Installer behandelt sie wie die übrigen
+Release-Dateien.
 
 **Warum der Pfad im Skript gesetzt wird statt `--check` ohne `-I` zu starten:** `-I` gehört zur
-Härtung des Installers (Umgebung und Arbeitsverzeichnis des Aufrufers wirken nicht). Setzt das Skript
-seinen Pfad selbst, bleibt diese Härtung, und das Skript läuft unabhängig davon, mit welchen Schaltern
-der Interpreter gestartet wird, auch mit `-I`, `-P` oder `PYTHONSAFEPATH`.
+Härtung (Umgebung und Arbeitsverzeichnis des Aufrufers wirken nicht). Setzt das Skript seinen Pfad
+selbst, bleibt diese Härtung, beim Installer wie in `master.cf`, und das Skript läuft unabhängig davon,
+mit welchen Schaltern der Interpreter gestartet wird — auch eine ältere `master.cf`-Zeile ohne `-I`
+funktioniert weiter.
 
-**Alternative:** `--check` ohne `-I`, aber mit `cwd="/"` und leerer Umgebung — das bildet den
-Postfix-Aufruf genau nach, gibt aber die Härtung auf und ließe ein Skript, das nur ohne `-I` läuft,
-unentdeckt.
+**Alternative:** `--check` ohne `-I`, aber mit `cwd="/"` und leerer Umgebung. Das gibt die Härtung
+auf und ließe ein Skript, das nur ohne `-I` läuft, unentdeckt.
 
 **Korrekturkosten:** Gering. Die Module lassen sich wieder zu einer Datei zusammenführen; Installer
 und Paketierung lesen die Liste aus je einer Konstante.

@@ -29,9 +29,10 @@ Lade den Installer in ein frisches Verzeichnis und starte ihn mit `python3 -I`. 
 Verzeichnis des Skripts vorne in `sys.path`; ein dort abgelegtes Modul (etwa in einem gemeinsam
 genutzten Download-Verzeichnis) würde als Root importiert. Fehlt `-I`, gibt der Installer eine Warnung
 aus, arbeitet aber weiter. Seine eigenen Python-Aufrufe (Abhängigkeitsprüfung, `--check`) startet er
-immer mit `-I` und im Verzeichnis `/`. `maillist.py` findet seine Module (`config.py`, `delivery.py`,
-`headers.py`, `members.py`) trotzdem: Es importiert sie aus dem Release-Verzeichnis, in dem es selbst
-liegt (U-147).
+immer mit `-I` und `-B` und im Verzeichnis `/`; `-B` verhindert, dass die Prüfung als Root Bytecode
+ins Release-Verzeichnis schreibt. `maillist.py` findet seine Module (`maillist_config.py`,
+`maillist_delivery.py`, `maillist_headers.py`, `maillist_members.py`) trotzdem: Es importiert sie aus
+dem Release-Verzeichnis, in dem es selbst liegt (U-147).
 
 Der erste Lauf legt den Listenbenutzer (`maillist`, ein Systembenutzer ohne Login) und die
 Konfigurationsdatei aus der Vorlage an und endet mit Exit-Code 2. Trage die Zugangsdaten und die
@@ -48,8 +49,9 @@ gegen ein manipuliertes Release. Vertrauensanker ist GitHub, also das Repository
 ```text
 /opt/mailadmin-maillist/
   .mailadmin-maillist     Markierung: dieses Verzeichnis gehört dem Installer
-  releases/<id>/          je Release ein Verzeichnis: maillist.py, config.py, delivery.py,
-                          headers.py, members.py, maillist.ini.example, VERSION, README.md
+  releases/<id>/          je Release ein Verzeichnis: maillist.py, maillist_config.py,
+                          maillist_delivery.py, maillist_headers.py, maillist_members.py,
+                          maillist.ini.example, VERSION, README.md
   current  -> releases/<id>
   previous -> releases/<id>
 ```
@@ -98,14 +100,21 @@ Der Installer gibt die `master.cf`-Zeile am Ende aus. Sie sieht so aus:
 
 ```text
 maillist  unix  -  n  n  -  -  pipe
-  flags=Rq user=maillist argv=/usr/bin/python3 /opt/mailadmin-maillist/current/maillist.py -- ${user}
+  flags=Rq user=maillist argv=/usr/bin/python3 -I /opt/mailadmin-maillist/current/maillist.py -- ${user}
 ```
+
+Postfix startet das Skript mit `python3 -I`, genau wie der Installer seine Prüfung: Umgebungsvariablen
+wie `PYTHONPATH` und ein Benutzer-`site-packages` des Listenbenutzers wirken dann nicht. Seine Module
+findet das Skript trotzdem, weil es sein eigenes Release-Verzeichnis selbst in den Suchpfad setzt. Ist
+die Installation unvollständig, endet es mit `75` und der Zeile `maillist: installation unusable`;
+Postfix stellt die Mail zurück und versucht es erneut. Eine ältere Zeile ohne `-I` funktioniert weiter,
+ist aber weniger abgeschottet.
 
 Weicht `--config` vom Standard ab, setzt der Installer die Konfiguration über `env` in die Zeile, weil
 `pipe(8)` keine Umgebung weitergibt:
 
 ```text
-  flags=Rq user=maillist argv=/usr/bin/env MAILLIST_CONFIG=/pfad/maillist.ini /usr/bin/python3 /opt/mailadmin-maillist/current/maillist.py -- ${user}
+  flags=Rq user=maillist argv=/usr/bin/env MAILLIST_CONFIG=/pfad/maillist.ini /usr/bin/python3 -I /opt/mailadmin-maillist/current/maillist.py -- ${user}
 ```
 
 `main.cf`:
@@ -221,7 +230,7 @@ Die Schritte gehören zur Umstellung in der Spezifikation. Hier stehen die, die 
      an der Form der Aliaszeile. Trägt sie je einen Listenschlüssel als Argument, ist der Weg wieder
      offen. Erst das Entfernen der Einträge macht die Adressen für Postfix unbekannt.
 
-Prüfe nach jedem Schritt mit `python3 /opt/mailadmin-maillist/current/maillist.py --check` (als
+Prüfe nach jedem Schritt mit `python3 -I /opt/mailadmin-maillist/current/maillist.py --check` (als
 Listenbenutzer, mit gesetztem `MAILLIST_CONFIG`) und mit einer Testmail an eine Liste.
 
 ## 7. Umstellung der Listeneinträge in mailadmin (Schritt 4)

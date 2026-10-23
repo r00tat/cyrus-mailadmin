@@ -169,7 +169,7 @@ final readonly class MemberList
      * The address part of `Name <address>`; entries the delivery script would
      * not deliver to as written left out (U-137); duplicates (compared
      * case-insensitively, first spelling wins) left out. Gives the same result
-     * as `normalize_recipients()` in `maillist/members.py` for every case in
+     * as `normalize_recipients()` in `maillist/maillist_members.py` for every case in
      * `tests/Fixtures/MemberFormat`, which keep the two in step.
      *
      * For every entry this class accepts the two agree by construction: the
@@ -374,7 +374,7 @@ final readonly class MemberList
     }
 
     /**
-     * `_is_plain_address()` of `maillist/members.py`, translated: ASCII without blanks,
+     * `_is_plain_address()` of `maillist/maillist_members.py`, translated: ASCII without blanks,
      * control characters or `<>"(),;:\[]`, exactly one `@` with something on
      * both sides, and a domain with a dot that neither starts nor ends with one
      * nor holds two in a row. Control characters are refused here although the
