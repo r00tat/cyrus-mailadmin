@@ -341,7 +341,8 @@ def test_user_is_created_and_files_are_chowned(env) -> None:
     runner = FakeRunner()
     assert run(env, "--source", str(src), "--user", "listuser", user=True, runner=runner) == install.EXIT_CONFIG
     assert ("useradd", "listuser") in runner.calls
-    assert ("chown", str(env["config"].parent), "root", "listuser") in runner.calls
+    parent_ino = env["config"].parent.stat().st_ino
+    assert ("fchown", parent_ino, "root", "listuser") in runner.calls
     assert ("fchown", env["config"].stat().st_ino, "root", "listuser") in runner.calls
     fill_config(env)
     run(env, "--source", str(src), "--user", "listuser", user=True, runner=runner)
@@ -912,3 +913,110 @@ def test_dry_run_with_unreadable_config_notes_the_log_path_may_be_the_default(en
     finally:
         env["config"].chmod(0o640)
     assert "note" in out and "default" in out
+
+
+# --- second review round ----------------------------------------------------------------
+
+
+def test_run_check_resolves_runuser_to_an_absolute_path(monkeypatch, tmp_path) -> None:
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return install.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    searched = {}
+
+    def fake_which(name, path=None):
+        searched["path"] = path
+        return f"/usr/sbin/{name}" if name == "runuser" else None
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+    monkeypatch.setattr(install.shutil, "which", fake_which)
+    runner = install.Runner()
+    monkeypatch.setattr(runner, "is_root", lambda: True)
+    ok, _ = runner.run_check("/usr/bin/python3", tmp_path / "m.py", tmp_path / "c.ini", "listuser")
+    assert ok
+    assert seen["cmd"][0] == "/usr/sbin/runuser"
+    assert os.path.isabs(seen["cmd"][0])
+    assert "/usr/sbin" in searched["path"]
+
+
+def test_run_check_falls_back_to_setpriv_and_fails_clearly_without_either(monkeypatch, tmp_path) -> None:
+    import pwd
+
+    monkeypatch.setattr(
+        install.shutil, "which", lambda name, path=None: "/usr/bin/setpriv" if name == "setpriv" else None
+    )
+    monkeypatch.setattr(
+        install.subprocess,
+        "run",
+        lambda cmd, **kw: seen.update(cmd=cmd) or install.subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
+    )
+    seen = {}
+    monkeypatch.setattr(pwd, "getpwnam", lambda n: pwd.getpwuid(os.getuid()))
+    runner = install.Runner()
+    monkeypatch.setattr(runner, "is_root", lambda: True)
+    runner.run_check("/usr/bin/python3", tmp_path / "m.py", tmp_path / "c.ini", "listuser")
+    assert seen["cmd"][0] == "/usr/bin/setpriv"
+    monkeypatch.setattr(install.shutil, "which", lambda name, path=None: None)
+    with pytest.raises(install.InstallError, match="runuser"):
+        runner.run_check("/usr/bin/python3", tmp_path / "m.py", tmp_path / "c.ini", "listuser")
+
+
+@pytest.mark.parametrize("which", ["config", "log", "prefix"])
+def test_new_directories_under_a_writable_ancestor_are_refused(env, which) -> None:
+    open_dir = env["tmp"] / "open"
+    open_dir.mkdir()
+    open_dir.chmod(0o777)
+    src = configured(env)
+    if which == "config":
+        env["config"].unlink()
+        env["config"] = open_dir / "new" / "maillist.ini"
+    elif which == "log":
+        text = env["config"].read_text()
+        env["config"].write_text(re.sub(r"(?m)^file = .*$", f"file = {open_dir}/new/maillist.log", text))
+    else:
+        env["prefix"] = open_dir / "new" / "prefix"
+    try:
+        assert run(env, "--source", str(src)) == install.EXIT_FAIL
+        assert not (open_dir / "new").exists()
+    finally:
+        open_dir.chmod(0o755)
+
+
+def test_created_directories_get_their_mode_through_a_descriptor(env) -> None:
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src)) == install.EXIT_CONFIG
+    assert mode(env["config"].parent) == 0o750
+    fill_config(env)
+    assert run(env, "--source", str(src)) == 0
+    assert mode(env["log"].parent) == 0o755
+    assert mode(env["prefix"]) == 0o755 and mode(env["prefix"] / "releases") == 0o755
+
+
+@pytest.mark.parametrize("flag", ["--prefix", "--config", "--python"])
+def test_paths_with_dollar_sign_are_refused(env, flag, capsys) -> None:
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src), flag, str(env["tmp"] / "a$b" / "x")) == install.EXIT_FAIL
+    assert "$" in capsys.readouterr().err
+
+
+def test_failed_config_write_leaves_no_half_written_file(env) -> None:
+    class Failing(FakeRunner):
+        def fchown(self, fd, user, group):
+            raise OSError("boom")
+
+    src = make_source(env["tmp"], "1.0.0")
+    runner = Failing()
+    assert run(env, "--source", str(src), "--user", "listuser", user=True, runner=runner) == install.EXIT_FAIL
+    assert not env["config"].exists()
+
+
+def test_checksum_file_naming_the_archive_twice_is_refused(env) -> None:
+    archive = build_archive("v1.2.3")
+    name = "maillist-v1.2.3.tar.gz"
+    good = hashlib.sha256(archive).hexdigest()
+    sums = f"{'0' * 64}  {name}\n{good}  {name}\n"
+    fetch, _ = fake_network("v1.2.3", archive, sums=sums)
+    assert run(env, "--release", "v1.2.3", fetch=fetch) == install.EXIT_FAIL

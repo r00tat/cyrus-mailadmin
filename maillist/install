@@ -54,10 +54,11 @@ DEFAULT_REPO = "r00tat/cyrus-mailadmin"
 MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 MAX_SUMS_BYTES = 1024 * 1024
 CHECK_TIMEOUT = 60
+TOOL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_SPACE_RE = re.compile(r"\s")
+_BAD_PATH_RE = re.compile(r"[\s$]")
 
 
 class InstallError(Exception):
@@ -108,13 +109,18 @@ class Runner:
     def run_check(self, python: str, script: Path, config: Path, user: str | None) -> tuple[bool, str]:
         cmd = [python, str(script), "--check"]
         if user and self.is_root():
-            if shutil.which("runuser"):
-                cmd = ["runuser", "-u", user, "--", *cmd]
-            else:
+            # The check itself gets a minimal PATH, so the privilege-dropping tool is resolved here.
+            runuser = shutil.which("runuser", path=TOOL_PATH)
+            setpriv = None if runuser else shutil.which("setpriv", path=TOOL_PATH)
+            if runuser:
+                cmd = [runuser, "-u", user, "--", *cmd]
+            elif setpriv:
                 import pwd
 
                 info = pwd.getpwnam(user)
-                cmd = ["setpriv", f"--reuid={info.pw_uid}", f"--regid={info.pw_gid}", "--init-groups", *cmd]
+                cmd = [setpriv, f"--reuid={info.pw_uid}", f"--regid={info.pw_gid}", "--init-groups", *cmd]
+            else:
+                raise InstallError("neither runuser nor setpriv found; cannot run --check as the list user")
         # Minimal environment: the check must behave like Postfix's pipe(8), which passes nothing along.
         env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "MAILLIST_CONFIG": str(config)}
         try:
@@ -198,6 +204,24 @@ class Installer:
         if info.st_mode & 0o022:
             raise InstallError(f"{what} {path} is writable by group or others; refusing to use it")
 
+    def make_dir(self, path: Path, mode: int, owner: tuple[str, str] | None = None) -> None:
+        """Create a missing directory (and parents) below a trusted ancestor; set mode and owner on the fd."""
+        ancestor = path
+        while not ancestor.exists():
+            ancestor = ancestor.parent
+        self.require_trusted_dir(ancestor, "parent directory")
+        path.mkdir(parents=True)
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as exc:
+            raise InstallError(f"cannot open new directory {path} safely: {exc.strerror}") from exc
+        try:
+            os.fchmod(fd, mode)
+            if owner:
+                self.runner.fchown(fd, *owner)
+        finally:
+            os.close(fd)
+
     def check_prefix_trust(self) -> None:
         if self.prefix.is_dir():
             self.require_trusted_dir(self.prefix, "prefix")
@@ -239,8 +263,8 @@ class Installer:
         for flag, value in names.items():
             if not os.path.isabs(value):
                 raise InstallError(f"{flag} must be an absolute path")
-            if _SPACE_RE.search(value):
-                raise InstallError(f"{flag} must not contain whitespace (it ends up in master.cf)")
+            if _BAD_PATH_RE.search(value):
+                raise InstallError(f"{flag} must not contain whitespace or '$' (it ends up in master.cf)")
 
     def preflight(self) -> None:
         self.validate_paths(install=True)
@@ -290,13 +314,16 @@ class Installer:
         sums_raw = self.fetch(f"{base}/SHA256SUMS")
         if len(sums_raw) > MAX_SUMS_BYTES:
             raise InstallError("SHA256SUMS is too large")
-        expected = None
+        entries = []
         for line in sums_raw.decode("utf-8", "replace").splitlines():
             parts = line.split()
             if len(parts) == 2 and parts[1].lstrip("*") == name:
-                expected = parts[0].lower()
-        if expected is None:
+                entries.append(parts[0].lower())
+        if not entries:
             raise InstallError(f"SHA256SUMS has no entry for {name}")
+        if len(entries) > 1:
+            raise InstallError(f"SHA256SUMS names {name} more than once")
+        expected = entries[0]
         if hashlib.sha256(archive).hexdigest() != expected:
             raise InstallError(f"checksum mismatch for {name}")
         self.say("checksum ok")
@@ -341,11 +368,10 @@ class Installer:
             return target, True
         releases = self.prefix / "releases"
         prefix_new, releases_new = not self.prefix.exists(), not releases.exists()
-        releases.mkdir(parents=True, exist_ok=True)
         if prefix_new:
-            os.chmod(self.prefix, 0o755)  # noqa: S103 - directories must stay traversable
+            self.make_dir(self.prefix, 0o755)
         if releases_new:
-            os.chmod(releases, 0o755)  # noqa: S103
+            self.make_dir(releases, 0o755)
         marker = self.prefix / MARKER
         if not marker.exists():
             marker.write_text("Managed by maillist/install. Do not put other files here.\n")
@@ -405,10 +431,7 @@ class Installer:
         if self.dry:
             return True
         if parent_new:
-            parent.mkdir(parents=True)
-            os.chmod(parent, 0o750)  # noqa: S103 - group read for the list user
-            if self.user:
-                self.runner.chown(parent, "root", self.user)
+            self.make_dir(parent, 0o750, ("root", self.user) if self.user else None)  # noqa: S103
         fd = open_regular(self.config, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
         try:
             with os.fdopen(os.dup(fd), "wb") as handle:
@@ -416,6 +439,9 @@ class Installer:
             os.fchmod(fd, 0o640)
             if self.user:
                 self.runner.fchown(fd, "root", self.user)
+        except BaseException:
+            self.config.unlink(missing_ok=True)  # never leave a half-written configuration behind
+            raise
         finally:
             os.close(fd)
         return True
@@ -445,8 +471,7 @@ class Installer:
         if self.dry:
             return
         if parent_new:
-            parent.mkdir(parents=True)
-            os.chmod(parent, 0o755)  # noqa: S103 - created by us: root-owned and traversable
+            self.make_dir(parent, 0o755)
         fd = open_regular(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
         try:
             os.fchmod(fd, 0o640)
