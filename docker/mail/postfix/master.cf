@@ -45,3 +45,10 @@ lmtp       unix  -       -       n       -       -       lmtp
 anvil      unix  -       -       n       -       1       anvil
 scache     unix  -       -       n       -       1       scache
 postlog    unix-dgram n  -       n       -       1       postlogd
+
+# Mailing lists (docs/deployment/maillist.md, section 3). The same line as in
+# production except for the command: a stub that logs the list key and the
+# message instead of maillist.py. `${user}`, not `${mailbox}`, so that the
+# extension of `team+x@…` does not become part of the key.
+maillist   unix  -       n       n       -       -       pipe
+    flags=Rq user=nobody argv=/usr/local/bin/maillist-stub.sh -- ${user}

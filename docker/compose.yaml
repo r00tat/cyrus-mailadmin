@@ -83,6 +83,9 @@ services:
       - cyrus-spool:/var/spool/cyrus
       - cyrus-config:/var/lib/cyrus
       - cyrus-sieve:/var/spool/sieve
+      # What the maillist stub records (docker/mail/maillist-stub.sh). The app
+      # container reads it to see which list key Postfix handed over.
+      - maillist-stub:/var/log/maillist-stub
     networks:
       default:
         aliases:
@@ -168,11 +171,13 @@ services:
       MAILADMIN_TEST_IMAP_ADMIN_USER: cyrus
       MAILADMIN_TEST_IMAP_ADMIN_PASSWORD: testenv-cyrus-admin-pw
       MAILADMIN_TEST_WEB_URL: http://web
+      MAILADMIN_TEST_MAILLIST_STUB_LOG: /var/log/maillist-stub/calls.log
     volumes:
       # The whole project directory, because U-25 deploys it that way: the web
       # server serves out of the project root and .htaccess does the rest.
       - ../:/var/www/mailadmin
       - ./certs/out/ca.crt:/usr/local/share/ca-certificates/mailadmin-testenv-ca.crt:ro
+      - maillist-stub:/var/log/maillist-stub:ro
 
   # ---------------------------------------------------------------------------
   # Apache in front of PHP-FPM, configured the way U-25 describes: DocumentRoot
@@ -195,3 +200,4 @@ volumes:
   cyrus-spool:
   cyrus-config:
   cyrus-sieve:
+  maillist-stub:

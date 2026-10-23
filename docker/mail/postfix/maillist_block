@@ -1,0 +1,4 @@
+# Nobody addresses the list pseudo-domain directly: that would reach a list
+# past mailadmin's checks. Checked at RCPT TO, before `virtual` rewrites list
+# addresses onto this domain, so list mail itself still passes.
+maillist.invalid    REJECT

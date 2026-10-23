@@ -69,6 +69,10 @@ COPY postfix/mysql-mydestination.cf.tmpl \
      postfix/mysql-sender.cf.tmpl \
      /etc/postfix/templates/
 COPY postfix/sasl/smtpd.conf /etc/postfix/sasl/smtpd.conf
+# Mailing lists: the pseudo-domain to the pipe transport, and the refusal of
+# direct mail to it. Neither carries a credential, so both are compiled here.
+COPY postfix/transport postfix/maillist_block /etc/postfix/
+RUN postmap /etc/postfix/transport /etc/postfix/maillist_block
 
 # --- PAM / saslauthd --------------------------------------------------------
 # One template, installed under every service name saslauthd can be asked for.
@@ -79,9 +83,12 @@ COPY supervisord.conf /etc/supervisor/supervisord.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY create-mailboxes.pl /usr/local/bin/create-mailboxes.pl
+# The stand-in for maillist.py that the `maillist` transport calls.
+COPY maillist-stub.sh /usr/local/bin/maillist-stub.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \
              /usr/local/bin/healthcheck.sh \
-             /usr/local/bin/create-mailboxes.pl
+             /usr/local/bin/create-mailboxes.pl \
+             /usr/local/bin/maillist-stub.sh
 
 EXPOSE 25 143 587 993 4190
 

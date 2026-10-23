@@ -89,6 +89,10 @@ if [ ! -f /var/lib/cyrus/mailboxes.db ]; then
         log "WARNING: cyrus mkimap failed; ctl_cyrusdb -r will have to do it"
 fi
 
+# The log of the maillist stub. A volume that comes up owned by root; the pipe
+# transport runs the stub as `nobody`, and the app container reads the log.
+install -d -m 0755 -o nobody -g nogroup /var/log/maillist-stub
+
 # saslauthd's socket directory. Nothing is chrooted (see master.cf), so this is
 # the one place Cyrus and Postfix both look.
 install -d -m 0755 /run/saslauthd
