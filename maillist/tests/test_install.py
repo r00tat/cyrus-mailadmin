@@ -1020,3 +1020,42 @@ def test_checksum_file_naming_the_archive_twice_is_refused(env) -> None:
     sums = f"{'0' * 64}  {name}\n{good}  {name}\n"
     fetch, _ = fake_network("v1.2.3", archive, sums=sums)
     assert run(env, "--release", "v1.2.3", fetch=fetch) == install.EXIT_FAIL
+
+
+# 5. Isolated interpreter
+
+
+def test_dependency_check_runs_isolated_from_root_directory(monkeypatch) -> None:
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(cmd=cmd, **kwargs)
+        return install.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+    assert install.Runner().check_dependency("/usr/bin/python3")
+    assert seen["cmd"] == ["/usr/bin/python3", "-I", "-c", "import mysql.connector"]
+    assert seen["cwd"] == "/"
+
+
+def test_check_runs_isolated_from_root_directory(monkeypatch, tmp_path) -> None:
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(cmd=cmd, **kwargs)
+        return install.subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+    install.Runner().run_check("/usr/bin/python3", tmp_path / "maillist.py", tmp_path / "c.ini", None)
+    assert seen["cmd"] == ["/usr/bin/python3", "-I", str(tmp_path / "maillist.py"), "--check"]
+    assert seen["cwd"] == "/"
+
+
+def test_isolation_warning_only_without_isolated_flag(monkeypatch) -> None:
+    class Flags:
+        isolated = 0
+
+    monkeypatch.setattr(install.sys, "flags", Flags)
+    assert "python3 -I" in install.isolation_warning()
+    Flags.isolated = 1
+    assert install.isolation_warning() is None

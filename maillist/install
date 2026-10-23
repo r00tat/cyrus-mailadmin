@@ -101,13 +101,16 @@ class Runner:
         os.fchown(fd, pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid)
 
     def check_dependency(self, python: str) -> bool:
+        # -I and cwd="/": without them "-c" puts the caller's working directory first on sys.path, and a
+        # planted mysql/ there would run as root.
         result = subprocess.run(  # noqa: S603
-            [python, "-c", "import mysql.connector"], capture_output=True, text=True, check=False
+            [python, "-I", "-c", "import mysql.connector"], capture_output=True, text=True, check=False, cwd="/"
         )
         return result.returncode == 0
 
     def run_check(self, python: str, script: Path, config: Path, user: str | None) -> tuple[bool, str]:
-        cmd = [python, str(script), "--check"]
+        # -I and cwd="/" as in check_dependency: nothing from the caller's directory or environment is imported.
+        cmd = [python, "-I", str(script), "--check"]
         if user and self.is_root():
             # The check itself gets a minimal PATH, so the privilege-dropping tool is resolved here.
             runuser = shutil.which("runuser", path=TOOL_PATH)
@@ -125,7 +128,7 @@ class Runner:
         env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "MAILLIST_CONFIG": str(config)}
         try:
             result = subprocess.run(  # noqa: S603
-                cmd, capture_output=True, text=True, env=env, timeout=CHECK_TIMEOUT, check=False
+                cmd, capture_output=True, text=True, env=env, timeout=CHECK_TIMEOUT, check=False, cwd="/"
             )
         except subprocess.TimeoutExpired:
             return False, f"--check timed out after {CHECK_TIMEOUT} seconds"
@@ -665,6 +668,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def isolation_warning() -> str | None:
+    """A warning when the installer itself was not started with ``python3 -I``.
+
+    Without -I the directory holding this script comes first on sys.path, so a module planted next to it
+    (for example in a shared download directory) would be imported as root. Only a warning: refusing would
+    break existing automation for no gain when the directory is trusted.
+    """
+    if sys.flags.isolated:
+        return None
+    return (
+        "install: warning: not started with 'python3 -I'; modules next to this script or in the current "
+        "directory could be imported. Run it from a fresh directory as 'sudo python3 -I install-maillist'."
+    )
+
+
 def main(
     argv: list[str] | None = None,
     runner: Runner | None = None,
@@ -688,4 +706,7 @@ def main(
 
 
 if __name__ == "__main__":
+    _warning = isolation_warning()
+    if _warning:
+        print(_warning, file=sys.stderr)
     sys.exit(main())
