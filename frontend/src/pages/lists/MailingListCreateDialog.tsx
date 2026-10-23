@@ -77,6 +77,7 @@ export function MailingListCreateDialog({ open, onClose }: { open: boolean; onCl
     setAddress('');
     setTag('');
     setMembers('');
+    setSentMembers('');
     setClientErrors({});
     create.reset();
   }

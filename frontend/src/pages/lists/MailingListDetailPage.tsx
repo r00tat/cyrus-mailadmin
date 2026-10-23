@@ -175,7 +175,10 @@ function MailingListDetail({
   const submit = (event: FormEvent): void => {
     event.preventDefault();
 
-    const missing = required({ 'body.name': name });
+    // A legacy row may have no name; it stays editable in its other fields,
+    // and the name is demanded only once there was one or it is being changed.
+    const nameRequired = list.name.trim() !== '' || name !== list.name;
+    const missing = nameRequired ? required({ 'body.name': name }) : {};
 
     setClientErrors(missing);
 
@@ -185,8 +188,10 @@ function MailingListDetail({
 
     const parsedMembers = parseMembers(members);
     const body: MailingListUpdateRequest = {
-      ...(name.trim() === list.name ? {} : { name: name.trim() }),
-      ...(tag.trim() === list.tag ? {} : { tag: tag.trim() }),
+      // Compared trimmed on both sides: whitespace around a legacy value is
+      // not a change and is left as stored.
+      ...(name.trim() === list.name.trim() ? {} : { name: name.trim() }),
+      ...(tag.trim() === list.tag.trim() ? {} : { tag: tag.trim() }),
       ...(sameMembers(parsedMembers, list.members) ? {} : { members: parsedMembers }),
     };
 

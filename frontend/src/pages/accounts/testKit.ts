@@ -37,6 +37,8 @@ export const DOMAIN_MASTER: Session = {
     'session.read',
     'session.write',
     'profile.password.write',
+    'profile.preferences.read',
+    'profile.preferences.write',
     'domain.read',
     'account.read',
     'account.write',

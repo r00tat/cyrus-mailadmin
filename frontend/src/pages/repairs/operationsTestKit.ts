@@ -36,6 +36,8 @@ export const DOMAIN_MASTER = {
   permissions: [
     ...BASE_PERMISSIONS,
     'profile.password.write',
+    'profile.preferences.read',
+    'profile.preferences.write',
     'domain.read',
     'account.read',
     'account.write',

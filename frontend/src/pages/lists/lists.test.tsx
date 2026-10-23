@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { jsonResponse, problemResponse } from '../../test/fetchDouble';
 import { DOMAIN_MASTER, PAGE_META, SUPERUSER, queryOf, signedIn } from '../domains/testkit';
@@ -143,7 +143,7 @@ describe('the mailing list list', () => {
 
   it('says when the address is taken', async () => {
     const { user } = signedIn(SUPERUSER, '/lists', listApi({
-      post: () => problemResponse(409, 'list.address_taken', { errors: { 'body.address': 'list.address_taken' } }),
+      post: () => problemResponse(409, 'list.address_taken'),
     }));
 
     await user.click(await screen.findByRole('button', { name: 'Liste anlegen' }));
@@ -231,6 +231,7 @@ describe('one mailing list', () => {
   });
 
   it('names the line of a stored member the database cannot store', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { user } = signedIn(SUPERUSER, '/lists/team%40example.test', listApi({
       patch: () => problemResponse(422, 'list.member_outside_latin1', { errors: { 'body.members.1': 'list.member_outside_latin1' } }),
     }));
@@ -239,6 +240,53 @@ describe('one mailing list', () => {
     await user.click(screen.getByRole('button', { name: 'Speichern' }));
 
     expect(await screen.findByText(/^Zeile 2: /)).toBeInTheDocument();
+    // The field reason is a text of the catalogue, not a missing key.
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('does not send whitespace-only differences of legacy values', async () => {
+    const legacy = { ...TEAM, name: ' Team ', tag: ' intern ' };
+    const { user, double } = signedIn(SUPERUSER, '/lists/team%40example.test', (call, path) =>
+      path === '/lists/team%40example.test'
+        ? call.method === 'GET'
+          ? jsonResponse(200, legacy, { ETag: '"l1"' })
+          : jsonResponse(200, legacy, { ETag: '"l2"' })
+        : undefined,
+    );
+
+    await user.type(await screen.findByRole('textbox', { name: 'Mitglieder' }), '{Enter}carla@example.test');
+    await user.click(screen.getByRole('button', { name: 'Speichern' }));
+
+    await waitFor(() => expect(double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'PATCH')).toHaveLength(1));
+
+    const [patch] = double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'PATCH');
+
+    expect(patch!.body).toEqual({ members: ['anna@example.test', 'bert@example.test', 'carla@example.test'] });
+  });
+
+  it('lets a legacy list without a name change its tag', async () => {
+    const legacy = { ...TEAM, name: '' };
+    const { user, double } = signedIn(SUPERUSER, '/lists/team%40example.test', (call, path) =>
+      path === '/lists/team%40example.test'
+        ? call.method === 'GET'
+          ? jsonResponse(200, legacy, { ETag: '"l1"' })
+          : jsonResponse(200, { ...legacy, tag: 'extern' }, { ETag: '"l2"' })
+        : undefined,
+    );
+
+    const tag = await screen.findByRole('textbox', { name: 'Kennzeichen' });
+
+    await user.clear(tag);
+    await user.type(tag, 'extern');
+    await user.click(screen.getByRole('button', { name: 'Speichern' }));
+
+    await waitFor(() => expect(double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'PATCH')).toHaveLength(1));
+
+    const [patch] = double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'PATCH');
+
+    expect(patch!.body).toEqual({ tag: 'extern' });
+    expect(screen.queryByText('Pflichtangabe.')).toBeNull();
   });
 
   it('sends only what changed — members untouched stay out of the request', async () => {
