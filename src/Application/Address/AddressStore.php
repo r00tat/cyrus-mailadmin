@@ -122,6 +122,18 @@ interface AddressStore
     public function remove(VirtualRow $row): bool;
 
     /**
+     * Set `dest` and `username` of one row with exactly these four fields —
+     * one statement, so that Postfix never sees the row half-changed or gone.
+     * `false` when there was none.
+     *
+     * Only the list delivery changeover uses it (spec 6, step 4); A3 replaces
+     * a row by removing and inserting it, under its own set-back rules.
+     *
+     * @throws PersistenceError
+     */
+    public function rewrite(VirtualRow $row, string $dest, string $username): bool;
+
+    /**
      * How many rows have exactly these four fields.
      *
      * @throws PersistenceError

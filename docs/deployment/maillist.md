@@ -174,14 +174,88 @@ Die Schritte gehören zur Umstellung in der Spezifikation. Hier stehen die, die 
    Konfigurationsdatei; das früher im Quelltext stehende Passwort ist zu rotieren.
 2. **Transport einrichten** (Schritt 2). `master.cf`, `transport`, Recipient-Limit und die Sperre aus
    Abschnitt 3. Die alte Aliasdatei bleibt, beide Wege sind aktiv.
-3. **Rückfallebene abschalten** (Schritt 5). Sobald alle Listen über den Transport laufen und
+3. **Listeneinträge umstellen** (Schritt 4). Das erledigt mailadmin, siehe Abschnitt 7.
+4. **Rückfallebene abschalten** (Schritt 5). Sobald alle Listen über den Transport laufen und
    `MAILADMIN_LIST_DELIVERY=transport` gesetzt ist, setze `delivered_to_fallback = no` im Abschnitt `[list]`
    der Konfiguration. Ein Aufruf ohne Argument endet dann mit `64`.
 
 Prüfe nach jedem Schritt mit `python3 /opt/mailadmin-maillist/current/maillist.py --check` (als
 Listenbenutzer, mit gesetztem `MAILLIST_CONFIG`) und mit einer Testmail an eine Liste.
 
-## 7. Logdatei rotieren
+## 7. Umstellung der Listeneinträge in mailadmin (Schritt 4)
+
+Bis hierher zeigen die `virtual`-Einträge der Altlisten auf den Aliasweg:
+`dest = username = <schluessel>`, wobei `<schluessel>` die Listenadresse mit `.` statt `@` ist. Das
+Wartungskommando von mailadmin stellt sie auf den Transport um: `dest = <schluessel>@<Pseudodomain>`,
+`username` leer. Es läuft auf dem Webserver von mailadmin, mit dessen Konfiguration.
+
+Voraussetzungen:
+
+- Schritt 2 ist erledigt. Der Transport nimmt Mail an die Pseudodomain an und reicht sie an das Skript
+  weiter. Teste das vorher mit einer neu angelegten Liste, denn die bekommt schon den Transport-Eintrag.
+- `MAILADMIN_LIST_TRANSPORT_DOMAIN` trägt dieselbe Pseudodomain wie die `transport`-Datei.
+
+Ablauf:
+
+```bash
+# 1. Trockenlauf: zeigt pro Liste, was passieren würde, und schreibt nichts
+mailadmin migrate-list-delivery --dry-run
+
+# 2. Umstellen
+mailadmin migrate-list-delivery
+
+# 3. Kontrolle: ein zweiter Lauf meldet jede umgestellte Liste als „unchanged“
+mailadmin migrate-list-delivery --dry-run
+```
+
+Ohne den Wrapper aus `bin/install` lautet der Aufruf `php bin/migrate-list-delivery.php [--dry-run]
+[--revert]` im Installationsverzeichnis, mit geladener Umgebung. Im Checkout gibt es dafür auch
+`composer lists:migrate-delivery`.
+
+Das Kommando gibt eine Zeile pro Liste aus und am Ende die Summen:
+
+| Ergebnis | Bedeutung |
+|---|---|
+| `migrated` | Der Alteintrag zeigt jetzt auf den Transport. |
+| `reverted` | Der Transport-Eintrag hat wieder die Altform (nur mit `--revert`). |
+| `unchanged` | Der Eintrag hat schon die gewünschte Form. |
+| `no virtual entry` | Die Liste steht in `lists`, hat aber keinen `virtual`-Eintrag. Das Kommando legt keinen an; ohne Eintrag erreicht die Liste keine Mail. Lege ihn bei Bedarf an, indem du die Liste in mailadmin löschst und neu anlegst. |
+| `skipped: address contains '+'` | Die Listenadresse enthält das Trennzeichen für Adresserweiterungen. Über den Transport käme sie nicht an (Abschnitt 3), deshalb bleibt sie auf dem Aliasweg. Benenne die Liste vor Schritt 5 um (löschen und unter neuer Adresse anlegen). |
+| `skipped: virtual entry is not a list entry` | Unter der Listenadresse steht ein `virtual`-Eintrag, der weder Alt- noch Transportform hat, etwa ein gewöhnlicher Alias. Er bleibt unverändert. Kläre den Fall von Hand. |
+| `skipped: legacy and transport entries both present` | Die Liste hat beide Formen zugleich. Das Kommando ändert keine davon. |
+| `skipped: list key longer than …` | Nur bei `--revert`: Der Schlüssel passt nicht in `virtual.username` (50 Zeichen). Die Altform würde abgeschnitten. |
+| `failed: …` | Der Eintrag konnte nicht geschrieben werden. Das Kommando endet mit `1`, die Ursache steht im Log von mailadmin. Ein erneuter Lauf setzt dort fort. |
+
+Eigenschaften:
+
+- **Idempotent.** Ein zweiter Lauf ändert nichts. Nach einem Abbruch kann das Kommando einfach erneut
+  laufen.
+- **Nur `virtual`.** `lists` bleibt unverändert. Erkannt wird ein Listeneintrag nach denselben Regeln wie
+  in der Adressverwaltung: Die Altform zählt nur, wenn es zur Adresse eine Zeile in `lists` gibt. Die
+  gleich aussehende Adresszeile eines Kontos im Punkt-Schema bleibt deshalb unberührt.
+- **Eine Zeile nach der anderen**, jede mit einem einzigen `UPDATE` unter der Namensraumsperre, die auch
+  die Adressverwaltung nimmt. Postfix sieht einen Eintrag nie halb geändert oder fehlend.
+- **Revisionsprotokoll.** Jede geänderte Zeile bekommt einen Eintrag `list.delivery_migrate` bzw.
+  `list.delivery_revert` mit dem Zustand vorher und nachher. Als Akteur steht dort
+  `<system:migrate-list-delivery>` ohne Rolle. Kein Administrator kann so heißen.
+
+Exit-Codes: `0` alles erledigt (auch mit `skipped` und `no virtual entry`), `1` Konfigurations- oder
+Datenbankfehler oder mindestens ein `failed`, `64` falscher Aufruf.
+
+### Zurück
+
+```bash
+mailadmin migrate-list-delivery --revert --dry-run
+mailadmin migrate-list-delivery --revert
+```
+
+`--revert` stellt jeden Transport-Eintrag einer Liste wieder auf die Altform
+`dest = username = <schluessel>`. Das betrifft auch Listen, die mailadmin seit Schritt 3 neu angelegt
+hat. Damit sie danach zugestellt werden, muss der Aliasweg noch aktiv sein, also Schritt 5 darf noch
+nicht erfolgt oder muss zurückgenommen sein. Der nächste Lauf von Salt nimmt sie dann in die Aliasdatei
+auf.
+
+## 8. Logdatei rotieren
 
 Das Skript schreibt mit einem `WatchedFileHandler` und folgt einer rotierten Datei. Rotiere mit
 logrotate, entweder mit `copytruncate` oder mit `create 0640 maillist maillist`:

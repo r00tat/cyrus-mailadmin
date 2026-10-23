@@ -177,6 +177,14 @@ final class VirtualRepository extends Repository implements AddressStore
         ) > 0;
     }
 
+    public function rewrite(VirtualRow $row, string $dest, string $username): bool
+    {
+        return $this->connection->execute(
+            'UPDATE `virtual` SET dest = :new_dest, username = :new_username WHERE ' . self::EXACT . ' LIMIT 1',
+            ['new_dest' => $dest, 'new_username' => $username] + self::exactBindings($row),
+        ) > 0;
+    }
+
     public function count(VirtualRow $row): int
     {
         $count = $this->connection->selectValue(

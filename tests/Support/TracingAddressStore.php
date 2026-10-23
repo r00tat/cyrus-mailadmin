@@ -62,6 +62,13 @@ final readonly class TracingAddressStore implements AddressStore
         return $this->inner->remove($row);
     }
 
+    public function rewrite(VirtualRow $row, string $dest, string $username): bool
+    {
+        $this->trace->add('virtual.rewrite ' . $row->alias);
+
+        return $this->inner->rewrite($row, $dest, $username);
+    }
+
     public function count(VirtualRow $row): int
     {
         return $this->inner->count($row);

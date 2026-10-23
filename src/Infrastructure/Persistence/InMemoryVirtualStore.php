@@ -217,6 +217,20 @@ final class InMemoryVirtualStore implements AddressStore
         return false;
     }
 
+    public function rewrite(VirtualRow $row, string $dest, string $username): bool
+    {
+        foreach ($this->rows as $index => $candidate) {
+            if ($candidate->equals($row)) {
+                $this->rows[$index] = new VirtualRow($row->alias, $dest, $username, $row->status);
+                $this->operations[] = 'rewrite ' . $row->alias;
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function count(VirtualRow $row): int
     {
         if ($this->countFailure !== null) {
