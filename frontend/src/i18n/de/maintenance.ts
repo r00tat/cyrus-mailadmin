@@ -149,4 +149,16 @@ export const deMaintenance = {
   'maintenance.health.status.skipped': 'übersprungen',
   'maintenance.health.duration': '{{milliseconds}} ms',
   'maintenance.health.noCode': '—',
+  'maintenance.health.listDelivery.title': 'Listenzustellung',
+  'maintenance.health.listDelivery.mode': 'Zustellweg',
+  'maintenance.health.listDelivery.mode.alias': 'Aliasdatei (wartet auf den Konfigurationslauf)',
+  'maintenance.health.listDelivery.mode.transport': 'Pipe-Transport',
+  'maintenance.health.listDelivery.transportDomain': 'Transportdomain',
+  'maintenance.health.listDelivery.managed':
+    'Die Transportdomain {{domain}} ist zugleich als Domain angelegt. Postfix stellt Mail an sie dann '
+    + 'lokal zu, und der Listentransport erhält sie nie. Entferne die Domain oder wähle eine andere '
+    + 'Transportdomain.',
+  'maintenance.health.listDelivery.managedUnknown':
+    'Ob die Transportdomain zugleich als Domain angelegt ist, konnte nicht geprüft werden, weil die '
+    + 'Datenbank nicht antwortet.',
 } as const;

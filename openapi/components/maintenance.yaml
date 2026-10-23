@@ -272,6 +272,7 @@ components:
         - status
         - checked_at
         - checks
+        - list_delivery
       properties:
         status:
           type: string
@@ -285,6 +286,39 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HealthCheckDetails'
+        list_delivery:
+          $ref: '#/components/schemas/ListDeliverySettings'
+
+    ListDeliverySettings:
+      type: object
+      description: |
+        How list mail is delivered: the alias file a configuration run
+        rewrites, or the Postfix pipe transport. A setting, not a probe — it
+        does not change `status`.
+      required:
+        - mode
+        - transport_domain
+        - transport_domain_is_managed
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum:
+            - alias
+            - transport
+        transport_domain:
+          type: string
+          description: The pseudo-domain of the pipe transport.
+        transport_domain_is_managed:
+          type: boolean
+          nullable: true
+          description: |
+            `true` when the transport domain is also a row in `domain` — a
+            configuration error: Postfix would deliver that mail locally and
+            the transport would never see it. Creating or renaming a domain
+            refuses the name, so only legacy data or a direct database edit
+            gets here. `null` when the database could not be asked; the
+            `database` probe then says why.
 
     HealthCheckDetails:
       type: object

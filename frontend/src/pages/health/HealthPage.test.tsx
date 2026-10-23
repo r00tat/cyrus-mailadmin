@@ -15,6 +15,7 @@ const DEGRADED = {
     { component: 'imap', status: 'error', code: 'request.service_unavailable', duration_ms: 1500 },
     { component: 'managesieve', status: 'skipped', code: 'mailstore.something_new', duration_ms: 0 },
   ],
+  list_delivery: { mode: 'alias', transport_domain: 'maillist.invalid', transport_domain_is_managed: false },
 };
 
 const PATH = '/api/v1/maintenance/health';
@@ -57,6 +58,65 @@ describe('the health view', () => {
     );
 
     expect(await screen.findByText('Alle Prüfungen bestanden.')).toBeInTheDocument();
+  });
+
+  it('shows how list mail is delivered, without a warning while the transport domain is unmanaged', async () => {
+    renderSignedIn(SUPERUSER, '/maintenance/health', (_call, path) =>
+      path === PATH
+        ? jsonResponse(200, {
+            ...DEGRADED,
+            list_delivery: { mode: 'transport', transport_domain: 'maillist.invalid', transport_domain_is_managed: false },
+          })
+        : undefined,
+    );
+
+    const section = await screen.findByRole('region', { name: 'Listenzustellung' });
+
+    expect(within(section).getByText('Pipe-Transport')).toBeInTheDocument();
+    expect(within(section).getByText('maillist.invalid')).toBeInTheDocument();
+    expect(screen.queryByText(/ist zugleich als Domain angelegt/)).not.toBeInTheDocument();
+  });
+
+  it('names the alias file as the delivery path', async () => {
+    renderSignedIn(SUPERUSER, '/maintenance/health', (_call, path) =>
+      path === PATH ? jsonResponse(200, DEGRADED) : undefined,
+    );
+
+    const section = await screen.findByRole('region', { name: 'Listenzustellung' });
+
+    expect(within(section).getByText('Aliasdatei (wartet auf den Konfigurationslauf)')).toBeInTheDocument();
+  });
+
+  it('warns when the transport domain is also a managed domain', async () => {
+    renderSignedIn(SUPERUSER, '/maintenance/health', (_call, path) =>
+      path === PATH
+        ? jsonResponse(200, {
+            ...DEGRADED,
+            list_delivery: { mode: 'transport', transport_domain: 'maillist.invalid', transport_domain_is_managed: true },
+          })
+        : undefined,
+    );
+
+    const section = await screen.findByRole('region', { name: 'Listenzustellung' });
+
+    expect(within(section).getByRole('alert')).toHaveTextContent(
+      'Die Transportdomain maillist.invalid ist zugleich als Domain angelegt.',
+    );
+  });
+
+  it('says when the database could not tell whether the transport domain is managed', async () => {
+    renderSignedIn(SUPERUSER, '/maintenance/health', (_call, path) =>
+      path === PATH
+        ? jsonResponse(200, {
+            ...DEGRADED,
+            list_delivery: { mode: 'transport', transport_domain: 'maillist.invalid', transport_domain_is_managed: null },
+          })
+        : undefined,
+    );
+
+    const section = await screen.findByRole('region', { name: 'Listenzustellung' });
+
+    expect(within(section).getByText(/konnte nicht geprüft werden/)).toBeInTheDocument();
   });
 
   it('renders a failed request through the catalogue', async () => {

@@ -53,6 +53,8 @@ final class InMemoryDomainStore implements DomainStore
 
     private ?Throwable $renameFailure = null;
 
+    private ?Throwable $existsFailure = null;
+
     /** @var list<string> `virtual.alias` values, as given */
     private array $aliases = [];
 
@@ -142,6 +144,12 @@ final class InMemoryDomainStore implements DomainStore
         $this->renameFailure = $failure;
     }
 
+    /** Make every {@see exists()} fail — a database that cannot be asked. */
+    public function failOnExists(Throwable $failure): void
+    {
+        $this->existsFailure = $failure;
+    }
+
     /**
      * What was asked of the store, in order.
      *
@@ -214,6 +222,10 @@ final class InMemoryDomainStore implements DomainStore
 
     public function exists(DomainName $name): bool
     {
+        if ($this->existsFailure !== null) {
+            throw $this->existsFailure;
+        }
+
         return isset($this->domains[self::key($name)]);
     }
 

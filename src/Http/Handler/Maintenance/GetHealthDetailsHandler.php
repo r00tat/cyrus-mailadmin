@@ -25,6 +25,6 @@ final readonly class GetHealthDetailsHandler implements ApiHandler
     {
         $actor = $this->responder->actor($request);
 
-        return $this->responder->json(200, $this->details->handle($actor)->toDetailed());
+        return $this->responder->json(200, $this->details->handle($actor)->toArray());
     }
 }
