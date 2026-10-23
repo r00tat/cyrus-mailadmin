@@ -223,6 +223,18 @@ final readonly class MigrateListDelivery
             );
         }
 
+        // The legacy form names the key in `virtual.username` and as `dest`.
+        // Were it an account's Cyrus name, `validsenders` would hand that
+        // account the list address, and the aliases file would take its mail
+        // (U-145). The transport form names nobody, so it stays.
+        if ($revert && $this->virtual->isAccountName(ListDelivery::listKey($address))) {
+            return new ListDeliveryOutcome(
+                $stored,
+                ListDeliveryResult::Skipped,
+                'list key is the user name of an account',
+            );
+        }
+
         if ($dryRun) {
             return new ListDeliveryOutcome($stored, $done, '', count($pending));
         }

@@ -74,6 +74,10 @@ interface AccountStore
      * placeholder sender (U-106) or an earlier account's leftover — would hand
      * its sending right to the new account (U-110).
      *
+     * A mailing list's key, `REPLACE(address, '@', '.')`, counts too: in alias
+     * mode the aliases file sends that name to the list ahead of the mailbox
+     * (U-145).
+     *
      * @throws PersistenceError
      */
     public function isTaken(MailboxIdentity $identity): bool;

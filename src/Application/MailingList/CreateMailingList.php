@@ -12,8 +12,11 @@ use Mailadmin\Application\Domain\DomainStore;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\Exception\InvalidMailingList;
 use Mailadmin\Domain\MailingList\MailingList;
+use Mailadmin\Domain\Model\DottedNamespace;
 use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Domain\Model\LocalPart;
+use Mailadmin\Domain\Model\MailboxIdentity;
+use Mailadmin\Domain\Model\NamingScheme;
 use Mailadmin\Domain\Model\Virtual\VirtualRow;
 use Mailadmin\Domain\Policy\AccessDenied;
 use Mailadmin\Domain\Policy\ListPolicy;
@@ -60,7 +63,14 @@ use Throwable;
  *  - the domain is the actor's (`403` otherwise) and a managed one
  *    (`list.unknown_domain`);
  *  - the address is free: not in `lists`, not in `virtual` or as an account
- *    name, and no list shares its list key (`list.address_taken`).
+ *    name, and no list shares its list key (`list.address_taken`);
+ *  - the list key is nobody else's name (U-145, also `list.address_taken`):
+ *    not an account's user name, not a `virtual.username` or `virtual.alias`,
+ *    not a domain's name, and the local part's dotted tails do not reach an
+ *    existing subdomain — the rule U-86 applies to accounts. In alias mode
+ *    the configuration run writes `key: |maillist.py` into the aliases file,
+ *    which local(8) reads before the mailbox transport: a key equal to an
+ *    account's Cyrus name would take that account's mail.
  *
  * The list-key check can tell a domain master that a list exists in another
  * domain (`a.b@own.test` and `a@b.own.test` share a key); the spec requires
@@ -189,11 +199,40 @@ final readonly class CreateMailingList
             throw MailingListFailure::unknownDomain($address->domain->toString());
         }
 
+        $key = ListDelivery::listKey($address);
+
         if ($this->repository->find($address) !== null
             || $this->virtual->addressTaken($address->toString())
-            || $this->repository->existsWithKey(ListDelivery::listKey($address))) {
+            || $this->repository->existsWithKey($key)
+            || $this->virtual->addressTaken($key)
+            || $this->virtual->isSenderName($key)
+            || $this->reachesAnotherNamespace($address)) {
             throw MailingListFailure::addressTaken($address->toString());
         }
+    }
+
+    /**
+     * Would the list key be the Cyrus name of an account in another domain
+     * (U-145)? The key is the dotted user name of the same address, so the
+     * account rule applies unchanged: a tail of the local part plus the
+     * domain is an existing subdomain (U-86), or the whole key is a domain's
+     * name (U-106).
+     *
+     * @throws PersistenceError
+     */
+    private function reachesAnotherNamespace(EmailAddress $address): bool
+    {
+        $identity = MailboxIdentity::create($address->localPart, $address->domain, NamingScheme::Dotted);
+
+        foreach (DottedNamespace::subdomainsReachedBy($identity) as $subdomain) {
+            if ($this->domains->exists($subdomain)) {
+                return true;
+            }
+        }
+
+        $namesake = DottedNamespace::domainNamedLike($identity);
+
+        return $namesake !== null && $this->domains->exists($namesake);
     }
 
     /**

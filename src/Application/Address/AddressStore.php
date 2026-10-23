@@ -109,6 +109,15 @@ interface AddressStore
     public function isAccountName(string $name): bool;
 
     /**
+     * Does any `virtual` row carry `$username` in its `username` column,
+     * without regard to case — an account's address row, an alias
+     * placeholder (U-106) or a list in the legacy alias form?
+     *
+     * @throws PersistenceError
+     */
+    public function isSenderName(string $username): bool;
+
+    /**
      * @throws PersistenceError
      */
     public function insert(VirtualRow $row): void;

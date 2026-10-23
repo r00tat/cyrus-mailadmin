@@ -439,6 +439,59 @@ final class MailingListUseCaseTest extends TestCase
         $this->assertNothingWritten();
     }
 
+    public function testAListKeyThatIsAnAccountNameIsTaken(): void
+    {
+        // U-145: in alias mode the configuration run writes `key: |maillist.py`
+        // into the aliases file, and local(8) reads aliases before the
+        // mailbox transport — the account's mail would go to the list. The
+        // account here has no `virtual` row, so only the name can answer.
+        $this->virtual->givenAccount('Info.Shop.example.test', 'example.test');
+
+        $this->expectConflict(fn () => $this->create()->handle($this->domainMaster, 'shop', '', 'info.shop@example.test', []));
+
+        $this->assertNothingWritten();
+    }
+
+    public function testAListKeyThatAVirtualRowCarriesAsUsernameIsTaken(): void
+    {
+        $this->virtual->givenRow('someone@other.test', 'team.example.test', 'Team.example.test');
+
+        $this->expectConflict(fn () => $this->create()->handle($this->superuser, 'Team', '', 'team@example.test', []));
+
+        $this->assertNothingWritten();
+    }
+
+    public function testAListKeyThatIsAForwardKeyIsTaken(): void
+    {
+        $this->virtual->givenRow('team.example.test', 'elsewhere@example.org');
+
+        $this->expectConflict(fn () => $this->create()->handle($this->superuser, 'Team', '', 'team@example.test', []));
+
+        $this->assertNothingWritten();
+    }
+
+    public function testADottedListAddressReachingIntoAnExistingSubdomainIsTaken(): void
+    {
+        // The finding's case: the domain master of example.test may not claim
+        // the key `info.shop.example.test`, which is the dotted Cyrus name of
+        // `info@shop.example.test` — an account another tenant may create. The
+        // same rule U-86 applies to accounts.
+        $this->domains->given(DomainFixture::domain('shop.example.test', prefix: 'shop.example.test'));
+
+        $this->expectConflict(fn () => $this->create()->handle($this->domainMaster, 'shop', '', 'info.shop@example.test', []));
+
+        $this->assertNothingWritten();
+    }
+
+    public function testAListKeyThatIsADomainNameIsTaken(): void
+    {
+        $this->domains->given(DomainFixture::domain('mail.example.test', prefix: 'mail.example.test'));
+
+        $this->expectConflict(fn () => $this->create()->handle($this->superuser, 'mail', '', 'mail@example.test', []));
+
+        $this->assertNothingWritten();
+    }
+
     public function testTheSameDisplayNameOnAnotherAddressIsNotAConflict(): void
     {
         $this->givenLegacyList();

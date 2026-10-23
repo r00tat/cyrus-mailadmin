@@ -134,6 +134,14 @@ final class VirtualRepositoryIntegrationTest extends DatabaseTestCase
         self::assertTrue($this->repository->isAccountName('Bert.Other.Test'));
     }
 
+    public function testASenderNameIsFoundWithoutRegardToCase(): void
+    {
+        $this->insert('kontakt@example.test', 'someone@example.org', 'Team.Example.test');
+
+        self::assertTrue($this->repository->isSenderName('team.example.test'));
+        self::assertFalse($this->repository->isSenderName('nobody.example.test'));
+    }
+
     public function testRemovalIsExactAndOneRowAtATime(): void
     {
         $row = new VirtualRow('info@example.test', 'anna.example.test', 'example.test', 1);

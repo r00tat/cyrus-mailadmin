@@ -49,6 +49,11 @@ final readonly class TracingAddressStore implements AddressStore
         return $this->inner->isAccountName($name);
     }
 
+    public function isSenderName(string $username): bool
+    {
+        return $this->inner->isSenderName($username);
+    }
+
     public function insert(VirtualRow $row): void
     {
         $this->trace->add('virtual.insert ' . $row->alias);

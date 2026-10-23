@@ -182,6 +182,35 @@ final class CreateDomainTest extends DomainUseCaseTestCase
         self::assertTrue($this->audit->isEmpty());
     }
 
+    public function testASubdomainThatAMailingListKeyAlreadyReachesIsRefused(): void
+    {
+        // U-145: the list `info.kunde@example.test` has the key
+        // `info.kunde.example.test`. Once `kunde.example.test` exists, its
+        // account `info` would get that Cyrus name, and in alias mode the
+        // aliases file sends it to the list.
+        $this->store->given(DomainFixture::domain('example.test', prefix: 'example'));
+        $this->store->givenListAddress('Info.Kunde@example.test');
+
+        $failure = $this->refusal(['name' => 'kunde.example.test']);
+
+        self::assertSame(DomainErrorCode::NAMESPACE_CONFLICT, $failure->errorCode);
+        self::assertSame([], $this->store->operations());
+    }
+
+    public function testAMailingListOfTheSubdomainItselfIsNoClaim(): void
+    {
+        // A leftover `lists` row in the domain being created is not in a parent
+        // domain. Its key is what the account `team` of the new domain would
+        // get, and account creation refuses that name (U-145); the domain
+        // itself is free.
+        $this->store->given(DomainFixture::domain('example.test', prefix: 'example'));
+        $this->store->givenListAddress('team@kunde.example.test');
+
+        $this->createDomain()->handle(DomainFixture::superuser(), DomainDraft::fromRequest(['name' => 'kunde.example.test']));
+
+        self::assertNotNull($this->store->find(DomainFixture::name('kunde.example.test')));
+    }
+
     public function testTheCollisionIsFoundWhateverTheSpelling(): void
     {
         $this->store->given(DomainFixture::domain('example.test', prefix: 'example'), 'Info.Kunde.EXAMPLE.test');

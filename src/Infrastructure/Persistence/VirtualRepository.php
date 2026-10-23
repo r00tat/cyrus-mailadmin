@@ -161,6 +161,18 @@ final class VirtualRepository extends Repository implements AddressStore
         return is_numeric($taken) && (int) $taken > 0;
     }
 
+    public function isSenderName(string $username): bool
+    {
+        // `virtual.username` compares without case, as Postfix does; the same
+        // comparison `AccountRepository::isTaken()` relies on.
+        $taken = $this->connection->selectValue(
+            'SELECT EXISTS(SELECT 1 FROM `virtual` WHERE username = :username)',
+            ['username' => $username],
+        );
+
+        return is_numeric($taken) && (int) $taken > 0;
+    }
+
     public function insert(VirtualRow $row): void
     {
         $this->connection->execute(

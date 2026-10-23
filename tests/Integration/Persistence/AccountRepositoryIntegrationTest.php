@@ -185,6 +185,26 @@ final class AccountRepositoryIntegrationTest extends DatabaseTestCase
         )));
     }
 
+    public function testAUserNameThatIsAMailingListKeyIsTaken(): void
+    {
+        // U-145: `lists` has no key column; the key is REPLACE(address, '@', '.').
+        $identity = MailboxIdentity::create(
+            LocalPart::fromString('info'),
+            DomainName::fromStoredValue('kunde.example.test'),
+            NamingScheme::Dotted,
+        );
+
+        self::assertFalse($this->repository->isTaken($identity));
+
+        $this->connection->execute('INSERT INTO lists (name, tag, address, members) VALUES ("kunde", "", "Info.Kunde@example.test", "")');
+
+        self::assertTrue($this->repository->isTaken($identity));
+        self::assertFalse(
+            $this->repository->isTaken(MailboxIdentity::create($identity->localPart, $identity->domain, NamingScheme::Fqun)),
+            'a name with an @ is never a key',
+        );
+    }
+
     public function testDeletionRemovesTheAccountRowsAndLeavesOtherAliasesAlone(): void
     {
         // An alias that delivers to the account, and one that does not.

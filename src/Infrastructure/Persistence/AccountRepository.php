@@ -180,7 +180,8 @@ final class AccountRepository extends Repository implements AccountStore
         $taken = $this->connection->selectValue(
             'SELECT EXISTS(SELECT 1 FROM `accountuser` WHERE LOWER(username) = LOWER(:username)) '
             . 'OR EXISTS(SELECT 1 FROM `virtual` WHERE alias IN (:address, :forward_alias)) '
-            . 'OR EXISTS(SELECT 1 FROM `virtual` WHERE username = :sender)',
+            . 'OR EXISTS(SELECT 1 FROM `virtual` WHERE username = :sender) '
+            . "OR EXISTS(SELECT 1 FROM `lists` WHERE LOWER(REPLACE(address, '@', '.')) = :list_key)",
             [
                 'username' => $identity->cyrusUsername(),
                 'address' => $identity->address()->toString(),
@@ -193,6 +194,10 @@ final class AccountRepository extends Repository implements AccountStore
                 // alias placeholder (U-106) or an earlier account's leftover.
                 // The collation compares without case, as Postfix does.
                 'sender' => $identity->cyrusUsername(),
+                // A list's key, `REPLACE(address, '@', '.')`: in alias mode the
+                // aliases file sends that name to the list, ahead of the
+                // mailbox (U-145). A name with an `@` never matches.
+                'list_key' => strtolower($identity->cyrusUsername()),
             ],
         );
 

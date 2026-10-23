@@ -142,6 +142,25 @@ final class MigrateListDeliveryTest extends TestCase
         self::assertStringContainsString('50', $outcome->reason);
     }
 
+    public function testRevertLeavesAListWhoseKeyIsAnAccountName(): void
+    {
+        // U-145: the legacy form puts the key into `virtual.username` and sends
+        // the mail to it. With an account of that Cyrus name, `validsenders`
+        // would hand it the list address, and its mail would be at the mercy
+        // of the aliases file.
+        $this->lists->given(MailingList::fromStoredValues('Shop', 'shop', 'info.shop@example.test', 'anna@example.test'));
+        $this->virtual->givenRow('info.shop@example.test', 'info.shop.example.test@maillist.invalid');
+        $this->virtual->givenAccount('Info.Shop.example.test', 'shop.example.test');
+        $before = $this->rows();
+
+        $result = $this->migrate()->handle($this->system, revert: true);
+
+        self::assertSame($before, $this->rows());
+        $outcome = $this->outcomeOf($result, 'info.shop@example.test');
+        self::assertSame(ListDeliveryResult::Skipped, $outcome->result);
+        self::assertStringContainsString('account', $outcome->reason);
+    }
+
     public function testAListWithoutVirtualRowIsReportedAndNotCreated(): void
     {
         $this->lists->given(MailingList::fromStoredValues('Orphan', 'orphan', 'orphan@example.test', 'anna@example.test'));

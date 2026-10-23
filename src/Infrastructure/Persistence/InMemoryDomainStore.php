@@ -58,6 +58,9 @@ final class InMemoryDomainStore implements DomainStore
     /** @var list<string> `virtual.alias` values, as given */
     private array $aliases = [];
 
+    /** @var list<string> `lists.address` values, as given */
+    private array $listAddresses = [];
+
     /** @var list<string> `virtual.username` values, as given */
     private array $senderNames = [];
 
@@ -89,6 +92,12 @@ final class InMemoryDomainStore implements DomainStore
     public function givenAlias(string $alias): void
     {
         $this->aliases[] = $alias;
+    }
+
+    /** A row in `lists` with this address (U-145). */
+    public function givenListAddress(string $address): void
+    {
+        $this->listAddresses[] = $address;
     }
 
     /** A row in `virtual` whose `username` is this value (U-110). */
@@ -302,6 +311,16 @@ final class InMemoryDomainStore implements DomainStore
             foreach ($this->accounts[self::key($parent)] ?? [] as $username) {
                 if (!str_contains($username, '@') && str_ends_with(strtolower($username), $suffix)) {
                     return $username;
+                }
+            }
+
+            foreach ($this->listAddresses as $address) {
+                $at = strrpos($address, '@');
+
+                if ($at !== false
+                    && strcasecmp(substr($address, $at + 1), $parent->toString()) === 0
+                    && str_ends_with(strtolower(str_replace('@', '.', $address)), $suffix)) {
+                    return $address;
                 }
             }
         }

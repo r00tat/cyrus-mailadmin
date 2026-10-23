@@ -5225,6 +5225,53 @@ Skripttests schon zeigen.
 
 ---
 
+## U-145 — Der Listenschlüssel ist ein Name im Namensraum der Konten
+
+**Frage:** Abschlussreview: Der Domainmaster von `example.com` legt die Liste
+`info.shop@example.com` an. Ihr Schlüssel `info.shop.example.com` ist der Cyrus-Benutzername des
+Kontos `info@shop.example.com` im Punktschema, das einem anderen Mandanten gehören kann. Im
+Altmodus schreibt Salt `info.shop.example.com: |maillist.py` in die Aliasdatei, und local(8) liest
+Aliase vor dem `mailbox_transport` — die Mail des Kontos ginge an die Liste des Angreifers.
+Verhindern U-86 und U-96 das schon?
+
+**Antwort auf die Vorfrage: nein.** U-86 und U-96 prüfen Konten und Domains gegeneinander, Listen
+kamen darin nicht vor. Ein Anwendungstest mit genau diesem Fall lief vor der Änderung durch.
+
+**Entscheidung:** Der Listenschlüssel `REPLACE(address,'@','.')` wird wie ein Benutzername im
+Punktschema behandelt, in beide Richtungen und ohne Unterscheidung der Schreibweise.
+
+- **Liste anlegen** lehnt mit `409 list.address_taken` ab (kein neuer Code: für den Aufrufer ist
+  die Adresse belegt), wenn der Schlüssel der gespeicherte Benutzername eines Kontos ist, als
+  `virtual.username` oder `virtual.alias` vorkommt, der Name einer Domain ist, oder ein
+  Endabschnitt des Local Parts zusammen mit der Domain eine bestehende Domain ergibt — dieselbe
+  Regel wie für Konten (U-86, `DottedNamespace`).
+- **Konto anlegen:** `AccountStore::isTaken()` zählt den Schlüssel jeder Liste mit;
+  `account.name_taken`.
+- **Domain anlegen oder umbenennen:** `DomainStore::namespaceClaimant()` findet neben Konten auch
+  Listen einer Elterndomain, deren Schlüssel auf `.<name>` endet; `domain.namespace_conflict`
+  (U-96). Eine Liste in der neuen Domain selbst blockiert die Domain nicht — ihr Schlüssel kann
+  nur mit einem Konto derselben Domain kollidieren, und das lehnt die Kontoanlage ab.
+- **`migrate-list-delivery --revert`** überspringt eine Liste, deren Schlüssel ein Kontoname ist
+  (`skipped: list key is the user name of an account`). Die Altform schreibt den Schlüssel in
+  `virtual.username` und `dest`; `validsenders` gäbe dem Konto die Listenadresse.
+
+Alle Abfragen sind vorbereitet, verglichen wird in Kleinschreibung wie in den bestehenden
+Prüfungen.
+
+**Warum:** Ein Name, der zwei Mandanten zugleich gehört, ist dieselbe Lücke wie in U-86 und U-96,
+nur mit einer Liste auf einer Seite. Solange die Aliasdatei existiert (Altmodus und Umstellung bis
+Schritt 5), entscheidet sie vor dem Postfach.
+
+**Alternative:** Nur im Altmodus prüfen — verworfen, weil der Modus zurückgestellt werden kann und
+die Aliasdatei bis Schritt 5 der Umstellung bleibt. Bestehende Kollisionen suchen und melden —
+gehört zum Abgleich (A6), nicht in die Anlage.
+
+**Korrekturkosten:** Gering. `CreateMailingList::requireFree()`/`reachesAnotherNamespace()`,
+`AddressStore::isSenderName()`, `AccountRepository::isTaken()`,
+`DomainRepository::namespaceClaimant()`, `MigrateListDelivery`.
+
+---
+
 ## Verbleibende offene Punkte
 
 Diese sind **nicht** entschieden, weil sie ohne Betriebswissen nicht sinnvoll zu entscheiden

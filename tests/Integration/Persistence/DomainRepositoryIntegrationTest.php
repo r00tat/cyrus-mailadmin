@@ -275,6 +275,22 @@ final class DomainRepositoryIntegrationTest extends DatabaseTestCase
         ));
     }
 
+    public function testAMailingListKeyOfAParentDomainClaimsTheNamespace(): void
+    {
+        // U-145: the key of `info.kunde@example.test` is the Cyrus name the
+        // account `info` of `kunde.example.test` would get.
+        $this->pdo->exec('INSERT INTO `lists` (name, tag, address, members) VALUES ("k", "", "Info.Kunde@Example.test", "")');
+        $this->pdo->exec('INSERT INTO `lists` (name, tag, address, members) VALUES ("t", "", "team@kunde.example.test", "")');
+
+        self::assertSame('Info.Kunde@Example.test', $this->repository->namespaceClaimant(DomainFixture::name('kunde.example.test')));
+        self::assertNull($this->repository->namespaceClaimant(DomainFixture::name('other.example.test')));
+        self::assertNull($this->repository->namespaceClaimant(DomainFixture::name('example.test')), 'a list of a subdomain claims nothing');
+        self::assertNull($this->repository->namespaceClaimant(
+            DomainFixture::name('kunde.example.test'),
+            except: DomainFixture::name('example.test'),
+        ));
+    }
+
     public function testAUserNameIsTakenWhateverItsSpellingButNotByTheDomainBeingRenamed(): void
     {
         self::assertTrue($this->repository->accountUsernameTaken('INFO.example.test', DomainFixture::name('other.test')));

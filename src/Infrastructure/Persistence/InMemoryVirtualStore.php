@@ -182,6 +182,17 @@ final class InMemoryVirtualStore implements AddressStore
         return false;
     }
 
+    public function isSenderName(string $username): bool
+    {
+        foreach ($this->rows as $row) {
+            if ($row->username !== '' && strcasecmp($row->username, $username) === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function insert(VirtualRow $row): void
     {
         if ($this->insertFailure !== null) {
