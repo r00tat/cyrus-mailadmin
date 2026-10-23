@@ -94,7 +94,7 @@ final class MailingListUseCaseTest extends TestCase
         self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('legacy-list'));
     }
 
-    public function testAChangedMembershipIsRewrittenInTheFormTheConfigurationRunExpects(): void
+    public function testAChangedMembershipIsRewrittenOnePerLine(): void
     {
         $this->givenLegacyList();
 
@@ -105,7 +105,7 @@ final class MailingListUseCaseTest extends TestCase
         );
 
         self::assertSame(
-            'anna@example.test,carla@example.test',
+            "anna@example.test\ncarla@example.test",
             $this->repository->storedMembers('legacy-list'),
         );
     }

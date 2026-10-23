@@ -19,7 +19,7 @@ final class MailingListTest extends TestCase
             'team-example',
             'team',
             'team-list@example.test',
-            'anna@example.test,bernd@example.test',
+            "anna@example.test\nbernd@example.test",
         );
 
         self::assertSame('team-example', $list->name->toString());
@@ -53,7 +53,7 @@ final class MailingListTest extends TestCase
 
         self::assertSame('team', $list->tag, 'Surrounding whitespace is trimmed.');
         self::assertSame('team-list@example.test', $list->address);
-        self::assertSame('anna@example.test,bernd@example.test', $list
+        self::assertSame("anna@example.test\nbernd@example.test", $list
             ->withMembers(['anna@example.test', 'bernd@example.test'])
             ->members
             ->toStoredValue());

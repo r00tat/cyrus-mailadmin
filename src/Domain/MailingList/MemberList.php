@@ -24,33 +24,37 @@ use Mailadmin\Domain\Model\EmailAddress;
  * ({@see withMembers()} returns `$this`). Reading a row and saving it again is
  * therefore byte-for-byte identical whatever the separator was — including a
  * `NULL` that stays `NULL`. Only a list whose membership actually changed is
- * re-rendered, and then in the one form that is certain to be right for an
- * aliases file: comma-separated (U-56).
+ * re-rendered, and then in the one form the delivery script reads: one member
+ * per line (spec 4.3). The earlier comma rendering (U-56) is gone — the script
+ * splits on line breaks, so a comma-joined value would be one invalid recipient.
  *
- * Parsing is deliberately wider than rendering. Comma, semicolon and line break
- * are all accepted as separators, because guessing wrong on the way *in* would
- * turn one member into several or several into one, and a list that is
- * misparsed on the way in is a list that is destroyed on the way out.
+ * Parsing is deliberately wider than rendering. Comma, semicolon, line break and
+ * `<br>` in every spelling are accepted as separators, and HTML entities left
+ * behind by the old application are decoded first, because guessing wrong on the
+ * way *in* would turn one member into several or several into one, and a list
+ * that is misparsed on the way in is a list that is destroyed on the way out.
  *
  * ## What is refused
  *
- * Only members that are being **added**, and only because of what the column
- * feeds: an aliases file, where `|command` and `/path/to/file` are not
- * addresses but instructions. See
- * {@see InvalidMailingList::memberNotAnAddress()} and U-57. Members that are already
+ * Only members that are being **added**. Two reasons: the column used to feed
+ * an aliases file, where `|command` and `/path/to/file` are not addresses but
+ * instructions (U-57, see {@see InvalidMailingList::memberNotAnAddress()}), and
+ * a `,` or `;` in the display name would be read back as a separator and split
+ * the member in two. Members that are already
  * stored are reported by {@see unusableMembers()} and never rejected (U-22).
  */
 final readonly class MemberList
 {
-    /** What the members are joined with when the list is re-rendered (U-56). */
-    public const string SEPARATOR = ',';
+    /** What the members are joined with when the list is re-rendered (spec 4.3). */
+    public const string SEPARATOR = "\n";
 
     /**
      * Every byte that is read as a separator on the way in.
      *
-     * Wider than {@see SEPARATOR} on purpose — see the class comment.
+     * Wider than {@see SEPARATOR} on purpose — see the class comment. Applied
+     * after the entities are decoded, so an encoded `&lt;br&gt;` separates too.
      */
-    public const string PARSE_PATTERN = '/[,;\r\n]+/';
+    public const string PARSE_PATTERN = '/(?:<br\s*\/?>|[,;\r\n])+/i';
 
     /**
      * The ceiling a rendered list has to stay under.
@@ -143,6 +147,38 @@ final readonly class MemberList
     }
 
     /**
+     * The addresses mail is delivered to, in order, one per usable member.
+     *
+     * The address part of `Name <address>`, entries that are not addresses left
+     * out, duplicates (compared case-insensitively, first spelling wins) left
+     * out. This is what `normalize_recipients()` in `maillist.py` computes, and
+     * the golden files in `tests/Fixtures/MemberFormat` keep the two in step.
+     *
+     * @return list<string>
+     */
+    public function deliverableAddresses(): array
+    {
+        $addresses = [];
+        $seen = [];
+
+        foreach ($this->members as $member) {
+            if (!self::isUsableMember($member)) {
+                continue;
+            }
+
+            $address = self::addressPart($member);
+            $key = strtolower($address);
+
+            if (!isset($seen[$key])) {
+                $seen[$key] = true;
+                $addresses[] = $address;
+            }
+        }
+
+        return $addresses;
+    }
+
+    /**
      * Is the stored text already in the form this class would render?
      *
      * Only interesting for a test and for a diagnosis: an unchanged list is
@@ -176,8 +212,14 @@ final readonly class MemberList
 
         foreach ($clean as $member) {
             // Already in the list: left alone, whatever it is. Being added: has
-            // to be an address, because the column feeds an aliases file.
-            if (!$this->contains($member) && !self::isUsableMember($member)) {
+            // to be an address, and must survive being read back — a `,` or `;`
+            // anywhere in it (a display name such as "Doe, John") is a separator
+            // on the way in.
+            if ($this->contains($member)) {
+                continue;
+            }
+
+            if (!self::isUsableMember($member) || preg_match('/[,;]/', $member) === 1) {
                 throw InvalidMailingList::memberNotAnAddress($member);
             }
         }
@@ -196,7 +238,10 @@ final readonly class MemberList
      */
     private static function parse(string $raw): array
     {
-        $parts = preg_split(self::PARSE_PATTERN, $raw);
+        // Decode first, then split: the old application stored `&lt;` and `&gt;`
+        // around addresses, and `&lt;br&gt;` has to separate like `<br>` does.
+        $decoded = html_entity_decode($raw, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $parts = preg_split(self::PARSE_PATTERN, $decoded);
 
         return $parts === false ? [] : self::normalise($parts);
     }
@@ -226,16 +271,30 @@ final readonly class MemberList
         return $members;
     }
 
+    /**
+     * `address` out of `Name <address>`; a bare address is returned as it is.
+     */
+    private static function addressPart(string $member): string
+    {
+        if (preg_match('/<([^<>]*)>\s*$/', $member, $match) === 1) {
+            return trim($match[1]);
+        }
+
+        return $member;
+    }
+
     private static function isUsableMember(string $member): bool
     {
-        if (!EmailAddress::looksLikeAddress($member)) {
+        $address = self::addressPart($member);
+
+        if (!EmailAddress::looksLikeAddress($address)) {
             return false;
         }
 
         try {
             // The tolerant parse: a member may be an address this application
             // would not hand out, as long as it is an address at all.
-            EmailAddress::parseStored($member);
+            EmailAddress::parseStored($address);
         } catch (InvalidAddress) {
             return false;
         }

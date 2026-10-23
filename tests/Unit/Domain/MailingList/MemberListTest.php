@@ -100,15 +100,98 @@ final class MemberListTest extends TestCase
         self::assertNull($list->withMembers([])->toStoredValue());
     }
 
-    public function testAChangedMembershipIsRenderedCommaSeparated(): void
+    public function testAChangedMembershipIsRenderedOnePerLine(): void
     {
         $list = MemberList::fromStoredValue('anna@example.test');
 
         $changed = $list->withMembers(['anna@example.test', 'bernd@example.test']);
 
         self::assertNotSame($list, $changed);
-        self::assertSame('anna@example.test,bernd@example.test', $changed->toStoredValue());
+        self::assertSame("anna@example.test\nbernd@example.test", $changed->toStoredValue());
         self::assertTrue($changed->isCanonical());
+    }
+
+    public function testAnUnchangedLegacyBreakListComesBackByteForByte(): void
+    {
+        $stored = "a@x.test<br />\nb@x.test";
+        $list = MemberList::fromStoredValue($stored);
+
+        self::assertSame(['a@x.test', 'b@x.test'], $list->members());
+        self::assertSame($list, $list->withMembers(['a@x.test', 'b@x.test']));
+        self::assertSame($stored, $list->toStoredValue());
+        self::assertFalse($list->isCanonical());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function breakSpellings(): iterable
+    {
+        yield 'br' => ['<br>'];
+        yield 'br slash' => ['<br/>'];
+        yield 'br space slash' => ['<br />'];
+        yield 'upper case' => ['<BR>'];
+        yield 'encoded' => ['&lt;br&gt;'];
+    }
+
+    #[DataProvider('breakSpellings')]
+    public function testEveryBreakSpellingSeparates(string $break): void
+    {
+        $list = MemberList::fromStoredValue('a@x.test' . $break . 'b@x.test');
+
+        self::assertSame(['a@x.test', 'b@x.test'], $list->members());
+    }
+
+    public function testEntitiesAreDecodedBeforeTheBreaksAreSplit(): void
+    {
+        $list = MemberList::fromStoredValue('J&ouml;rg &lt;j@x.test&gt;&lt;br /&gt;Tom &amp; Jerry &lt;t@x.test&gt;');
+
+        self::assertSame(['Jörg <j@x.test>', 'Tom & Jerry <t@x.test>'], $list->members());
+    }
+
+    public function testAChangedLegacyListIsWrittenCanonicalWithDecodedEntities(): void
+    {
+        $list = MemberList::fromStoredValue('Tom &amp; Jerry &lt;t@x.test&gt;<br />a@x.test');
+
+        $changed = $list->withMembers(['Tom & Jerry <t@x.test>', 'a@x.test', 'b@x.test']);
+
+        self::assertSame("Tom & Jerry <t@x.test>\na@x.test\nb@x.test", $changed->toStoredValue());
+        self::assertTrue($changed->isCanonical());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function displayNamesWithSeparators(): iterable
+    {
+        yield 'comma' => ['"Doe, John" <j@x.test>'];
+        yield 'semicolon' => ['Doe; John <j@x.test>'];
+    }
+
+    #[DataProvider('displayNamesWithSeparators')]
+    public function testANewMemberWhoseDisplayNameContainsASeparatorIsRefused(string $member): void
+    {
+        // A comma is a separator on the way in, so it would be read back as two
+        // members, the first of which is not an address.
+        $this->expectException(InvalidMailingList::class);
+
+        MemberList::none()->withMembers([$member]);
+    }
+
+    public function testAStoredMemberWithASeparatorInItsNameIsNotRejected(): void
+    {
+        // Cannot happen through a parse (the comma would have split it), but the
+        // rule is about entries being added, never about existing ones (U-22).
+        $list = MemberList::fromStoredValue('a@x.test');
+
+        self::assertSame(['a@x.test', 'b@x.test'], $list->withMembers(['a@x.test', 'b@x.test'])->members());
+    }
+
+    public function testDeliverableAddressesTakeTheAddressPartDropInvalidOnesAndDuplicates(): void
+    {
+        $list = MemberList::fromStoredValue("Alice <Alice@x.test>\n|/bin/sh\nalice@X.TEST\n bob@x.test ");
+
+        self::assertSame(['Alice@x.test', 'bob@x.test'], $list->deliverableAddresses());
     }
 
     public function testOrderIsPartOfTheMembership(): void
@@ -120,7 +203,7 @@ final class MemberListTest extends TestCase
         $reordered = $list->withMembers(['bernd@example.test', 'anna@example.test']);
 
         self::assertNotSame($list, $reordered);
-        self::assertSame('bernd@example.test,anna@example.test', $reordered->toStoredValue());
+        self::assertSame("bernd@example.test\nanna@example.test", $reordered->toStoredValue());
     }
 
     public function testDuplicatesAreKept(): void
