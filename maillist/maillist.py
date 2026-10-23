@@ -10,6 +10,7 @@ maintained as part of mailadmin.
 
 import argparse
 import configparser
+import html
 import logging
 import logging.handlers
 import os
@@ -21,7 +22,7 @@ from dataclasses import dataclass
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 
 import mysql.connector
 from mysql.connector import errorcode
@@ -209,35 +210,36 @@ def get_list_info(cnx: DBConnection, msg_id: str, delivered_to: str) -> ListInfo
         raise
 
 
+_BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
+
 def normalize_recipients(members: str, msg_id: str) -> list[str]:
-    """Normalize recipient list: parse, validate and deduplicate addresses."""
+    """Parse the stored member field into unique mailbox addresses, in order.
+
+    Entries are separated by line breaks, commas, semicolons and <br> tags; HTML entities written by the
+    legacy application are decoded first. Addresses are personal data and are only logged at DEBUG.
+    """
+    text = _BR.sub("\n", html.unescape(members))
     recipients: list[str] = []
     seen: set[str] = set()
-
-    # Recipient entries coming from the web form may be separated by HTML <br> tags.
-    normalized_members = re.sub(r"<br\s*/?>", "\n", members, flags=re.IGNORECASE)
-
-    for recipient_line in normalized_members.splitlines():
-        recipient_line = recipient_line.strip()
-        if not recipient_line:
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line:
             continue
+        # getaddresses honours quotes, so a comma inside "Doe, John" is not a separator.
+        for _name, address in getaddresses([line.replace(";", ",")]):
+            address = address.strip()
+            if not address or "@" not in address:
+                logger.warning(f"{msg_id} - Skipping invalid recipient entry in line {line_no}")
+                logger.debug(f"{msg_id} - Invalid recipient entry in line {line_no}: {line!r}")
+                continue
+            key = address.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            recipients.append(address)
 
-        # Extract mailbox from values such as "Name <user@example.com>".
-        smtp_to = parseaddr(recipient_line)[1] or recipient_line
-        smtp_to = smtp_to.strip()
-
-        if not smtp_to or "@" not in smtp_to:
-            logger.warning(f"{msg_id} - Skipping invalid recipient entry: {recipient_line!r}")
-            continue
-
-        smtp_to_lower = smtp_to.lower()
-        if smtp_to_lower in seen:
-            continue
-
-        seen.add(smtp_to_lower)
-        recipients.append(smtp_to)
-
-    logger.info(f"{msg_id} - Normalized {len(recipients)} unique recipients from {len(seen)} entries")
+    logger.info(f"{msg_id} - Normalized {len(recipients)} unique recipients")
     logger.debug(f"{msg_id} - Recipients: {', '.join(recipients)}")
     return recipients
 
