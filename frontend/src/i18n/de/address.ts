@@ -37,6 +37,8 @@ export const deAddress = {
   'address.list.unknownReason.unusableValue': 'Ein Feld enthält einen unbrauchbaren Wert.',
   'address.list.unknownReason.listDestinationMismatch':
     'Die Zeile leitet an eine Mailingliste weiter, ist aber nicht deren eigener Eintrag.',
+  'address.list.unknownReason.listMissing':
+    'Die Zeile ist der Eintrag einer Mailingliste, die es nicht mehr gibt. Mail an die Adresse kommt zurück.',
   'address.list.reserved': 'reserviert',
   'address.list.noDestination': 'kein Ziel',
   'address.list.senderNone': 'niemand',

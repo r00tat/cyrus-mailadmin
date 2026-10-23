@@ -7,7 +7,7 @@
 | **Stufe** | 4 — Fachlichkeit |
 | **Hängt ab von** | F2, F3, S3 |
 | **Pflichtlektüre** | [CLAUDE.md](../../CLAUDE.md) · [Architektur](../03-architektur.md), Abschnitt 7.2 · E-4 · [Listenskript betreiben](../deployment/maillist.md) |
-| **Status** | **umgesetzt** — U-56 bis U-60, überarbeitet für die Zustellung per Pipe-Transport durch U-134 bis U-145; Backend, Oberfläche, Listenskript `maillist/` |
+| **Status** | **umgesetzt** — U-56 bis U-60, überarbeitet für die Zustellung per Pipe-Transport durch U-134 bis U-146; Backend, Oberfläche, Listenskript `maillist/` |
 
 ---
 
@@ -219,6 +219,9 @@ Neu hinzugekommen:
 12. **Listenschlüssel und Kontonamen** → **U-145**: Der Schlüssel darf weder ein Kontoname noch ein
     `virtual.username` noch ein Domainname sein und nicht in den Namensraum einer Subdomain
     reichen; umgekehrt prüfen Konto- und Domainanlage die Schlüssel bestehender Listen.
+13. **Transporteintrag ohne Liste** → **U-146**: Eine Zeile in Transportform, zu der `lists` keine
+    Zeile hat, ist `unknown` (`list_missing`). Der Abgleich meldet sie als
+    `virtual_unclassified`, die Adressverwaltung zeigt und löscht sie.
 
 ## Definition of Done
 

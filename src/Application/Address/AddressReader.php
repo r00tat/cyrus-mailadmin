@@ -120,7 +120,7 @@ final readonly class AddressReader
     {
         $addresses = [];
 
-        foreach (MailingListRecognition::domainsToLookUp($rows) as $domain) {
+        foreach (MailingListRecognition::domainsToLookUp($rows, $this->delivery->transportDomain) as $domain) {
             foreach ($this->lists->addressesInDomain($domain) as $address) {
                 $addresses[] = $address;
             }

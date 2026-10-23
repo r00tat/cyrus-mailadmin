@@ -205,6 +205,19 @@ final class ReconcileTest extends TestCase
         self::assertSame([], $this->reconcile()->findings);
     }
 
+    public function testATransportRowWithoutAListIsReportedAsUnclassified(): void
+    {
+        // Left behind when `lists` lost its row outside this application: it
+        // routes mail into a list the script cannot find.
+        $this->inventory->givenRow(new VirtualRow('crew@example.test', 'crew.example.test@maillist.invalid', ''));
+
+        $findings = $this->reconcile()->of(FindingCategory::VirtualUnclassified);
+
+        self::assertCount(1, $findings);
+        self::assertSame('crew@example.test', $findings[0]->subject);
+        self::assertSame('list_missing', $findings[0]->reason);
+    }
+
     public function testALegacyShapedRowWithoutAListIsStillReported(): void
     {
         $this->inventory->givenRow(new VirtualRow('crew@example.test', 'crew.example.test', 'crew.example.test'));

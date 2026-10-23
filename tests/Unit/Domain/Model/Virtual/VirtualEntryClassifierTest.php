@@ -57,12 +57,40 @@ final class VirtualEntryClassifierTest extends TestCase
 
     public function testTheTransportDomainIsMatchedWithoutRegardToCaseOrSurroundingSpace(): void
     {
-        // Not in `lists` at all: the transport destination alone decides.
-        $row = new VirtualRow('crew@example.test', ' Crew.Example.Test@MAILLIST.Invalid ', '');
+        $row = new VirtualRow('Team@example.test', ' Team.Example.Test@MAILLIST.Invalid ', '');
 
         $entry = $this->classifier->classify($row, $this->lists);
 
         self::assertInstanceOf(MailingListEntry::class, $entry);
+    }
+
+    public function testATransportRowWhoseListIsGoneIsUnknown(): void
+    {
+        // Exactly the form A5 writes, but `lists` has no row for it: the
+        // script finds no list and bounces. Shown as unknown, so that it is
+        // reported and can be removed like any other row nobody understands.
+        $row = new VirtualRow('crew@example.test', 'crew.example.test@maillist.invalid', '');
+
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
+
+        self::assertInstanceOf(UnknownVirtualEntry::class, $entry);
+        self::assertSame(UnknownReason::ListMissing, $entry->reason);
+    }
+
+    public function testDomainsToLookUpIncludeTheDomainOfATransportRow(): void
+    {
+        $rows = [
+            new VirtualRow('crew@Example.test', 'crew.example.test@maillist.invalid', ''),
+            new VirtualRow('info@other.test', 'extern@elsewhere.test', ''),
+        ];
+
+        self::assertSame(
+            ['example.test'],
+            array_map(
+                static fn (DomainName $domain): string => $domain->toString(),
+                MailingListRecognition::domainsToLookUp($rows, DomainName::fromString('maillist.invalid')),
+            ),
+        );
     }
 
     public function testALegacyListRowWithAListsRowIsAMailingList(): void
@@ -153,8 +181,8 @@ final class VirtualEntryClassifierTest extends TestCase
             new VirtualRow('team@example.test', 'team.example.test', 'team.example.test'),
             new VirtualRow('Crew@Example.Test', 'crew.example.test', 'crew.example.test'),
             new VirtualRow('office@other.test', 'anna.other.test', 'anna.other.test'),
-            new VirtualRow('news@other.test', 'news.other.test@maillist.invalid', ''),
-        ]);
+            new VirtualRow('info@third.test', 'extern@elsewhere.test', ''),
+        ], DomainName::fromString('maillist.invalid'));
 
         self::assertSame(['example.test'], array_map(static fn (DomainName $d): string => $d->toString(), $domains));
     }

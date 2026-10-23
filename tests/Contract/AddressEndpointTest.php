@@ -15,6 +15,7 @@ use Mailadmin\Application\Audit\AuditRequestContext;
 use Mailadmin\Application\Audit\AuditWriter;
 use Mailadmin\Application\Domain\DomainStore;
 use Mailadmin\Domain\Access\AdminDirectory;
+use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Mailstore\SieveStore;
 use Mailadmin\Domain\Model\AdminRole;
 use Mailadmin\Domain\Model\DomainName;
@@ -68,6 +69,7 @@ final class AddressEndpointTest extends ContractTestCase
     private InMemoryVirtualStore $virtual;
     private InMemorySieveStore $sieve;
     private InMemoryAuditTrail $trail;
+    private InMemoryMailingListRepository $lists;
 
     protected function setUp(): void
     {
@@ -119,7 +121,7 @@ final class AddressEndpointTest extends ContractTestCase
             DomainStore::class => $domains,
             AccountStore::class => $accounts,
             AddressStore::class => $this->virtual,
-            MailingListRepository::class => new InMemoryMailingListRepository(),
+            MailingListRepository::class => $this->lists = new InMemoryMailingListRepository(),
             SieveStore::class => $this->sieve,
             SieveScriptInstaller::class => new SieveScriptInstaller($this->sieve, new SieveRenderer()),
             RepairQueue::class => new InMemoryRepairQueue(),
@@ -277,6 +279,7 @@ final class AddressEndpointTest extends ContractTestCase
 
     public function testAMailingListEntryIsListedAsSuchAndNotRemovedAsAnEntry(): void
     {
+        $this->lists->given(MailingList::fromStoredValues('Liste', 'liste', 'liste@example.test', ''));
         $this->virtual->givenRow('liste@example.test', 'liste.example.test@maillist.invalid', '');
 
         $listing = $this->send(

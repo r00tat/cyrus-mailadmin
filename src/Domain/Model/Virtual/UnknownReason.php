@@ -38,4 +38,12 @@ enum UnknownReason: string
      * list nobody here routed it to; a superuser removes it.
      */
     case ListDestinationMismatch = 'list_destination_mismatch';
+
+    /**
+     * Exactly a list's own row in the transport form, but `lists` has no row
+     * for its address. The pipe script finds no list and bounces. Left behind
+     * when `lists` lost the row outside this application; whoever manages the
+     * domain's addresses removes it (U-146).
+     */
+    case ListMissing = 'list_missing';
 }

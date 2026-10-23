@@ -5000,7 +5000,8 @@ verhindert sie, dass ein gewöhnlicher Alias die Pseudodomain als Ziel nennt?
 
 - **`VirtualEntryType::MailingList` (`mailing_list`).** Eine Zeile ist ein Listeneintrag, wenn
   (1) sie genau die Form hat, die A5 schreibt — leeres `username`, genau ein Ziel, und dieses Ziel
-  ist `<Listenschlüssel des alias>@<Pseudodomain>` —, oder (2) sie die Altform
+  ist `<Listenschlüssel des alias>@<Pseudodomain>` — und `lists` eine Zeile mit dieser Adresse
+  enthält (seit U-146), oder (2) sie die Altform
   `dest = username = REPLACE(alias,'@','.')` hat **und** `lists` eine Zeile mit dieser Adresse
   enthält. Die Regel steht vor „leeres `username` → Weiterleitung".
 - **Streng:** Eine Zeile, die die Pseudodomain nennt, aber nicht genau Form (1) hat, ist **kein**
@@ -5279,6 +5280,45 @@ gehört zum Abgleich (A6), nicht in die Anlage.
 **Korrekturkosten:** Gering. `CreateMailingList::requireFree()`/`reachesAnotherNamespace()`,
 `AddressStore::isSenderName()`, `AccountRepository::isTaken()`,
 `DomainRepository::namespaceClaimant()`, `MigrateListDelivery`.
+
+---
+
+## U-146 — Ein Transporteintrag ohne Liste ist `unknown`
+
+**Frage:** Abschlussreview: Eine `virtual`-Zeile in genau der Transportform, zu der `lists` keine
+Zeile hat, galt nach U-139 als Listeneintrag. Der Abgleich übersprang sie, die Adressverwaltung
+verweigerte das Löschen (`managed_by_mailing_list`), und `DELETE /lists/{address}` fand keine
+Liste. Die Zeile war unsichtbar und nicht zu entfernen, obwohl das Listenskript für ihre Adresse
+nichts findet und die Mail zurückweist (`EX_NOUSER`). Entstehen kann sie nur außerhalb dieser
+Anwendung, etwa durch ein händisches Löschen in `lists` oder eine abgebrochene Wiederherstellung;
+Anlegen und Löschen über `/lists` halten beide Tabellen zusammen (U-138).
+
+**Entscheidung:** Regel (1) aus U-139 verlangt zusätzlich die Zeile in `lists`. Fehlt sie, ist der
+Eintrag `unknown` mit dem neuen Grund `list_missing`.
+
+- **Abgleich:** Der Eintrag erscheint als `virtual_unclassified` mit Grund `list_missing`; keine
+  neue Fundkategorie.
+- **Ausweg:** Die Adressverwaltung zeigt ihn als unbekannte Zeile mit Erklärung, und wer die
+  Adressen der Domain verwaltet, löscht ihn dort wie jede andere unbekannte Zeile — mit Audit,
+  unter der Namensraumsperre.
+- `MailingListRecognition::domainsToLookUp()` nennt jetzt auch die Domains von Zeilen mit einem
+  Ziel auf der Pseudodomain, damit die Adressverwaltung deren Listenadressen lädt — weiterhin eine
+  Abfrage pro Domain.
+
+**Warum diese Variante:** Sie ist die am wenigsten eingreifende. Es gibt keinen neuen Endpunkt,
+keine neue Fundkategorie und keine neue Reparaturaktion; Melden und Entfernen laufen über Wege,
+die es für unbekannte Zeilen schon gibt, samt Berechtigung, Audit und Sperre. Die Anzeige wird
+dabei ehrlicher: Vorher stand die Zeile als Liste in der Adressverwaltung und verwies auf eine
+Listenseite, die `404` lieferte.
+
+**Alternativen:** `DELETE /lists/{address}` entfernt die verwaiste Zeile, wenn `lists` keine hat —
+verworfen, weil der Endpunkt dann etwas löscht, das er beim Lesen nicht zeigt, und weil der
+Abgleich trotzdem eine eigene Meldung bräuchte. Eine Reparaturaktion im Abgleich — verworfen,
+weil der Abgleich bisher nur meldet und dafür eine neue schreibende Operation samt Vertrag
+entstünde.
+
+**Korrekturkosten:** Gering. `VirtualEntryClassifier`, `MailingListRecognition`,
+`UnknownReason::ListMissing`, `AddressUnknownReason` im Vertrag, ein Textschlüssel.
 
 ---
 

@@ -226,6 +226,25 @@ final class DomainAddressesUseCaseTest extends AddressUseCaseTestCase
         self::assertCount(1, $this->audit->withAction(DeleteDomainAddress::OPERATION));
     }
 
+    public function testATransportRowWhoseListIsGoneIsUnknownAndCanBeRemoved(): void
+    {
+        $row = $this->virtual->givenRow('crew@example.test', 'crew.example.test@maillist.invalid', '');
+
+        $listing = $this->listAddresses()->handle(
+            DomainFixture::superuser(),
+            self::domain(),
+            new ListCriteria(filters: ['alias' => 'crew@']),
+        );
+        $view = AddressView::entry($listing->page->items[0], $listing->rows);
+        self::assertSame('unknown', $view['type']);
+        self::assertSame('list_missing', $view['unknown_reason']);
+
+        $this->deleteEntry()->handle(DomainFixture::superuser(), self::domain(), EntryKey::of($row), false);
+
+        self::assertSame([], $this->rowsOf('crew@example.test'));
+        self::assertCount(1, $this->audit->withAction(DeleteDomainAddress::OPERATION));
+    }
+
     public function testALegacyShapedRowWithoutAListIsStillAnAliasAndCanBeRemoved(): void
     {
         $row = $this->virtual->givenRow('crew@example.test', 'crew.example.test', 'crew.example.test');

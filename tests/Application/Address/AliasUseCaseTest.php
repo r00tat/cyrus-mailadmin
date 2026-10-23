@@ -313,6 +313,7 @@ final class AliasUseCaseTest extends AddressUseCaseTestCase
 
     public function testAnAliasSharingItsAddressWithAMailingListEntryIsNotEditable(): void
     {
+        $this->mailingLists->given(MailingList::fromStoredValues('Team', 'team', 'team@example.test', ''));
         $this->virtual->givenRow('team@example.test', 'anna.example.test', 'anna.example.test');
         $this->virtual->givenRow('team@example.test', 'team.example.test@maillist.invalid', '');
 

@@ -71,9 +71,16 @@ final readonly class VirtualEntryClassifier
         if ($lists->mentionsTransport($destinations)) {
             // Only a list's own row may deliver to the list transport. Anything
             // else naming it would feed a list nobody routed it to.
-            return $lists->isTransportListRow($row, $destinations)
+            if (!$lists->isTransportListRow($row, $destinations)) {
+                return new UnknownVirtualEntry(UnknownReason::ListDestinationMismatch, $row);
+            }
+
+            // The list's own form, but no list behind it: the script finds
+            // nothing and bounces. Unknown, so that it is reported and can be
+            // removed like any row nobody understands.
+            return $lists->isListAddress($alias)
                 ? $this->mailingList($alias, $destinations, $row)
-                : new UnknownVirtualEntry(UnknownReason::ListDestinationMismatch, $row);
+                : new UnknownVirtualEntry(UnknownReason::ListMissing, $row);
         }
 
         if (str_starts_with($alias, '@')) {

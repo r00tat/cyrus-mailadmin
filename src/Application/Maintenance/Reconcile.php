@@ -316,6 +316,8 @@ final readonly class Reconcile
                 // A list row names no account: in the legacy form `username`
                 // and `dest` are the list key, in the transport form `dest` is
                 // on the pseudo-domain. Neither is a missing owner or target.
+                // A transport row without its `lists` row is not a list entry
+                // but unknown (`list_missing`), and reported above (U-146).
                 continue;
             }
 

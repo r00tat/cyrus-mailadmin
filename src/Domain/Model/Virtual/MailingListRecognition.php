@@ -14,8 +14,9 @@ use Mailadmin\Domain\Model\EmailAddress;
  *
  * A row is a list row when
  *
- *  1. it has exactly the form A5 writes: an empty `username` and a single
- *     destination, `<list key of alias>@<transport domain>`, or
+ *  1. it has exactly the form A5 writes — an empty `username` and a single
+ *     destination, `<list key of alias>@<transport domain>` — **and** `lists`
+ *     has a row whose address is the `alias` (U-146), or
  *  2. it has the legacy form `dest = username = REPLACE(alias, '@', '.')`
  *     **and** `lists` has a row whose address is the `alias`.
  *
@@ -24,7 +25,9 @@ use Mailadmin\Domain\Model\EmailAddress;
  * it as unknown rather than guessing which list it belongs to.
  *
  * The second needs `lists` because the legacy form is, field for field, also
- * what an account's own address row in the `dotted` scheme looks like.
+ * what an account's own address row in the `dotted` scheme looks like. The
+ * first needs it because a transport row whose list is gone delivers nowhere
+ * and has to show up as unknown rather than as a list nobody can open.
  * {@see domainsToLookUp()} tells a caller which domains' list addresses it has
  * to load for a set of rows — one query per domain, not one per row.
  */
@@ -144,19 +147,20 @@ final readonly class MailingListRecognition
     }
 
     /**
-     * The domains whose list addresses rule 2 needs for these rows: the domain
-     * of every row with the legacy shape, each once, lower-cased.
+     * The domains whose list addresses the two rules need for these rows: the
+     * domain of every row with the legacy shape or a destination on the
+     * transport domain, each once, lower-cased.
      *
      * @param iterable<VirtualRow> $rows
      *
      * @return list<DomainName>
      */
-    public static function domainsToLookUp(iterable $rows): array
+    public static function domainsToLookUp(iterable $rows, DomainName $transportDomain): array
     {
         $domains = [];
 
         foreach ($rows as $row) {
-            if (!self::hasLegacyListShape($row)) {
+            if (!self::hasLegacyListShape($row) && !self::namesTransport($row, $transportDomain)) {
                 continue;
             }
 
@@ -170,6 +174,17 @@ final readonly class MailingListRecognition
         }
 
         return array_values($domains);
+    }
+
+    private static function namesTransport(VirtualRow $row, DomainName $transportDomain): bool
+    {
+        foreach (DestinationList::fromLegacyString($row->dest)->all() as $destination) {
+            if (self::isDestinationOnDomain($destination, $transportDomain)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
