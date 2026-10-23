@@ -22,6 +22,7 @@ use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Domain\Model\Virtual\VirtualRow;
 use Mailadmin\Domain\Policy\AccessDenied;
 use Mailadmin\Domain\Policy\ResourceNotVisible;
+use Mailadmin\Domain\Repair\RepairQueue;
 use Mailadmin\Infrastructure\Persistence\Criteria\CriteriaError;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 use Mailadmin\Infrastructure\Persistence\Criteria\SortDirection;
@@ -35,13 +36,15 @@ use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
 use Mailadmin\Tests\Support\CallTrace;
 use Mailadmin\Tests\Support\DomainFixture;
 use Mailadmin\Tests\Support\ListDeliveryFixture;
+use Mailadmin\Tests\Support\MemoryLogger;
 use Mailadmin\Tests\Support\RefusingAuditWriter;
+use Mailadmin\Tests\Support\RefusingRepairQueue;
 use Mailadmin\Tests\Support\TracingAddressStore;
 use Mailadmin\Tests\Support\TracingMailingListRepository;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use Psr\Log\NullLogger;
+use Psr\Log\LogLevel;
 
 /**
  * The five mailing list use cases, against in-memory `lists`, `virtual`,
@@ -77,6 +80,8 @@ final class MailingListUseCaseTest extends TestCase
     private InMemoryDomainStore $domains;
     private InMemoryAuditTrail $trail;
     private InMemoryRepairQueue $repairs;
+    private ?RepairQueue $repairQueue = null;
+    private MemoryLogger $logger;
     private ?AuditWriter $audit = null;
     private ?MailingListRepository $lists = null;
     private ?AddressStore $addresses = null;
@@ -92,6 +97,7 @@ final class MailingListUseCaseTest extends TestCase
         $this->domains->given(DomainFixture::domain('other.test', prefix: 'other.test'));
         $this->trail = new InMemoryAuditTrail();
         $this->repairs = new InMemoryRepairQueue();
+        $this->logger = new MemoryLogger();
         $this->superuser = ActorContext::superuser('root');
         $this->domainMaster = ActorContext::domainMaster('anna', DomainName::fromString('example.test'));
     }
@@ -215,6 +221,45 @@ final class MailingListUseCaseTest extends TestCase
         }
 
         self::assertSame('legacy', $this->repository->find(EmailAddress::parse(self::LEGACY))?->tag);
+    }
+
+    public function testAnUpdateWhoseSetBackAndRepairEntryBothFailStillReportsTheAuditFailure(): void
+    {
+        $this->givenLegacyList();
+        $this->audit = RefusingAuditWriter::successes($this->trail);
+        $this->repository->failReplaceAfter(1, PersistenceError::transactionMisuse('set back refused'));
+        $this->repairQueue = $queue = new RefusingRepairQueue();
+
+        try {
+            $this->update()->handle($this->superuser, self::LEGACY, new MailingListChanges(tag: 'crew'), null);
+            self::fail('An unaudited change went through.');
+        } catch (PersistenceError $error) {
+            // The audit failure travels, not the one of the repair queue.
+            self::assertStringNotContainsString('repair queue refused', $error->getMessage());
+            self::assertStringNotContainsString('set back refused', $error->getMessage());
+        }
+
+        self::assertSame(1, $queue->attempts());
+        self::assertNotSame([], $this->logger->recordsAt([LogLevel::ERROR]));
+    }
+
+    public function testAnUpdateRunsUnderTheNamespaceLock(): void
+    {
+        $this->givenLegacyList();
+
+        $this->update()->handle($this->superuser, self::LEGACY, new MailingListChanges(tag: 'crew'), null);
+
+        self::assertSame(1, $this->domains->namespaceLocksTaken());
+    }
+
+    public function testAnUpdateLogsNoAddressBelowError(): void
+    {
+        $this->givenLegacyList();
+
+        $this->update()->handle($this->superuser, self::LEGACY, new MailingListChanges(tag: 'crew'), null);
+
+        self::assertNotSame([], $this->logger->records());
+        $this->assertNoAddressLoggedBelowError(self::LEGACY);
     }
 
     // -----------------------------------------------------------------
@@ -409,6 +454,49 @@ final class MailingListUseCaseTest extends TestCase
         self::assertStringNotContainsString('lists refused', $entry->reason);
     }
 
+    public function testWhenTheRepairEntryForTheListRowFailsTheOriginalFailureStillTravels(): void
+    {
+        $this->virtual->failNextInsert(PersistenceError::transactionMisuse('virtual refused'));
+        $this->repository->failNextRemove(PersistenceError::transactionMisuse('lists refused'));
+        $this->repairQueue = $queue = new RefusingRepairQueue();
+
+        try {
+            $this->create()->handle($this->superuser, 'Team', '', 'team@example.test', []);
+            self::fail('A failed virtual insert was reported as a success.');
+        } catch (PersistenceError $error) {
+            self::assertStringContainsString('virtual refused', $error->getMessage());
+        }
+
+        self::assertSame(1, $queue->attempts());
+        self::assertNotSame([], $this->logger->recordsAt([LogLevel::ERROR]));
+    }
+
+    public function testWhenTheVirtualRowCannotBeSetBackTheListRowStays(): void
+    {
+        $this->audit = RefusingAuditWriter::successes($this->trail);
+        $this->virtual->failNextRemove(PersistenceError::transactionMisuse('virtual remove refused'));
+
+        try {
+            $this->create()->handle($this->superuser, 'Team', '', 'team@example.test', []);
+            self::fail('An unaudited creation went through.');
+        } catch (PersistenceError) {
+        }
+
+        // The routing row is still there, so its list must be too: removing
+        // it would turn a delivered list into a bounce.
+        self::assertCount(1, $this->virtual->rowsWithAlias('team@example.test'));
+        self::assertNotNull($this->repository->find(EmailAddress::parse('team@example.test')));
+        self::assertSame(['list.create/virtual.restore'], $this->repairs->steps());
+    }
+
+    public function testCreatingLogsNoAddressBelowError(): void
+    {
+        $this->create()->handle($this->superuser, 'Team', '', 'team@example.test', []);
+
+        self::assertNotSame([], $this->logger->records());
+        $this->assertNoAddressLoggedBelowError('team@example.test');
+    }
+
     public function testCreatingIsAuditedWithTheVirtualRowAsAChild(): void
     {
         $this->create()->handle($this->superuser, 'Team', 'team', 'team@example.test', ['anna@example.test']);
@@ -487,6 +575,31 @@ final class MailingListUseCaseTest extends TestCase
             $this->repairs->entries()[0]->parameters,
         );
         self::assertCount(2, $this->trail->all());
+    }
+
+    public function testWhenEvenTheRepairEntryFailsTheDeletionStillStands(): void
+    {
+        $this->givenTransportList();
+        $this->repository->failNextRemove(PersistenceError::transactionMisuse('lists refused'));
+        $this->repairQueue = $queue = new RefusingRepairQueue();
+
+        $this->delete()->handle($this->superuser, 'team@example.test', null);
+
+        self::assertSame([], $this->virtual->all());
+        self::assertSame(1, $queue->attempts());
+        self::assertCount(2, $this->logger->recordsAt([LogLevel::ERROR]));
+    }
+
+    public function testDeletingLogsNoAddressBelowError(): void
+    {
+        $this->repository->given(MailingList::fromStoredValues('Team', '', 'team@example.test', ''));
+        $this->virtual->givenRow('team@example.test', 'team.example.test@maillist.invalid');
+        $this->virtual->givenRow('team@example.test', 'info.example.test', 'info.example.test');
+
+        $this->delete()->handle($this->superuser, 'team@example.test', null);
+
+        self::assertNotSame([], $this->logger->recordsAt([LogLevel::NOTICE]));
+        $this->assertNoAddressLoggedBelowError('team@example.test');
     }
 
     public function testDeletingIsAuditedWithTheVirtualRowAsAChild(): void
@@ -838,7 +951,7 @@ final class MailingListUseCaseTest extends TestCase
 
     private function rows(): RowWriter
     {
-        return new RowWriter($this->addressStore(), $this->auditWriter(), $this->repairs, new NullLogger());
+        return new RowWriter($this->addressStore(), $this->auditWriter(), $this->repairQueue(), $this->logger);
     }
 
     private function listing(): ListMailingLists
@@ -860,14 +973,20 @@ final class MailingListUseCaseTest extends TestCase
             ListDeliveryFixture::delivery(),
             $this->auditWriter(),
             $this->rows(),
-            $this->repairs,
-            new NullLogger(),
+            $this->repairQueue(),
+            $this->logger,
         );
     }
 
     private function update(): UpdateMailingList
     {
-        return new UpdateMailingList($this->listRepository(), $this->auditWriter(), $this->repairs, new NullLogger());
+        return new UpdateMailingList(
+            $this->listRepository(),
+            $this->domains,
+            $this->auditWriter(),
+            $this->repairQueue(),
+            $this->logger,
+        );
     }
 
     private function delete(): DeleteMailingList
@@ -879,8 +998,28 @@ final class MailingListUseCaseTest extends TestCase
             $this->addressStore(),
             $this->auditWriter(),
             $this->rows(),
-            $this->repairs,
-            new NullLogger(),
+            $this->repairQueue(),
+            $this->logger,
         );
+    }
+
+    private function repairQueue(): RepairQueue
+    {
+        return $this->repairQueue ?? $this->repairs;
+    }
+
+    /**
+     * Addresses are in the audit trail; below `error`, a log line names none
+     * (CLAUDE.md, logging — like every other use case).
+     */
+    private function assertNoAddressLoggedBelowError(string $address): void
+    {
+        foreach ($this->logger->recordsAt([LogLevel::DEBUG, LogLevel::INFO, LogLevel::NOTICE, LogLevel::WARNING]) as $record) {
+            self::assertStringNotContainsString(
+                $address,
+                (string) json_encode($record),
+                sprintf('The %s line "%s" names the address.', $record['level'], $record['message']),
+            );
+        }
     }
 }

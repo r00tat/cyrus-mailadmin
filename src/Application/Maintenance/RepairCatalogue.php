@@ -22,7 +22,9 @@ namespace Mailadmin\Application\Maintenance;
  *
  * Everything else is manual: `mailstore.create_mailbox_uncertain` (nobody knows
  * whose mailbox it is), `database.remove_rows` and `virtual.restore` (the rows
- * may be half changed in ways only a human can judge), `audit.record` (a missing
+ * may be half changed in ways only a human can judge), `lists.restore` (a list
+ * change that is neither audited nor set back — only a human can say which
+ * version is right), `audit.record` (a missing
  * audit entry cannot be written after the fact without inventing it) and
  * `sieve.restore` (the previous script is not in the entry).
  *

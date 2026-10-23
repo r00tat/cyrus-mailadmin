@@ -40,6 +40,8 @@ use Throwable;
  *    row without its `virtual` row receives nothing. It becomes a repair entry
  *    `list.delete`/`lists.remove` and an `error` log line, and the client gets
  *    its `204` — the way `DeleteAccount` reports a mailbox it could not remove.
+ *    Even a repair queue that refuses the entry does not turn this into a
+ *    failure; that is an `error` log line as well.
  *
  * Both steps run under the namespace lock every address use case takes.
  */
@@ -99,10 +101,10 @@ final readonly class DeleteMailingList
             }
         }
 
+        // No address below `error` (here and below): the audit trail holds it.
         if ($others > 0) {
             $this->logger->notice('A mailing list address also has virtual rows of another type; they are kept.', [
                 'admin' => $actor->username,
-                'list_address' => $address->toString(),
                 'row_count' => $others,
             ]);
         }
@@ -155,7 +157,6 @@ final readonly class DeleteMailingList
             if (!$this->repository->remove($address)) {
                 $this->logger->notice('A mailing list row was already gone when it was to be removed.', [
                     'admin' => $actor->username,
-                    'list_address' => $address->toString(),
                 ]);
             }
         } catch (Throwable $error) {
@@ -165,25 +166,31 @@ final readonly class DeleteMailingList
                 'reason' => $error->getMessage(),
             ]);
 
-            $this->repairs->record(new RepairRequest(
-                operation: self::OPERATION,
-                step: 'lists.remove',
-                subject: $address->toString(),
-                intended: sprintf('remove the list %s from virtual and lists', $address->toString()),
-                reached: sprintf('the virtual rows of %s are gone; the lists row remains and receives nothing', $address->toString()),
-                reason: 'the database refused to remove the lists row',
-                parameters: [
-                    'address' => $address->toString(),
-                    'domain' => $address->domain->toString(),
-                ],
-            ));
+            try {
+                $this->repairs->record(new RepairRequest(
+                    operation: self::OPERATION,
+                    step: 'lists.remove',
+                    subject: $address->toString(),
+                    intended: sprintf('remove the list %s from virtual and lists', $address->toString()),
+                    reached: sprintf('the virtual rows of %s are gone; the lists row remains and receives nothing', $address->toString()),
+                    reason: 'the database refused to remove the lists row',
+                    parameters: [
+                        'address' => $address->toString(),
+                        'domain' => $address->domain->toString(),
+                    ],
+                ));
+            } catch (Throwable $repairError) {
+                $this->logger->error('The repair entry for a mailing list row could not be written.', [
+                    'list_address' => $address->toString(),
+                    'reason' => $repairError->getMessage(),
+                ]);
+            }
 
             return;
         }
 
         $this->logger->info('A mailing list was deleted.', [
             'admin' => $actor->username,
-            'list_address' => $address->toString(),
         ]);
     }
 }

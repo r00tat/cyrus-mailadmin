@@ -6,6 +6,7 @@ namespace Mailadmin\Application\MailingList;
 
 use Mailadmin\Application\Audit\AuditEntry;
 use Mailadmin\Application\Audit\AuditWriter;
+use Mailadmin\Application\Domain\DomainStore;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\Exception\InvalidMailingList;
 use Mailadmin\Domain\MailingList\MailingList;
@@ -52,6 +53,10 @@ use Throwable;
  *
  * `If-Match` is accepted, not demanded (architecture 7.1). Sent and stale, the
  * answer is `412`; absent, the write proceeds.
+ *
+ * Read, write and set-back run under the namespace lock that creating,
+ * deleting and the repair retry take, so a deletion cannot slip in between
+ * and a set-back cannot overwrite somebody else's change.
  */
 final readonly class UpdateMailingList
 {
@@ -59,6 +64,7 @@ final readonly class UpdateMailingList
 
     public function __construct(
         private MailingListRepository $repository,
+        private DomainStore $domains,
         private AuditWriter $audit,
         private RepairQueue $repairs,
         private LoggerInterface $logger,
@@ -80,32 +86,36 @@ final readonly class UpdateMailingList
     ): MailingList {
         ListPolicy::requireWrite($actor);
 
-        $stored = MailingListGuard::load($this->repository, $actor, $address);
-        MailingListGuard::precondition($stored, $ifMatch);
+        $updated = $this->domains->withNamespaceLock(function () use ($actor, $address, $changes, $ifMatch): MailingList {
+            $stored = MailingListGuard::load($this->repository, $actor, $address);
+            MailingListGuard::precondition($stored, $ifMatch);
 
-        $updated = self::apply($stored, $changes);
+            $updated = self::apply($stored, $changes);
 
-        $this->repository->replace($updated);
+            $this->repository->replace($updated);
 
-        try {
-            $this->audit->record(AuditEntry::change(
-                $actor,
-                self::OPERATION,
-                'list',
-                $stored->address,
-                MailingListView::representation($stored),
-                MailingListView::representation($updated),
-                $stored->domain(),
-            ));
-        } catch (Throwable $error) {
-            $this->setBack($stored, $error);
+            try {
+                $this->audit->record(AuditEntry::change(
+                    $actor,
+                    self::OPERATION,
+                    'list',
+                    $stored->address,
+                    MailingListView::representation($stored),
+                    MailingListView::representation($updated),
+                    $stored->domain(),
+                ));
+            } catch (Throwable $error) {
+                $this->setBack($stored, $error);
 
-            throw $error;
-        }
+                throw $error;
+            }
 
+            return $updated;
+        });
+
+        // No address below `error`: the audit trail holds it.
         $this->logger->info('A mailing list was changed.', [
             'admin' => $actor->username,
-            'list_address' => $updated->address,
             'changed' => self::changedFields($changes),
             'member_count' => $updated->members->count(),
         ]);
@@ -128,14 +138,23 @@ final readonly class UpdateMailingList
                 'reason' => $error->getMessage(),
             ]);
 
-            $this->repairs->record(new RepairRequest(
-                operation: self::OPERATION,
-                step: 'lists.restore',
-                subject: $stored->address,
-                intended: sprintf('change the list %s and record the change in the audit log', $stored->address),
-                reached: sprintf('the list %s is changed and no audit entry records it', $stored->address),
-                reason: 'the audit entry could not be written and the row could not be set back',
-            ));
+            // Guarded: a failing repair queue must not replace the audit
+            // failure, which the caller rethrows.
+            try {
+                $this->repairs->record(new RepairRequest(
+                    operation: self::OPERATION,
+                    step: 'lists.restore',
+                    subject: $stored->address,
+                    intended: sprintf('change the list %s and record the change in the audit log', $stored->address),
+                    reached: sprintf('the list %s is changed and no audit entry records it', $stored->address),
+                    reason: 'the audit entry could not be written and the row could not be set back',
+                ));
+            } catch (Throwable $repairError) {
+                $this->logger->error('The repair entry for a mailing list change could not be written.', [
+                    'list_address' => $stored->address,
+                    'reason' => $repairError->getMessage(),
+                ]);
+            }
         }
     }
 

@@ -61,6 +61,10 @@ use Throwable;
  *    (`list.unknown_domain`);
  *  - the address is free: not in `lists`, not in `virtual` or as an account
  *    name, and no list shares its list key (`list.address_taken`).
+ *
+ * The list-key check can tell a domain master that a list exists in another
+ * domain (`a.b@own.test` and `a@b.own.test` share a key); the spec requires
+ * the refusal all the same.
  */
 final readonly class CreateMailingList
 {
@@ -151,9 +155,9 @@ final readonly class CreateMailingList
             }
         });
 
+        // No address below `error`: the audit trail holds it.
         $this->logger->info('A mailing list was created.', [
             'admin' => $actor->username,
-            'list_address' => $list->address,
             'member_count' => $list->members->count(),
         ]);
 
@@ -211,18 +215,27 @@ final readonly class CreateMailingList
                 'reason' => $error->getMessage(),
             ]);
 
-            $this->repairs->record(new RepairRequest(
-                operation: self::OPERATION,
-                step: 'lists.remove',
-                subject: $address->toString(),
-                intended: sprintf('create the list %s in lists and virtual', $address->toString()),
-                reached: sprintf('the lists row of %s exists without a virtual row and receives nothing', $address->toString()),
-                reason: self::reasonOf($cause),
-                parameters: [
-                    'address' => $address->toString(),
-                    'domain' => $address->domain->toString(),
-                ],
-            ));
+            // Guarded: a failing repair queue must not replace the original
+            // failure, which the caller rethrows.
+            try {
+                $this->repairs->record(new RepairRequest(
+                    operation: self::OPERATION,
+                    step: 'lists.remove',
+                    subject: $address->toString(),
+                    intended: sprintf('create the list %s in lists and virtual', $address->toString()),
+                    reached: sprintf('the lists row of %s exists without a virtual row and receives nothing', $address->toString()),
+                    reason: self::reasonOf($cause),
+                    parameters: [
+                        'address' => $address->toString(),
+                        'domain' => $address->domain->toString(),
+                    ],
+                ));
+            } catch (Throwable $repairError) {
+                $this->logger->error('The repair entry for a mailing list row could not be written.', [
+                    'list_address' => $address->toString(),
+                    'reason' => $repairError->getMessage(),
+                ]);
+            }
         }
     }
 

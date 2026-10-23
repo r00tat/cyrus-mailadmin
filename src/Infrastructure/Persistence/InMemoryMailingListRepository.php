@@ -55,6 +55,10 @@ final class InMemoryMailingListRepository implements MailingListRepository
 
     private ?Throwable $removeFailure = null;
 
+    private ?Throwable $replaceFailure = null;
+
+    private int $replacesBeforeFailure = 0;
+
     public function given(MailingList ...$lists): void
     {
         foreach ($lists as $list) {
@@ -75,6 +79,16 @@ final class InMemoryMailingListRepository implements MailingListRepository
     public function failNextRemove(Throwable $failure): void
     {
         $this->removeFailure = $failure;
+    }
+
+    /**
+     * Let the next `$successes` calls of {@see replace()} through, then fail
+     * the one after that before it writes.
+     */
+    public function failReplaceAfter(int $successes, Throwable $failure): void
+    {
+        $this->replacesBeforeFailure = $successes;
+        $this->replaceFailure = $failure;
     }
 
     public function writeCount(): int
@@ -138,6 +152,17 @@ final class InMemoryMailingListRepository implements MailingListRepository
 
     public function replace(MailingList $list): void
     {
+        if ($this->replaceFailure !== null) {
+            if ($this->replacesBeforeFailure === 0) {
+                $failure = $this->replaceFailure;
+                $this->replaceFailure = null;
+
+                throw $failure;
+            }
+
+            --$this->replacesBeforeFailure;
+        }
+
         ++$this->writes;
 
         // Every row of the address, as the UPDATE does.
