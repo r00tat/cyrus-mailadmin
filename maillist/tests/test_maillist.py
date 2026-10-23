@@ -433,3 +433,27 @@ def test_resolve_list_key_prefers_stripped_argument() -> None:
     assert maillist.resolve_list_key("  arg.example.org ", msg, True) == "arg.example.org"
     assert maillist.resolve_list_key("   ", msg, True) == "fallback.example.org"
     assert maillist.resolve_list_key(None, msg, False) is None
+
+
+def test_two_delivered_to_headers_are_usage_error_without_argument(run_main) -> None:
+    raw = RAW_MAIL.replace(b"Subject:", b"Delivered-To: evil.example.org@maillist.invalid\r\nSubject:")
+    code, connection, smtps = run_main([], raw=raw)
+    assert code == maillist.EX_USAGE
+    assert connection.calls == []
+    assert smtps == []
+
+
+def test_argument_wins_even_with_two_delivered_to_headers(run_main) -> None:
+    raw = RAW_MAIL.replace(b"Subject:", b"Delivered-To: evil.example.org@maillist.invalid\r\nSubject:")
+    code, connection, _ = run_main(["list.example.org"], raw=raw)
+    assert code == maillist.EX_OK
+    assert connection.calls[0][1] == ("list.example.org",)
+
+
+def test_recipient_addresses_are_logged_only_at_debug(caplog) -> None:
+    with caplog.at_level("DEBUG", logger="maillist"):
+        maillist.normalize_recipients("alice@example.com", "MSG-9")
+    info_text = " ".join(r.getMessage() for r in caplog.records if r.levelname == "INFO")
+    debug_text = " ".join(r.getMessage() for r in caplog.records if r.levelname == "DEBUG")
+    assert "alice@example.com" not in info_text
+    assert "alice@example.com" in debug_text

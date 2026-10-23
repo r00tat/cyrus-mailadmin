@@ -238,7 +238,7 @@ def normalize_recipients(members: str, msg_id: str) -> list[str]:
         recipients.append(smtp_to)
 
     logger.info(f"{msg_id} - Normalized {len(recipients)} unique recipients from {len(seen)} entries")
-    logger.info(f"{msg_id} - Recipients: {', '.join(recipients)}")
+    logger.debug(f"{msg_id} - Recipients: {', '.join(recipients)}")
     return recipients
 
 
@@ -433,6 +433,10 @@ def resolve_list_key(argument: str | None, incoming: EmailMessage, fallback: boo
     if argument and argument.strip():
         return argument.strip()
     if fallback:
+        # Only trust an unambiguous header: a sender-supplied extra Delivered-To must not pick the list.
+        if len(incoming.get_all("Delivered-To") or []) != 1:
+            logger.warning("Ignoring Delivered-To fallback: expected exactly one header")
+            return None
         return extract_delivered_to_local_part(incoming)
     return None
 
