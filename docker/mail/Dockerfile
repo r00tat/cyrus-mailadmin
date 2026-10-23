@@ -72,7 +72,7 @@ COPY postfix/sasl/smtpd.conf /etc/postfix/sasl/smtpd.conf
 # Mailing lists: the pseudo-domain to the pipe transport, and the refusal of
 # direct mail to it. Neither carries a credential, so both are compiled here.
 COPY postfix/transport postfix/maillist_block /etc/postfix/
-RUN postmap /etc/postfix/transport /etc/postfix/maillist_block
+RUN postmap hash:/etc/postfix/transport hash:/etc/postfix/maillist_block
 
 # --- PAM / saslauthd --------------------------------------------------------
 # One template, installed under every service name saslauthd can be asked for.

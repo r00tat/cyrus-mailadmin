@@ -142,11 +142,14 @@ final class MailingListDeliveryTest extends TestCase
     public function testDirectMailToTheTransportDomainIsRefused(): void
     {
         $token = self::token();
-        $code = self::submit(self::LIST_KEY . '@' . ListDelivery::DEFAULT_TRANSPORT_DOMAIN, $token);
+        [$code, $text] = self::submitWithResponse(self::LIST_KEY . '@' . ListDelivery::DEFAULT_TRANSPORT_DOMAIN, $token);
 
-        self::assertGreaterThanOrEqual(500, $code, 'Postfix accepted mail addressed to the transport domain directly.');
-        self::assertLessThan(600, $code);
-        self::assertNull(self::keyAfterWaiting($token), 'Mail addressed to the transport domain reached the pipe transport.');
+        self::assertSame(554, $code, 'Postfix did not refuse mail addressed to the transport domain directly: ' . $text);
+        self::assertStringStartsWith('5.7.1 ', $text);
+        self::assertStringContainsString('Access denied', $text, 'The refusal did not come from maillist_block.');
+
+        // Nothing was sent after the refusal, so there is nothing to wait for.
+        self::assertNull(self::keyFor($token), 'Mail addressed to the transport domain reached the pipe transport.');
     }
 
     private function createList(): void
@@ -198,11 +201,20 @@ final class MailingListDeliveryTest extends TestCase
         self::assertTrue($repairs->isEmpty());
     }
 
-    /**
-     * Submits one message as Anna and returns the answer to RCPT TO. The
-     * message is only sent if the recipient was accepted.
-     */
+    /** The code of {@see submitWithResponse()}. */
     private static function submit(string $recipient, string $token): int
+    {
+        return self::submitWithResponse($recipient, $token)[0];
+    }
+
+    /**
+     * Submits one message as Anna and returns the answer to RCPT TO: the code
+     * and the text of the reply. The message is only sent if the recipient was
+     * accepted.
+     *
+     * @return array{int, string}
+     */
+    private static function submitWithResponse(string $recipient, string $token): array
     {
         $anna = TestAccounts::bcryptAccount();
         $smtp = SmtpProbe::connect();
@@ -214,12 +226,13 @@ final class MailingListDeliveryTest extends TestCase
             self::assertSame(235, $smtp->authPlain($anna->storedUsername, $anna->password));
 
             self::assertSame(250, $smtp->command(sprintf('MAIL FROM:<%s>', $anna->address))[0]);
-            [$code] = $smtp->command(sprintf('RCPT TO:<%s>', $recipient));
+            [$code, $lines] = $smtp->command(sprintf('RCPT TO:<%s>', $recipient));
+            $text = implode(' ', $lines);
 
             if ($code !== 250) {
                 $smtp->command('RSET');
 
-                return $code;
+                return [$code, $text];
             }
 
             self::assertSame(354, $smtp->command('DATA')[0]);
@@ -232,7 +245,7 @@ final class MailingListDeliveryTest extends TestCase
                 '.',
             ]))[0]);
 
-            return $code;
+            return [$code, $text];
         } finally {
             $smtp->close();
         }
