@@ -20,11 +20,18 @@ components:
         What a row of `virtual` is, decided once by its field pattern
         (architecture 3.4). `unknown` is a row that fits no pattern; it is
         listed, never skipped (U-22).
+
+        `mailing_list` is the row that routes a mailing list's address (A5):
+        `dest` on the list transport domain, or the legacy form
+        `dest = username = REPLACE(alias, '@', '.')` with a list of that
+        address. `alias` is then the list address. Such a row is read-only
+        here; it is changed and removed through `/lists`.
       enum:
         - mailbox_address
         - alias
         - catchall
         - forward
+        - mailing_list
         - unknown
 
     AddressUnknownReason:

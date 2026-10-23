@@ -28,6 +28,7 @@ export const deAddress = {
   'address.list.type.alias': 'Alias',
   'address.list.type.catchall': 'Catchall',
   'address.list.type.forward': 'Weiterleitung',
+  'address.list.type.mailingList': 'Mailingliste',
   'address.list.type.unknown': 'Unbekannt',
   'address.list.unknownReason.noAlias': 'Die Zeile hat keine Adresse.',
   'address.list.unknownReason.noDestination': 'Die Zeile hat kein Ziel.',

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mailadmin\Application\Maintenance;
 
+use Mailadmin\Application\MailingList\ListDelivery;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\Exception\DomainError;
 use Mailadmin\Domain\Mailstore\Mailstore;
@@ -13,6 +14,8 @@ use Mailadmin\Domain\Model\DottedNamespace;
 use Mailadmin\Domain\Model\LocalPart;
 use Mailadmin\Domain\Model\MailboxIdentity;
 use Mailadmin\Domain\Model\NamingScheme;
+use Mailadmin\Domain\Model\Virtual\MailingListEntry;
+use Mailadmin\Domain\Model\Virtual\MailingListRecognition;
 use Mailadmin\Domain\Model\Virtual\UnknownVirtualEntry;
 use Mailadmin\Domain\Model\Virtual\VirtualEntryClassifier;
 use Mailadmin\Domain\Model\Virtual\VirtualRow;
@@ -58,6 +61,7 @@ final readonly class Reconcile
         private MaintenanceInventory $inventory,
         private Mailstore $mailstore,
         private Clock $clock,
+        private ListDelivery $delivery,
     ) {
     }
 
@@ -285,7 +289,11 @@ final readonly class Reconcile
         }
 
         $findings = [];
-        $entries = (new VirtualEntryClassifier())->classifyAll($rows, $accountDomains);
+        $entries = (new VirtualEntryClassifier())->classifyAll(
+            $rows,
+            new MailingListRecognition($this->delivery->transportDomain, $lists),
+            $accountDomains,
+        );
 
         foreach ($entries as $entry) {
             $row = $entry->row();
@@ -301,6 +309,13 @@ final readonly class Reconcile
                     $entry->reason->value,
                 );
 
+                continue;
+            }
+
+            if ($entry instanceof MailingListEntry) {
+                // A list row names no account: in the legacy form `username`
+                // and `dest` are the list key, in the transport form `dest` is
+                // on the pseudo-domain. Neither is a missing owner or target.
                 continue;
             }
 

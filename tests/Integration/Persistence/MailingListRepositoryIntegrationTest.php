@@ -182,6 +182,31 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
         self::assertFalse($this->repository->existsWithKey('other.c.test'));
     }
 
+    public function testAddressesInDomainReturnsTheListsOfExactlyThatDomainLowerCased(): void
+    {
+        $this->insertRaw('one', '', 'Team@Example.Test', '');
+        $this->insertRaw('two', '', 'crew@example.test', '');
+        $this->insertRaw('sub', '', 'news@sub.example.test', '');
+        $this->insertRaw('suffix', '', 'x@notexample.test', '');
+        $this->insertRaw('wild', '', 'y@exampleXtest', '');
+        $this->insertRaw('other', '', 'team@other.test', '');
+
+        $addresses = $this->repository->addressesInDomain(DomainName::fromString('example.test'));
+        sort($addresses);
+
+        self::assertSame(['crew@example.test', 'team@example.test'], $addresses);
+    }
+
+    public function testAddressesInDomainTakesWildcardCharactersLiterally(): void
+    {
+        $this->insertRaw('one', '', 'a@ex-ample.test', '');
+        $this->insertRaw('two', '', 'b@exaample.test', '');
+
+        // `_` would match any one character in a LIKE pattern.
+        self::assertSame(['a@ex-ample.test'], $this->repository->addressesInDomain(DomainName::fromString('ex-ample.test')));
+        self::assertSame([], $this->repository->addressesInDomain(DomainName::fromStoredValue('ex_ample.test')));
+    }
+
     public function testRemovingDeletesEveryRowOfTheAddressAndReportsWhetherThereWasAnything(): void
     {
         $this->insertRaw('one', '', 'legacy@example.test', '');

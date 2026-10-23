@@ -10,7 +10,7 @@ use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Domain\Model\MailboxIdentity;
 
 /**
- * Turns a `virtual` row into one of the five types — **once**, when the row is
+ * Turns a `virtual` row into one of the six types — **once**, when the row is
  * read (architecture 3.4).
  *
  * This is the only place in the application that looks at the field pattern of
@@ -22,6 +22,7 @@ use Mailadmin\Domain\Model\MailboxIdentity;
  * alias empty            → unknown (no_alias)
  * dest empty             → unknown (no_destination)
  * alias starts with "@"  → catchall
+ * list row (see below)   → mailing list (unknown when alias is no address)
  * username empty         → forward
  * alias is an address    → mailbox address if it is the account's own address,
  *                          otherwise alias
@@ -34,6 +35,13 @@ use Mailadmin\Domain\Model\MailboxIdentity;
  * name alone cannot be taken apart (architecture 3.3). Without it the row is
  * classified as an alias: it is an address that delivers to a Cyrus user, which
  * is true either way. A6's reconciliation reports a target that has no account.
+ *
+ * **Why the list addresses are a parameter.** A list row in the transport form
+ * has an empty `username` and would otherwise read as a forward; one in the
+ * legacy form looks like an account's address row. {@see MailingListRecognition}
+ * carries the transport domain and the addresses in `lists`, which the caller
+ * loads — the classifier itself reads nothing. The list rule therefore comes
+ * before "username empty" and before the address/alias decision.
  */
 final readonly class VirtualEntryClassifier
 {
@@ -41,8 +49,11 @@ final readonly class VirtualEntryClassifier
      * @param DomainName|null $accountDomain `accountuser.domain_name` of the
      *                                       account named in `virtual.username`
      */
-    public function classify(VirtualRow $row, ?DomainName $accountDomain = null): VirtualEntry
-    {
+    public function classify(
+        VirtualRow $row,
+        MailingListRecognition $lists,
+        ?DomainName $accountDomain = null,
+    ): VirtualEntry {
         $alias = trim($row->alias);
         $destinations = DestinationList::fromLegacyString($row->dest);
 
@@ -56,6 +67,10 @@ final readonly class VirtualEntryClassifier
 
         if (str_starts_with($alias, '@')) {
             return $this->catchAll($alias, $destinations, $row);
+        }
+
+        if ($lists->deliversToTransport($row) || $lists->isLegacyListRow($row)) {
+            return $this->mailingList($alias, $destinations, $row);
         }
 
         if (!$row->hasUsername()) {
@@ -80,7 +95,7 @@ final readonly class VirtualEntryClassifier
      *
      * @return list<VirtualEntry>
      */
-    public function classifyAll(iterable $rows, array $accountDomains = []): array
+    public function classifyAll(iterable $rows, MailingListRecognition $lists, array $accountDomains = []): array
     {
         $byLowercaseName = [];
 
@@ -92,7 +107,7 @@ final readonly class VirtualEntryClassifier
 
         foreach ($rows as $row) {
             $key = strtolower(trim($row->username));
-            $entries[] = $this->classify($row, $byLowercaseName[$key] ?? null);
+            $entries[] = $this->classify($row, $lists, $byLowercaseName[$key] ?? null);
         }
 
         return $entries;
@@ -111,6 +126,22 @@ final readonly class VirtualEntryClassifier
 
         try {
             return new CatchAll(DomainName::fromStoredValue($domain), $destinations, $row);
+        } catch (DomainError) {
+            return new UnknownVirtualEntry(UnknownReason::UnusableValue, $row);
+        }
+    }
+
+    private function mailingList(
+        string $alias,
+        DestinationList $destinations,
+        VirtualRow $row,
+    ): VirtualEntry {
+        if (!EmailAddress::looksLikeAddress($alias)) {
+            return new UnknownVirtualEntry(UnknownReason::AliasIsNotAnAddress, $row);
+        }
+
+        try {
+            return new MailingListEntry(EmailAddress::parseStored($alias), $destinations, $row);
         } catch (DomainError) {
             return new UnknownVirtualEntry(UnknownReason::UnusableValue, $row);
         }

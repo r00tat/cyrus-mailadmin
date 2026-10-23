@@ -6,6 +6,7 @@ namespace Mailadmin\Tests\Unit\Infrastructure\Persistence;
 
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
+use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 use Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository;
@@ -78,6 +79,22 @@ final class InMemoryMailingListRepositoryTest extends TestCase
 
         self::assertTrue($this->repository->existsWithKey('a.b.c.test'));
         self::assertFalse($this->repository->existsWithKey('a.b.d.test'));
+    }
+
+    public function testAddressesInDomainNamesTheListsOfExactlyThatDomainLowerCased(): void
+    {
+        $this->repository->given(
+            MailingList::fromStoredValues('one', '', 'Team@Example.Test', ''),
+            MailingList::fromStoredValues('two', '', 'crew@example.test', ''),
+            MailingList::fromStoredValues('sub', '', 'news@sub.example.test', ''),
+            MailingList::fromStoredValues('suffix', '', 'x@notexample.test', ''),
+            MailingList::fromStoredValues('other', '', 'team@other.test', ''),
+        );
+
+        self::assertSame(
+            ['team@example.test', 'crew@example.test'],
+            $this->repository->addressesInDomain(DomainName::fromString('example.test')),
+        );
     }
 
     public function testRemoveDeletesEveryRowOfTheAddress(): void

@@ -132,8 +132,9 @@ export function AddressListPage(): ReactNode {
             narrow: true,
             align: 'right' as const,
             render: (entry: AddressEntry) =>
-              // An account's own address goes with the account (U-83).
-              entry.type === 'mailbox_address' ? null : (
+              // An account's own address goes with the account (U-83), a
+              // list's row with the list (A5).
+              entry.type === 'mailbox_address' || entry.type === 'mailing_list' ? null : (
                 <IconButton
                   size="small"
                   aria-label={t('address.list.action.deleteEntry', { alias: entry.alias })}

@@ -6,6 +6,7 @@ namespace Mailadmin\Infrastructure\Persistence;
 
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
+use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\CriteriaError;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
@@ -102,6 +103,22 @@ final class InMemoryMailingListRepository implements MailingListRepository
         }
 
         return false;
+    }
+
+    public function addressesInDomain(DomainName $domain): array
+    {
+        $suffix = '@' . strtolower($domain->toString());
+        $addresses = [];
+
+        foreach ($this->lists as $list) {
+            $address = strtolower($list->address);
+
+            if (str_ends_with($address, $suffix)) {
+                $addresses[] = $address;
+            }
+        }
+
+        return $addresses;
     }
 
     public function add(MailingList $list): void

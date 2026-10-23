@@ -12,6 +12,7 @@ use Mailadmin\Application\Address\CreateAlias;
 use Mailadmin\Application\Address\DeleteAlias;
 use Mailadmin\Application\Address\UpdateAlias;
 use Mailadmin\Domain\Exception\InvalidAddress;
+use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Policy\ResourceNotVisible;
 use Mailadmin\Infrastructure\Persistence\PersistenceError;
 use Mailadmin\Tests\Support\DomainFixture;
@@ -230,6 +231,42 @@ final class AliasUseCaseTest extends AddressUseCaseTestCase
         $failure = $this->expectFailure(fn () => $this->getAlias()->handle(DomainFixture::superuser(), 'anna@example.test'));
 
         self::assertSame(404, $failure->status);
+    }
+
+    public function testAMailingListIsNoAlias(): void
+    {
+        // The legacy list row looks like an alias onto a Cyrus user named like
+        // the list; the `lists` row is what says otherwise. Before B4 it was an
+        // editable alias.
+        $this->mailingLists->given(MailingList::fromStoredValues('Team', 'team', 'team@example.test', ''));
+        $this->virtual->givenRow('team@example.test', 'team.example.test', 'team.example.test');
+
+        $failure = $this->expectFailure(fn () => $this->getAlias()->handle(DomainFixture::superuser(), 'team@example.test'));
+
+        self::assertSame(404, $failure->status);
+    }
+
+    public function testAnAliasSharingItsAddressWithAMailingListEntryIsNotEditable(): void
+    {
+        $this->virtual->givenRow('team@example.test', 'anna.example.test', 'anna.example.test');
+        $this->virtual->givenRow('team@example.test', 'team.example.test@maillist.invalid', '');
+
+        $state = $this->getAlias()->handle(DomainFixture::superuser(), 'team@example.test');
+        self::assertFalse(AddressView::alias($state)['editable']);
+        self::assertSame(
+            ['alias', 'mailing_list'],
+            array_map(static fn (array $entry): mixed => $entry['type'], AddressView::alias($state)['entries']),
+        );
+
+        $failure = $this->expectFailure(fn () => $this->updateAlias()->handle(
+            DomainFixture::superuser(),
+            'team@example.test',
+            new AliasChange(destinations: ['ben.example.test']),
+            null,
+        ));
+
+        self::assertSame(AddressErrorCode::NOT_EDITABLE, $failure->errorCode);
+        self::assertCount(2, $this->rowsOf('team@example.test'));
     }
 
     public function testAForeignAndAMissingAliasLookTheSame(): void

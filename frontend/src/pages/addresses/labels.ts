@@ -14,12 +14,13 @@ export type Catchall = components['schemas']['Catchall'];
 export type Forwards = components['schemas']['Forwards'];
 export type Vacation = components['schemas']['Vacation'];
 
-/** The four types of architecture 3.4, plus the rows that fit none (U-22). */
+/** The four types of architecture 3.4, mailing list rows (A5), plus the rows that fit none (U-22). */
 export const ENTRY_TYPES = [
   'mailbox_address',
   'alias',
   'catchall',
   'forward',
+  'mailing_list',
   'unknown',
 ] as const satisfies readonly AddressEntryType[];
 
@@ -28,6 +29,7 @@ export const ENTRY_TYPE_KEYS: Readonly<Record<AddressEntryType, TranslationKey>>
   alias: 'address.list.type.alias',
   catchall: 'address.list.type.catchall',
   forward: 'address.list.type.forward',
+  mailing_list: 'address.list.type.mailingList',
   unknown: 'address.list.type.unknown',
 };
 

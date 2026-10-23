@@ -6,6 +6,7 @@ namespace Mailadmin\Infrastructure\Persistence;
 
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
+use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\FilterAllowlist;
 use Mailadmin\Infrastructure\Persistence\Criteria\FilterComparison;
@@ -122,6 +123,30 @@ final class SqlMailingListRepository extends Repository implements MailingListRe
             "SELECT 1 AS `found` FROM `lists` WHERE REPLACE(`address`, '@', '.') = :list_key LIMIT 1",
             ['list_key' => $listKey],
         ) !== null;
+    }
+
+    /**
+     * Matched with `RIGHT()` rather than `LIKE`, as `DomainRepository` does for
+     * `virtual.alias`: a `_` or `%` in the domain cannot turn into a wildcard.
+     * The column's collation ignores case; `LOWER()` makes the result
+     * lower-case whatever was stored.
+     */
+    public function addressesInDomain(DomainName $domain): array
+    {
+        $suffix = '@' . strtolower($domain->toString());
+        $length = strlen($suffix);
+
+        // One placeholder per occurrence: native prepares refuse a name used twice.
+        $rows = $this->connection->select(
+            'SELECT DISTINCT LOWER(`address`) AS `address` FROM `lists` '
+            . 'WHERE CHAR_LENGTH(`address`) > :min AND LOWER(RIGHT(`address`, :tail)) = :suffix',
+            ['min' => $length, 'tail' => $length, 'suffix' => $suffix],
+        );
+
+        return array_values(array_map(
+            static fn (array $row): string => self::text($row['address'] ?? null),
+            $rows,
+        ));
     }
 
     public function add(MailingList $list): void

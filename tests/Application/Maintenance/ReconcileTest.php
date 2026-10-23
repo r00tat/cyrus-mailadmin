@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Mailadmin\Tests\Application\Maintenance;
 
+use Mailadmin\Application\MailingList\ListDelivery;
+use Mailadmin\Application\MailingList\ListDeliveryMode;
 use Mailadmin\Application\Maintenance\FindingCategory;
 use Mailadmin\Application\Maintenance\Reconcile;
 use Mailadmin\Application\Maintenance\ReconciliationReport;
@@ -189,6 +191,27 @@ final class ReconcileTest extends TestCase
         self::assertSame([], $this->reconcile()->of(FindingCategory::VirtualTargetMissing));
     }
 
+    public function testMailingListEntriesInEitherFormAreNotReported(): void
+    {
+        // The legacy form names a "user" that is the list key and no account;
+        // the transport form names the pseudo-domain. Both are lists, and
+        // neither is a missing owner or target.
+        $this->inventory
+            ->givenList('team@example.test')
+            ->givenList('crew@example.test')
+            ->givenRow(new VirtualRow('team@example.test', 'team.example.test', 'team.example.test'))
+            ->givenRow(new VirtualRow('crew@example.test', 'crew.example.test@maillist.invalid', ''));
+
+        self::assertSame([], $this->reconcile()->findings);
+    }
+
+    public function testALegacyShapedRowWithoutAListIsStillReported(): void
+    {
+        $this->inventory->givenRow(new VirtualRow('crew@example.test', 'crew.example.test', 'crew.example.test'));
+
+        self::assertCount(1, $this->reconcile()->of(FindingCategory::VirtualOwnerMissing));
+    }
+
     public function testADestinationNamingAnUnresolvableAccountIsNotASecondFinding(): void
     {
         // One broken accountuser row — an fqun name outside its domain — and
@@ -273,7 +296,12 @@ final class ReconcileTest extends TestCase
 
     private function reconcile(): ReconciliationReport
     {
-        return (new Reconcile($this->inventory, $this->mailstore, new FrozenClock()))
+        return (new Reconcile(
+            $this->inventory,
+            $this->mailstore,
+            new FrozenClock(),
+            new ListDelivery(DomainName::fromString('maillist.invalid'), ListDeliveryMode::Transport),
+        ))
             ->handle(DomainFixture::superuser());
     }
 }

@@ -547,7 +547,7 @@ final class RetryRepairTest extends AccountUseCaseTestCase
             $this->virtual,
             new \Mailadmin\Application\Address\CatchallCleanup(
                 $this->virtual,
-                new \Mailadmin\Application\Address\AddressReader($this->virtual, new \Mailadmin\Domain\Model\Virtual\VirtualEntryClassifier()),
+                \Mailadmin\Tests\Support\ListDeliveryFixture::reader($this->virtual),
             ),
             new \Mailadmin\Application\Address\RowWriter($this->virtual, $this->auditWriter, $this->ledger, new NullLogger()),
         );

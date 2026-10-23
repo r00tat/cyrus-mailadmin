@@ -31,9 +31,11 @@ use Mailadmin\Infrastructure\Persistence\InMemoryAdminDirectory;
 use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
 use Mailadmin\Infrastructure\Persistence\InMemoryDomainStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryLoginAttemptLog;
+use Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository;
 use Mailadmin\Infrastructure\Persistence\InMemoryRefreshTokenStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryTokenDenylist;
 use Mailadmin\Infrastructure\Persistence\InMemoryVirtualStore;
+use Mailadmin\Infrastructure\Persistence\MailingListRepository;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
 use Mailadmin\Infrastructure\Security\LoginAttemptLog;
 use Mailadmin\Infrastructure\Security\PasswordHasher;
@@ -117,6 +119,7 @@ final class AddressEndpointTest extends ContractTestCase
             DomainStore::class => $domains,
             AccountStore::class => $accounts,
             AddressStore::class => $this->virtual,
+            MailingListRepository::class => new InMemoryMailingListRepository(),
             SieveStore::class => $this->sieve,
             SieveScriptInstaller::class => new SieveScriptInstaller($this->sieve, new SieveRenderer()),
             RepairQueue::class => new InMemoryRepairQueue(),
@@ -270,6 +273,35 @@ final class AddressEndpointTest extends ContractTestCase
         self::assertSame(409, $response->getStatusCode());
         $this->assertMatchesContract('delete', '/domains/{domain}/addresses/{entry}', $response);
         self::assertSame(AddressErrorCode::NOT_EDITABLE, self::bodyOf($response)['code']);
+    }
+
+    public function testAMailingListEntryIsListedAsSuchAndNotRemovedAsAnEntry(): void
+    {
+        $this->virtual->givenRow('liste@example.test', 'liste.example.test@maillist.invalid', '');
+
+        $listing = $this->send(
+            'GET',
+            '/api/v1/domains/example.test/addresses?type=mailing_list',
+            null,
+            $this->tokenFor('anna'),
+        );
+
+        self::assertSame(200, $listing->getStatusCode(), (string) $listing->getBody());
+        $this->assertMatchesContract('get', '/domains/{domain}/addresses', $listing);
+        $items = self::bodyOf($listing)['items'];
+        self::assertIsArray($items);
+        self::assertCount(1, $items);
+        self::assertIsArray($items[0]);
+        self::assertSame('liste@example.test', $items[0]['alias']);
+
+        $response = $this->send('DELETE', '/api/v1/domains/example.test/addresses/' . $this->keyOf('liste@example.test'), null, $this->tokenFor('anna'));
+
+        self::assertSame(409, $response->getStatusCode());
+        $this->assertMatchesContract('delete', '/domains/{domain}/addresses/{entry}', $response);
+        $body = self::bodyOf($response);
+        self::assertSame(AddressErrorCode::NOT_EDITABLE, $body['code']);
+        self::assertSame(['entry' => 'managed_by_mailing_list'], $body['errors']);
+        self::assertCount(1, $this->virtual->rowsWithAlias('liste@example.test'));
     }
 
     // --------------------------------------------------------------- aliases

@@ -6,6 +6,7 @@ namespace Mailadmin\Infrastructure\Persistence;
 
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
+use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 
@@ -59,6 +60,18 @@ interface MailingListRepository
      * @throws PersistenceError
      */
     public function existsWithKey(string $listKey): bool;
+
+    /**
+     * The addresses of every list in `$domain`, lower-cased — what the
+     * classifier of `virtual` needs to tell a legacy list row from an account's
+     * address row ({@see \Mailadmin\Domain\Model\Virtual\MailingListRecognition}).
+     * One query for a whole domain, not one per row.
+     *
+     * @return list<string>
+     *
+     * @throws PersistenceError
+     */
+    public function addressesInDomain(DomainName $domain): array;
 
     /**
      * Insert a row; `id` is assigned by the database.
