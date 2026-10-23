@@ -532,6 +532,11 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         help="list key: the list address with '@' replaced by '.' (Postfix passes ${user})",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="check configuration, log file and database, then exit (does not read stdin)",
+    )
     return parser
 
 
@@ -571,11 +576,55 @@ def deliver(settings: Settings, args: argparse.Namespace, incoming: EmailMessage
     return send_via_local_postfix(settings, outbound_sender, recipients, outgoing_bytes, msg_id)
 
 
+def run_check(config_path: str) -> int:
+    """Verify an installation: configuration, log file, database. Not for pipe use, so it may talk."""
+    try:
+        settings = load_settings(config_path)
+    except ConfigError as exc:
+        print(f"config FAILED: {exc}", file=sys.stderr)
+        return EX_TEMPFAIL
+    print("config ok")
+
+    try:
+        with open(settings.log_file, "a", encoding="utf-8"):
+            pass
+    except OSError as exc:
+        print(f"log FAILED: cannot append to {settings.log_file}: {exc.strerror}", file=sys.stderr)
+        return EX_TEMPFAIL
+    print("log ok")
+
+    db = settings.database
+    try:
+        cnx = mysql.connector.connect(
+            user=db.user,
+            password=db.password,
+            host=db.host,
+            port=db.port,
+            database=db.name,
+            raise_on_warnings=True,
+            connection_timeout=10,
+        )
+        with closing(cnx), closing(cnx.cursor()) as cursor:
+            cursor.execute("SELECT COUNT(*) FROM lists")
+            row = cursor.fetchone()
+        count = int(row[0]) if row else 0
+    except mysql.connector.Error as exc:
+        print(f"database FAILED: {exc}", file=sys.stderr)
+        return EX_TEMPFAIL
+    except Exception as exc:
+        print(f"database FAILED unexpectedly: {type(exc).__name__}", file=sys.stderr)
+        return EX_SOFTWARE
+    print(f"database ok ({count} lists)")
+    return EX_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     """Read a message from stdin and dispatch it to list members. Returns the exit code."""
     args = build_parser().parse_args(argv)
 
     config_path = os.environ.get(CONFIG_ENV_VAR, DEFAULT_CONFIG_PATH)
+    if args.check:
+        return run_check(config_path)
     try:
         settings = load_settings(config_path)
     except ConfigError:

@@ -54,7 +54,7 @@ class FakeCursor:
     def __init__(self, rows, calls):
         self.rows, self.calls = rows, calls
 
-    def execute(self, query, params):
+    def execute(self, query, params=()):
         self.calls.append((query, params))
 
     def fetchone(self):

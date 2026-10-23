@@ -1,7 +1,10 @@
 import logging
+import re
 import smtplib
 import ssl
+import sys
 from email.message import EmailMessage
+from pathlib import Path
 
 import pytest
 
@@ -802,3 +805,129 @@ def test_recipient_addresses_are_logged_only_at_debug(caplog) -> None:
     debug_text = " ".join(r.getMessage() for r in caplog.records if r.levelname == "DEBUG")
     assert "alice@example.com" not in info_text
     assert "alice@example.com" in debug_text
+
+
+# --- --check -------------------------------------------------------------------
+
+
+class ExplodingStdin:
+    @property
+    def buffer(self):
+        raise AssertionError("--check must not read stdin")
+
+    def read(self, *_args):
+        raise AssertionError("--check must not read stdin")
+
+
+def test_check_reports_ok(run_main, capsys) -> None:
+    code, connection, smtps = run_main(["--check"], rows=[(3,)])
+    out = capsys.readouterr()
+    assert code == maillist.EX_OK
+    assert out.out.splitlines() == ["config ok", "log ok", "database ok (3 lists)"]
+    assert out.err == ""
+    assert "COUNT(*)" in connection.calls[0][0]
+    assert smtps == []
+
+
+def test_check_does_not_read_stdin(run_main, monkeypatch) -> None:
+    code, _, _ = run_main(["--check"], rows=[(0,)])
+    assert code == maillist.EX_OK
+    monkeypatch.setattr(sys, "stdin", ExplodingStdin())
+    monkeypatch.setattr(maillist.mysql.connector, "connect", lambda **_: _count_connection(1))
+    assert maillist.main(["--check"]) == maillist.EX_OK
+
+
+def _count_connection(count):
+    from tests.conftest import FakeConnection
+
+    return FakeConnection([(count,)])
+
+
+def test_check_with_unreachable_database_fails(run_main, capsys) -> None:
+    def refuse(**_):
+        raise maillist.mysql.connector.errors.InterfaceError("Can't connect")
+
+    code, _, _ = run_main(["--check"], connect=refuse)
+    out = capsys.readouterr()
+    assert code == maillist.EX_TEMPFAIL
+    assert "config ok" in out.out and "log ok" in out.out
+    assert "database ok" not in out.out
+    assert "database" in out.err.lower()
+
+
+def test_check_with_missing_config_names_the_problem(monkeypatch, tmp_path, capsys) -> None:
+    path = tmp_path / "absent.ini"
+    monkeypatch.setenv("MAILLIST_CONFIG", str(path))
+    assert maillist.main(["--check"]) == maillist.EX_TEMPFAIL
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert str(path) in out.err
+
+
+def test_check_with_unwritable_log_fails(run_main, config_file, tmp_path, capsys) -> None:
+    broken = config_file.read_text().replace(str(tmp_path / "maillist.log"), str(tmp_path / "no-dir" / "x.log"))
+    config_file.write_text(broken)
+    code, _, _ = run_main(["--check"], rows=[(1,)])
+    out = capsys.readouterr()
+    assert code == maillist.EX_TEMPFAIL
+    assert out.out.splitlines() == ["config ok"]
+    assert "log" in out.err.lower()
+
+
+def test_check_with_unexpected_error_is_software(run_main, capsys) -> None:
+    def boom(**_):
+        raise RuntimeError("boom")
+
+    code, _, _ = run_main(["--check"], connect=boom)
+    assert code == maillist.EX_SOFTWARE
+    assert "database ok" not in capsys.readouterr().out
+
+
+EXAMPLE = Path(__file__).resolve().parents[1] / "maillist.ini.example"
+REQUIRED_KEYS = ("user", "password", "owner", "error_report_to", "error_report_from")
+
+
+def test_example_config_requires_the_required_keys_to_be_filled(tmp_path) -> None:
+    copy = tmp_path / "example.ini"
+    copy.write_text(EXAMPLE.read_text())
+    with pytest.raises(maillist.ConfigError):
+        maillist.load_settings(str(copy))
+
+
+def test_example_config_is_loadable_after_filling_required_keys(tmp_path) -> None:
+    text = EXAMPLE.read_text()
+    for key in REQUIRED_KEYS:
+        text, count = re.subn(rf"(?m)^{key} =[ \t]*$", f"{key} = value@example.org", text)
+        assert count == 1, f"{key} must appear once with an empty value"
+    filled = tmp_path / "filled.ini"
+    filled.write_text(text)
+    loaded = maillist.load_settings(str(filled))
+    assert loaded.lists.loop_marker == "mailadmin-maillist"
+    assert loaded.smtp.starttls is True
+
+
+def test_example_config_documents_every_supported_key() -> None:
+    import configparser
+
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read_string(EXAMPLE.read_text())
+    keys = {(section, key) for section in parser.sections() for key in parser[section]}
+    assert keys == {
+        ("database", "host"),
+        ("database", "port"),
+        ("database", "user"),
+        ("database", "password"),
+        ("database", "name"),
+        ("smtp", "host"),
+        ("smtp", "port"),
+        ("smtp", "starttls"),
+        ("smtp", "ca_file"),
+        ("smtp", "tls_name"),
+        ("list", "owner"),
+        ("list", "error_report_to"),
+        ("list", "error_report_from"),
+        ("list", "loop_marker"),
+        ("list", "delivered_to_fallback"),
+        ("log", "file"),
+        ("log", "level"),
+    }
