@@ -12,6 +12,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install"
+# The modules maillist.py imports from its own directory; a release is incomplete without any of them.
+MODULES = ("config.py", "delivery.py", "headers.py", "members.py")
 
 
 def _load():
@@ -69,6 +71,8 @@ def make_source(base: Path, version: str, body: str = "print('maillist')\n") -> 
     src = base / f"src-{version}"
     src.mkdir(parents=True)
     (src / "maillist.py").write_text(body)
+    for name in MODULES:
+        (src / name).write_text(f"# {name}\n")
     (src / "maillist.ini.example").write_text((ROOT / "maillist.ini.example").read_text())
     (src / "VERSION").write_text(version + "\n")
     (src / "README.md").write_text("readme\n")
@@ -140,7 +144,7 @@ def test_second_install_activates_release_and_writes_marker(env) -> None:
     release = env["prefix"] / "releases" / "1.0.0"
     assert (current / "maillist.py").read_text() == "print('maillist')\n"
     assert mode(release) == 0o755
-    for name in ("maillist.py", "maillist.ini.example", "VERSION", "README.md"):
+    for name in ("maillist.py", *MODULES, "maillist.ini.example", "VERSION", "README.md"):
         assert mode(release / name) == 0o644
     assert env["log"].is_file() and mode(env["log"]) == 0o640
 
@@ -199,7 +203,11 @@ def test_dev_checkout_gets_timestamped_id(env) -> None:
     fill_config(env)
     run(env, "--source", str(src))
     (name,) = release_names(env)
-    digest = hashlib.sha256(b"print('maillist')\n").hexdigest()[:8]
+    expected = hashlib.sha256()
+    for code in ("maillist.py", *MODULES):
+        data = (src / code).read_bytes()
+        expected.update(f"{code}\0{len(data)}\0".encode() + data)
+    digest = expected.hexdigest()[:8]
     assert re.fullmatch(rf"dev-\d{{8}}T\d{{6}}Z-{digest}", name)
 
 
@@ -394,16 +402,19 @@ def test_dry_run_on_installed_prefix_changes_nothing(env) -> None:
 # --- release download ------------------------------------------------------------------
 
 
-def build_archive(tag: str, members=None, version=None) -> bytes:
+def build_archive(tag: str, members=None, version=None, omit=()) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
         files = {
             f"maillist-{tag}/maillist.py": b"print('release')\n",
+            **{f"maillist-{tag}/{name}": f"# {name}\n".encode() for name in MODULES},
             f"maillist-{tag}/maillist.ini.example": (ROOT / "maillist.ini.example").read_bytes(),
             f"maillist-{tag}/VERSION": (version or tag).encode() + b"\n",
             f"maillist-{tag}/README.md": b"readme\n",
         }
         for name, data in files.items():
+            if name.split("/", 1)[1] in omit:
+                continue
             info = tarfile.TarInfo(name)
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
@@ -1059,3 +1070,165 @@ def test_isolation_warning_only_without_isolated_flag(monkeypatch) -> None:
     assert "python3 -I" in install.isolation_warning()
     Flags.isolated = 1
     assert install.isolation_warning() is None
+
+
+# --- sibling modules ----------------------------------------------------------------------
+
+
+def test_code_files_are_the_script_and_every_module_beside_it() -> None:
+    assert ("maillist.py", *MODULES) == install.CODE_FILES
+    assert set(install.CODE_FILES) <= set(install.RELEASE_FILES)
+    assert not set(install.CODE_FILES) & set(install.OPTIONAL_FILES)
+    assert sorted(p.name for p in ROOT.glob("*.py")) == sorted(install.CODE_FILES)
+
+
+def test_packaging_and_project_list_every_code_file() -> None:
+    package = (ROOT.parent / "bin" / "package-release").read_text()
+    (line,) = [line for line in package.splitlines() if line.startswith("readonly MAILLIST_FILES=")]
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    for name in install.CODE_FILES:
+        assert name in line.split("(", 1)[1].split()
+        assert f'"{name.removesuffix(".py")}"' in pyproject
+
+
+def configured_source(env) -> Path:
+    """Install release 1.0.0 from a source directory, configuration included; return that directory."""
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src)) == install.EXIT_CONFIG
+    fill_config(env)
+    assert run(env, "--source", str(src)) == 0
+    return src
+
+
+def test_install_copies_every_module_byte_for_byte(env) -> None:
+    src = configured_source(env)
+    current = env["prefix"] / "current"
+    for name in install.CODE_FILES:
+        assert (current / name).read_bytes() == (src / name).read_bytes()
+        assert not (current / name).is_symlink()
+        assert mode(current / name) == 0o644
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_source_without_a_module_is_refused(env, capsys, module) -> None:
+    src = make_source(env["tmp"], "1.0.0")
+    (src / module).unlink()
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+    assert f"no {module} in" in capsys.readouterr().err
+    assert not env["prefix"].exists()
+    assert not env["config"].exists()
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_release_archive_without_a_module_is_refused(env, module) -> None:
+    fetch, _ = fake_network("v1.0.0", build_archive("v1.0.0", omit=(module,)))
+    run(env, "--release", "v1.0.0", fetch=fetch)
+    fill_config(env)
+    assert run(env, "--release", "v1.0.0", fetch=fetch) == install.EXIT_FAIL
+    assert not (env["prefix"] / "current").exists()
+    assert release_names(env) == []
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_same_version_with_a_different_module_is_refused(env, module) -> None:
+    first = configured_source(env)
+    other = make_source(env["tmp"] / "other", "1.0.0")
+    (other / module).write_text("# changed\n")
+    assert run(env, "--source", str(other)) == install.EXIT_FAIL
+    assert (env["prefix"] / "current" / module).read_bytes() == (first / module).read_bytes()
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_dev_release_id_changes_with_every_module(env, module) -> None:
+    src = make_source(env["tmp"], "dev")
+    before = install.code_digest(src)
+    (src / module).write_text("# changed\n")
+    assert install.code_digest(src) != before
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_existing_release_missing_a_module_is_not_reused(env, module) -> None:
+    # The comparison reads every code file of an existing release; a missing one means different content.
+    src = configured_source(env)
+    (env["prefix"] / "releases" / "1.0.0" / module).unlink()
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+
+
+# --- the installed script really runs its --check -----------------------------------------
+
+
+class RealCheckRunner(FakeRunner):
+    """FakeRunner, but the dependency check and --check run for real, as the installer starts them.
+
+    No database is reachable in the tests, so the check counts as passed once configuration and log file
+    were checked: that only happens after maillist.py imported all its modules.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.outputs: list[str] = []
+
+    def check_dependency(self, python):
+        return install.Runner().check_dependency(python)
+
+    def run_check(self, python, script, config, user):
+        ok, output = install.Runner().run_check(python, script, config, user)
+        self.outputs.append(output)
+        return ("config ok\nlog ok" in output and "Traceback" not in output), output
+
+
+def write_check_config(env) -> None:
+    # Port 1 on the loopback refuses at once, so the database step fails fast instead of timing out.
+    env["config"].write_text(
+        "[database]\nhost = 127.0.0.1\nport = 1\nuser = u\npassword = p\n"
+        "[list]\nowner = o@example.org\nerror_report_to = a@example.org\nerror_report_from = m@example.org\n"
+        f"[log]\nfile = {env['log']}\n"
+    )
+
+
+def assert_check_runs(env, runner) -> None:
+    (output,) = runner.outputs
+    assert "config ok\nlog ok\ndatabase FAILED" in output, output
+    assert "ModuleNotFoundError" not in output and "ImportError" not in output
+    script = env["prefix"] / "current" / "maillist.py"
+    environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "MAILLIST_CONFIG": str(env["config"])}
+    # As the installer starts it (-I leaves the script directory off sys.path) and as Postfix does (no -I).
+    for flags in (["-I"], []):
+        result = install.subprocess.run(  # noqa: S603
+            [sys.executable, *flags, str(script), "--check"],
+            capture_output=True,
+            text=True,
+            env=environment,
+            cwd="/",
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode == 75, result.stderr
+        assert result.stdout.startswith("config ok\nlog ok\n"), result.stdout + result.stderr
+        assert "database FAILED" in result.stderr
+
+
+def test_install_from_source_yields_a_runnable_check(env) -> None:
+    run(env, "--source", str(ROOT))
+    write_check_config(env)
+    runner = RealCheckRunner()
+    assert run(env, "--source", str(ROOT), "--python", sys.executable, verify=True, runner=runner) == 0
+    assert_check_runs(env, runner)
+
+
+def test_install_from_release_archive_yields_a_runnable_check(env) -> None:
+    tag = "v9.9.9"
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for name in install.RELEASE_FILES:
+            data = tag.encode() + b"\n" if name == "VERSION" else (ROOT / name).read_bytes()
+            info = tarfile.TarInfo(f"maillist-{tag}/{name}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    fetch, _ = fake_network(tag, buffer.getvalue())
+    run(env, "--release", tag, fetch=fetch)
+    write_check_config(env)
+    runner = RealCheckRunner()
+    assert run(env, "--release", tag, "--python", sys.executable, verify=True, runner=runner, fetch=fetch) == 0
+    assert os.readlink(env["prefix"] / "current") == f"releases/{tag}"
+    assert_check_runs(env, runner)

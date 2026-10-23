@@ -29,7 +29,8 @@
 set -euo pipefail
 
 readonly BASE_PLACEHOLDER='/__MAILADMIN_BASE__/'
-readonly MAILLIST_FILES=(maillist.py install maillist.ini.example README.md pyproject.toml)
+# maillist.py imports config, delivery, headers and members from its own directory: all five ship.
+readonly MAILLIST_FILES=(maillist.py config.py delivery.py headers.py members.py install maillist.ini.example README.md pyproject.toml)
 readonly CACHE_ARTEFACTS=(var/cache/openapi.bundled.yaml var/cache/openapi.bundled.json var/cache/routes.php)
 
 die() { printf 'package-release: %s\n' "$*" >&2; exit 1; }
