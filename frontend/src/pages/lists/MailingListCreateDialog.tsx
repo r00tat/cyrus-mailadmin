@@ -63,7 +63,7 @@ export function MailingListCreateDialog({ open, onClose }: { open: boolean; onCl
           : t('list.create.saved', { name: list.name }),
       );
       await queryClient.invalidateQueries({ queryKey: ['lists'] });
-      void navigate(listPath(list.name));
+      void navigate(listPath(list.address));
     },
   });
 

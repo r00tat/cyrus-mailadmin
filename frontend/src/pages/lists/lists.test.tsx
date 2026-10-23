@@ -37,7 +37,7 @@ function listApi(options: { post?: () => Response; patch?: () => Response; remov
         : jsonResponse(200, { items: [TEAM, OLD], meta: { ...PAGE_META, total: 2 } });
     }
 
-    if (path === '/lists/team') {
+    if (path === '/lists/team%40example.test') {
       if (call.method === 'GET') {
         return jsonResponse(200, TEAM, { ETag: '"l1"' });
       }
@@ -85,7 +85,7 @@ describe('the mailing list list', () => {
     const created = { ...TEAM, name: 'new', address: 'new@example.test' };
     const { user, double } = signedIn(SUPERUSER, '/lists', (call, path) =>
       listApi({ post: () => jsonResponse(201, created, { ETag: '"n1"', ...PENDING_RUN }) })(call, path)
-      ?? (path === '/lists/new' ? jsonResponse(200, created, { ETag: '"n1"' }) : undefined),
+      ?? (path === '/lists/new%40example.test' ? jsonResponse(200, created, { ETag: '"n1"' }) : undefined),
     );
 
     await user.click(await screen.findByRole('button', { name: 'Liste anlegen' }));
@@ -141,7 +141,7 @@ describe('one mailing list', () => {
   });
 
   it('sends only what changed — members untouched stay out of the request', async () => {
-    const { user, double } = signedIn(SUPERUSER, '/lists/team', listApi({
+    const { user, double } = signedIn(SUPERUSER, '/lists/team%40example.test', listApi({
       patch: () => jsonResponse(200, { ...TEAM, tag: 'extern' }, { ETag: '"l2"', ...PENDING_RUN }),
     }));
 
@@ -151,9 +151,9 @@ describe('one mailing list', () => {
     await user.type(tag, 'extern');
     await user.click(screen.getByRole('button', { name: 'Speichern' }));
 
-    await waitFor(() => expect(double.callsTo('/api/v1/lists/team').filter((call) => call.method === 'PATCH')).toHaveLength(1));
+    await waitFor(() => expect(double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'PATCH')).toHaveLength(1));
 
-    const [patch] = double.callsTo('/api/v1/lists/team').filter((call) => call.method === 'PATCH');
+    const [patch] = double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'PATCH');
 
     expect(patch!.body).toEqual({ tag: 'extern' });
     expect(patch!.headers.get('If-Match')).toBe('"l1"');
@@ -161,16 +161,16 @@ describe('one mailing list', () => {
   });
 
   it('sends the whole member list when it changed', async () => {
-    const { user, double } = signedIn(SUPERUSER, '/lists/team', listApi({
+    const { user, double } = signedIn(SUPERUSER, '/lists/team%40example.test', listApi({
       patch: () => jsonResponse(200, TEAM, { ETag: '"l2"' }),
     }));
 
     await user.type(await screen.findByRole('textbox', { name: 'Mitglieder' }), '{Enter}carla@example.test');
     await user.click(screen.getByRole('button', { name: 'Speichern' }));
 
-    await waitFor(() => expect(double.callsTo('/api/v1/lists/team').filter((call) => call.method === 'PATCH')).toHaveLength(1));
+    await waitFor(() => expect(double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'PATCH')).toHaveLength(1));
 
-    const [patch] = double.callsTo('/api/v1/lists/team').filter((call) => call.method === 'PATCH');
+    const [patch] = double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'PATCH');
 
     expect(patch!.body).toEqual({ members: ['anna@example.test', 'bert@example.test', 'carla@example.test'] });
     // No `X-Mailadmin-Effect` on this answer: the confirmation follows the header, not a fixed text.
@@ -178,7 +178,7 @@ describe('one mailing list', () => {
   });
 
   it('offers a reload when someone else changed the list first', async () => {
-    const { user } = signedIn(SUPERUSER, '/lists/team', listApi({
+    const { user } = signedIn(SUPERUSER, '/lists/team%40example.test', listApi({
       patch: () => problemResponse(412, 'request.precondition_failed'),
     }));
 
@@ -195,7 +195,7 @@ describe('one mailing list', () => {
   });
 
   it('deletes after a confirmation that says the address keeps delivering for now', async () => {
-    const { user, double } = signedIn(SUPERUSER, '/lists/team', listApi({
+    const { user, double } = signedIn(SUPERUSER, '/lists/team%40example.test', listApi({
       remove: () => new Response(null, { status: 204, headers: PENDING_RUN }),
     }));
 
@@ -204,13 +204,13 @@ describe('one mailing list', () => {
     const dialog = await screen.findByRole('dialog');
 
     expect(within(dialog).getByText(/team@example.test stellt bis zum nächsten Lauf der Konfigurationsverwaltung weiter zu/)).toBeInTheDocument();
-    expect(double.callsTo('/api/v1/lists/team').filter((call) => call.method === 'DELETE')).toHaveLength(0);
+    expect(double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'DELETE')).toHaveLength(0);
 
     await user.click(within(dialog).getByRole('button', { name: 'Löschen' }));
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Mailinglisten' })).toBeInTheDocument();
 
-    const [remove] = double.callsTo('/api/v1/lists/team').filter((call) => call.method === 'DELETE');
+    const [remove] = double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'DELETE');
 
     expect(remove!.headers.get('If-Match')).toBe('"l1"');
     expect(await screen.findByText('Liste team gelöscht. Sie stellt bis zum nächsten Konfigurationslauf weiter zu.')).toBeInTheDocument();

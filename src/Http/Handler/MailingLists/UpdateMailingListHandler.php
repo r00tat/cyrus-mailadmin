@@ -12,7 +12,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
 /**
- * `PATCH /lists/{listName}`.
+ * `PATCH /lists/{address}`.
  *
  * A `PATCH` and not a `PUT`, and that is not a style preference: `members` is a
  * column an external tool writes and the configuration management reads (E-4).
@@ -36,7 +36,7 @@ final readonly class UpdateMailingListHandler implements ApiHandler
         try {
             $list = $this->lists->handle(
                 actor: $actor,
-                address: MailingListPath::name($request),
+                address: MailingListPath::address($request),
                 changes: MailingListBody::changes(ParsedBody::of($request)),
                 ifMatch: MailingListPath::ifMatch($request),
             );

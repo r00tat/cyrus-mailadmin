@@ -41,27 +41,27 @@ import { ConfigRunHint, parseMembers, sameMembers, type MailingList } from './li
 
 type MailingListUpdateRequest = components['schemas']['MailingListUpdateRequest'];
 
-function detailKey(listName: string): readonly unknown[] {
-  return ['lists', 'detail', listName];
+function detailKey(address: string): readonly unknown[] {
+  return ['lists', 'detail', address];
 }
 
 export function MailingListDetailPage(): ReactNode {
   const { t } = useTranslation();
-  const { listName = '' } = useParams();
+  const { address = '' } = useParams();
   const client = useApiClient();
   const [reloaded, setReloaded] = useState(false);
 
   const detail = useQuery({
-    queryKey: detailKey(listName),
-    queryFn: ({ signal }) => client.getVersioned('/lists/{listName}', { pathParams: { listName }, signal }),
+    queryKey: detailKey(address),
+    queryFn: ({ signal }) => client.getVersioned('/lists/{address}', { pathParams: { address }, signal }),
   });
 
-  const breadcrumbs = [{ label: t('list.list.title'), to: '/lists' }, { label: listName }];
+  const breadcrumbs = [{ label: t('list.list.title'), to: '/lists' }, { label: address }];
 
   if (detail.isPending) {
     return (
       <>
-        <PageHeader title={listName} breadcrumbs={breadcrumbs} />
+        <PageHeader title={address} breadcrumbs={breadcrumbs} />
         <LoadingState />
       </>
     );
@@ -70,7 +70,7 @@ export function MailingListDetailPage(): ReactNode {
   if (detail.isError) {
     return (
       <>
-        <PageHeader title={listName} breadcrumbs={breadcrumbs} />
+        <PageHeader title={address} breadcrumbs={breadcrumbs} />
         <ErrorState error={detail.error} onRetry={() => void detail.refetch()} />
       </>
     );
@@ -118,17 +118,16 @@ function MailingListDetail({
   const notify = useNotify();
   const { can } = useSession();
 
-  const [address, setAddress] = useState(list.address);
   const [tag, setTag] = useState(list.tag);
   const [members, setMembers] = useState(list.members.join('\n'));
   const [unchanged, setUnchanged] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const pathParams = { listName: list.name };
+  const pathParams = { address: list.address };
 
   const update = useMutation({
     mutationFn: (body: MailingListUpdateRequest) =>
-      client.requestVersioned('patch', '/lists/{listName}', { pathParams, body, headers: ifMatch(etag) }),
+      client.requestVersioned('patch', '/lists/{address}', { pathParams, body, headers: ifMatch(etag) }),
     onSuccess: async (exchange) => {
       notify(
         hasPendingConfigurationRun(exchange)
@@ -140,7 +139,7 @@ function MailingListDetail({
   });
 
   const remove = useMutation({
-    mutationFn: () => client.requestVersioned('delete', '/lists/{listName}', { pathParams, headers: ifMatch(etag) }),
+    mutationFn: () => client.requestVersioned('delete', '/lists/{address}', { pathParams, headers: ifMatch(etag) }),
     onSuccess: async (exchange) => {
       setDeleting(false);
       notify(
@@ -148,7 +147,7 @@ function MailingListDetail({
           ? t('list.detail.deletedPendingRun', { name: list.name })
           : t('list.detail.deleted', { name: list.name }),
       );
-      queryClient.removeQueries({ queryKey: detailKey(list.name) });
+      queryClient.removeQueries({ queryKey: detailKey(list.address) });
       await queryClient.invalidateQueries({ queryKey: ['lists', 'list'] });
       void navigate('/lists', { replace: true });
     },
@@ -170,7 +169,6 @@ function MailingListDetail({
 
     const parsedMembers = parseMembers(members);
     const body: MailingListUpdateRequest = {
-      ...(address.trim() === list.address ? {} : { address: address.trim() }),
       ...(tag.trim() === list.tag ? {} : { tag: tag.trim() }),
       ...(sameMembers(parsedMembers, list.members) ? {} : { members: parsedMembers }),
     };
@@ -231,15 +229,8 @@ function MailingListDetail({
               />
               <TextField
                 label={t('list.field.address')}
-                value={address}
-                onChange={(event) => {
-                  touched();
-                  setAddress(event.target.value);
-                }}
-                disabled={!canWrite || update.isPending}
-                autoComplete="off"
-                slotProps={{ htmlInput: { spellCheck: false, autoCapitalize: 'off' } }}
-                {...fieldProps(fieldError, 'body.address')}
+                value={list.address}
+                disabled
               />
               <TextField
                 label={t('list.field.tag')}

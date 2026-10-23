@@ -129,7 +129,6 @@ export const deErrors = {
   // Verteilerlisten (A5)
   'errors.list.address_has_extension': 'Eine Listenadresse darf kein „+“ enthalten.',
   'errors.list.address_taken': 'Diese Adresse ist bereits vergeben.',
-  'errors.list.already_exists': 'Diese Liste existiert bereits.',
   'errors.list.invalid_address': 'Die Listenadresse ist unzulässig.',
   'errors.list.invalid_member': 'Mindestens eine Mitgliedsadresse ist unzulässig.',
   'errors.list.invalid_name': 'Der Listenname ist unzulässig.',

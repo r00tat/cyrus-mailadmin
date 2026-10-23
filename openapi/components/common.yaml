@@ -161,7 +161,6 @@ components:
         # `unusable_members` and `address_usable` in the representation.
         - list.address_has_extension
         - list.address_taken
-        - list.already_exists
         - list.invalid_address
         - list.invalid_member
         - list.invalid_name

@@ -10,9 +10,9 @@ import { useTranslation } from '../../i18n';
 
 export type MailingList = components['schemas']['MailingList'];
 
-/** The detail route of a list. The name is the identifier (U-60) and is encoded. */
-export function listPath(name: string): string {
-  return `/lists/${encodeURIComponent(name)}`;
+/** The detail route of a list. The address is the identifier and is encoded. */
+export function listPath(address: string): string {
+  return `/lists/${encodeURIComponent(address)}`;
 }
 
 /** One member per line; empty lines dropped, order and duplicates kept (two entries are two deliveries). */

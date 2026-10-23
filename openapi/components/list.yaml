@@ -2,19 +2,19 @@
 # Schemas, parameters and headers owned by A5 — mailing lists.
 #
 # The resource is the legacy table `lists`, unchanged: `name`, `tag`, `address`,
-# `members` (E-1, analysis 4.1). Nothing here adds a column, and nothing here
-# renames one.
+# `members` (E-1, analysis 4.1), plus the `virtual` entry that routes the
+# address. Nothing here adds a column, and nothing here renames one.
 #
 # Two things about this resource are unlike every other one in the contract, and
 # both are visible in the schemas below:
 #
-#   * **The name is the identifier.** `lists` has no surrogate key, so the path
-#     carries the URL-encoded name (U-60) and `name` is absent from the update
-#     request: renaming a list is a delete and a create.
-#   * **A write does not take effect at once.** The application writes the
-#     database; the aliases file is rendered from it by the configuration
-#     management (E-4). Every state-changing answer says so through
-#     `MailingListEffect` (U-59).
+#   * **The address is the identifier.** `lists.name` has no unique index and is
+#     display text, so the path carries the URL-encoded address and `address`
+#     is absent from the update request: moving a list is a delete and a create
+#     (spec 4.3, "Identität").
+#   * **On the legacy alias path a write does not take effect at once.** The
+#     aliases file is rendered by the configuration management (E-4), and the
+#     answer says so through `MailingListEffect` (U-59).
 #
 components:
   schemas:
@@ -42,8 +42,8 @@ components:
           minLength: 1
           maxLength: 255
           description: |
-            The list name — the primary key of `lists` and the identifier in the
-            path. Immutable: to rename a list, delete it and create it again.
+            The display name of the list. Free to change; it may repeat across
+            lists and does not identify one — the address does.
           example: team-example
         tag:
           type: string
@@ -61,7 +61,9 @@ components:
         address:
           type: string
           maxLength: 255
-          description: The address that delivers to this list.
+          description: |
+            The address that delivers to this list, and its identifier in the
+            path. Immutable: to move a list, delete it and create it again.
           example: team-list@example.test
         members:
           type: array
@@ -130,10 +132,9 @@ components:
             Letters, digits and `. - _ +`, beginning and ending with a letter or
             a digit.
 
-            Stricter than what the table can hold, on purpose: the name becomes
-            the key of an entry in an aliases file, where whitespace and `:` are
-            structure. Existing rows are not held to this — they are shown as
-            they are (U-22).
+            Stricter than what the table can hold, on purpose: a plain label is
+            what the other tools reading `lists` expect. Existing rows are not
+            held to this — they are shown as they are (U-22).
           example: team-example
         tag:
           type: string
@@ -144,7 +145,11 @@ components:
           type: string
           minLength: 3
           maxLength: 255
-          description: The address that will deliver to this list, once the configuration has run.
+          description: |
+            The address that will deliver to this list. It identifies the list
+            from now on and cannot be changed later. No `+` in the local part
+            (`list.address_has_extension`), and its domain must be one this
+            application manages (`list.unknown_domain`).
           example: team-list@example.test
         members:
           type: array
@@ -168,15 +173,20 @@ components:
 
         `{"members": []}` therefore empties the list and `{}` changes nothing.
 
-        `name` is not among the fields: it identifies the list (U-60).
+        `address` is not among the fields: it identifies the list. A body that
+        sends it anyway — or any other field not listed here — is refused with
+        `422` rather than half applied.
       minProperties: 1
+      additionalProperties: false
       properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: '^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$'
+          description: The new display name. The same rule as on creation.
         tag:
           type: string
-          maxLength: 255
-        address:
-          type: string
-          minLength: 3
           maxLength: 255
         members:
           type: array
@@ -198,16 +208,23 @@ components:
       default: name
 
   parameters:
-    MailingListName:
-      name: listName
+    MailingListAddress:
+      name: address
       in: path
       required: true
       description: |
-        The list name, URL-encoded. `lists` has no surrogate key, so the name is
-        the identifier (U-60) — the same reasoning as U-18 for accounts.
+        The list address, URL-encoded (`team%40example.test`). The address
+        identifies a list; `lists.name` is display text and may repeat. A list
+        outside the actor's domains answers `404`, the same document as a list
+        that does not exist (U-44).
+
+        No `format: email` here, on purpose: the request validator checks the
+        path segment before it is decoded, so it would see `team%40example.test`
+        and refuse every list. The same shape as `AliasPath`; the use case parses
+        the decoded value.
       schema:
         type: string
-        minLength: 1
+        minLength: 3
         maxLength: 255
 
     MailingListSortField:

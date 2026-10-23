@@ -136,7 +136,7 @@ final class MailingListEndpointTest extends ContractTestCase
         $response = $this->send('GET', '/api/v1/lists/legacy%40example.test', token: $this->tokenFor('root'));
 
         self::assertSame(200, $response->getStatusCode());
-        $this->assertMatchesContract('get', '/lists/{listName}', $response);
+        $this->assertMatchesContract('get', '/lists/{address}', $response);
 
         $body = self::bodyOf($response);
 
@@ -182,6 +182,118 @@ final class MailingListEndpointTest extends ContractTestCase
         self::assertSame('list.address_taken', self::bodyOf($response)['code']);
     }
 
+    public function testASuperuserCreatesReadsChangesAndDeletesAListByItsAddress(): void
+    {
+        $token = $this->tokenFor('root');
+
+        $created = $this->send('POST', '/api/v1/lists', [
+            'name' => 'Crew',
+            'address' => 'crew@example.test',
+            'members' => ['anna@example.test'],
+        ], $token);
+
+        self::assertSame(201, $created->getStatusCode());
+        $this->assertMatchesContract('post', '/lists', $created);
+
+        $location = $created->getHeaderLine('Location');
+        self::assertSame('/api/v1/lists/crew%40example.test', $location);
+
+        $read = $this->send('GET', $location, token: $token);
+        self::assertSame(200, $read->getStatusCode());
+        $this->assertMatchesContract('get', '/lists/{address}', $read);
+        self::assertSame('crew@example.test', self::bodyOf($read)['address']);
+
+        $changed = $this->send('PATCH', $location, ['name' => 'crew-renamed'], $token, [
+            'If-Match' => $read->getHeaderLine('ETag'),
+        ]);
+        self::assertSame(200, $changed->getStatusCode());
+        $this->assertMatchesContract('patch', '/lists/{address}', $changed);
+        self::assertSame('crew-renamed', self::bodyOf($changed)['name']);
+        self::assertSame('crew@example.test', self::bodyOf($changed)['address']);
+
+        $deleted = $this->send('DELETE', $location, token: $token, headers: [
+            'If-Match' => $changed->getHeaderLine('ETag'),
+        ]);
+        self::assertSame(204, $deleted->getStatusCode());
+        $this->assertMatchesContract('delete', '/lists/{address}', $deleted);
+
+        self::assertSame(404, $this->send('GET', $location, token: $token)->getStatusCode());
+    }
+
+    public function testCreatingTheSameAddressTwiceIsAConflict(): void
+    {
+        $token = $this->tokenFor('root');
+        $body = ['name' => 'twice', 'address' => 'twice@example.test'];
+
+        self::assertSame(201, $this->send('POST', '/api/v1/lists', $body, $token)->getStatusCode());
+
+        $second = $this->send('POST', '/api/v1/lists', $body, $token);
+
+        self::assertSame(409, $second->getStatusCode());
+        $this->assertMatchesContract('post', '/lists', $second);
+        self::assertSame('list.address_taken', self::bodyOf($second)['code']);
+    }
+
+    public function testAnUpdateThatNamesTheAddressIsRefusedAtTheBoundary(): void
+    {
+        // The address identifies the list. Changing it is a delete and a create,
+        // and a body that tries anyway is refused rather than half applied.
+        $writes = $this->lists->writeCount();
+
+        $response = $this->send(
+            'PATCH',
+            '/api/v1/lists/team%40example.test',
+            ['tag' => 'crew', 'address' => 'moved@example.test'],
+            $this->tokenFor('root'),
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        $this->assertMatchesContract('patch', '/lists/{address}', $response);
+        self::assertSame('request.validation_failed', self::bodyOf($response)['code']);
+        self::assertSame(['body' => 'additionalProperties'], self::bodyOf($response)['errors']);
+        self::assertSame($writes, $this->lists->writeCount());
+    }
+
+    public function testADomainMasterReadsChangesAndDeletesTheListsOfTheirDomain(): void
+    {
+        $token = $this->tokenFor('anna');
+
+        $read = $this->send('GET', '/api/v1/lists/team%40example.test', token: $token);
+        self::assertSame(200, $read->getStatusCode());
+        $this->assertMatchesContract('get', '/lists/{address}', $read);
+
+        $changed = $this->send('PATCH', '/api/v1/lists/team%40example.test', ['tag' => 'crew'], $token);
+        self::assertSame(200, $changed->getStatusCode());
+        $this->assertMatchesContract('patch', '/lists/{address}', $changed);
+
+        $deleted = $this->send('DELETE', '/api/v1/lists/team%40example.test', token: $token);
+        self::assertSame(204, $deleted->getStatusCode());
+        $this->assertMatchesContract('delete', '/lists/{address}', $deleted);
+    }
+
+    public function testADomainMasterCreatesAListInTheirDomain(): void
+    {
+        $response = $this->send('POST', '/api/v1/lists', [
+            'name' => 'annas-list',
+            'address' => 'annas-list@example.test',
+        ], $this->tokenFor('anna'));
+
+        self::assertSame(201, $response->getStatusCode());
+        $this->assertMatchesContract('post', '/lists', $response);
+    }
+
+    public function testAForeignListIsIndistinguishableFromOneThatDoesNotExist(): void
+    {
+        $token = $this->tokenFor('anna');
+
+        $foreign = self::bodyOf($this->send('GET', '/api/v1/lists/team%40other.test', token: $token));
+        $absent = self::bodyOf($this->send('GET', '/api/v1/lists/nobody%40other.test', token: $token));
+
+        foreach (['status', 'code', 'title', 'detail', 'type'] as $field) {
+            self::assertSame($absent[$field] ?? null, $foreign[$field] ?? null, $field);
+        }
+    }
+
     public function testAPipeEntryIsRefusedOverTheWire(): void
     {
         // The end-to-end form of the package's one security rule: this column is
@@ -207,7 +319,7 @@ final class MailingListEndpointTest extends ContractTestCase
         );
 
         self::assertSame(200, $response->getStatusCode());
-        $this->assertMatchesContract('patch', '/lists/{listName}', $response);
+        $this->assertMatchesContract('patch', '/lists/{address}', $response);
 
         self::assertSame('crew', self::bodyOf($response)['tag']);
         self::assertSame(self::LEGACY_MEMBERS, $this->lists->storedMembers('legacy@example.test'));
@@ -233,7 +345,7 @@ final class MailingListEndpointTest extends ContractTestCase
         );
 
         self::assertSame(412, $refused->getStatusCode());
-        $this->assertMatchesContract('patch', '/lists/{listName}', $refused);
+        $this->assertMatchesContract('patch', '/lists/{address}', $refused);
         self::assertSame('request.precondition_failed', self::bodyOf($refused)['code']);
 
         $fresh = $this->send('GET', '/api/v1/lists/legacy%40example.test', token: $token)->getHeaderLine('ETag');
@@ -267,10 +379,10 @@ final class MailingListEndpointTest extends ContractTestCase
     public static function everyOperation(): iterable
     {
         yield 'list' => ['GET', '/api/v1/lists', '/lists'];
-        yield 'get' => ['GET', '/api/v1/lists/legacy%40example.test', '/lists/{listName}'];
+        yield 'get' => ['GET', '/api/v1/lists/legacy%40example.test', '/lists/{address}'];
         yield 'create' => ['POST', '/api/v1/lists', '/lists'];
-        yield 'update' => ['PATCH', '/api/v1/lists/legacy%40example.test', '/lists/{listName}'];
-        yield 'delete' => ['DELETE', '/api/v1/lists/legacy%40example.test', '/lists/{listName}'];
+        yield 'update' => ['PATCH', '/api/v1/lists/legacy%40example.test', '/lists/{address}'];
+        yield 'delete' => ['DELETE', '/api/v1/lists/legacy%40example.test', '/lists/{address}'];
     }
 
     /**
@@ -278,9 +390,9 @@ final class MailingListEndpointTest extends ContractTestCase
      */
     public static function foreignOperations(): iterable
     {
-        yield 'get' => ['GET', '/api/v1/lists/team%40other.test', '/lists/{listName}', 404, 'request.not_found'];
-        yield 'update' => ['PATCH', '/api/v1/lists/team%40other.test', '/lists/{listName}', 404, 'request.not_found'];
-        yield 'delete' => ['DELETE', '/api/v1/lists/team%40other.test', '/lists/{listName}', 404, 'request.not_found'];
+        yield 'get' => ['GET', '/api/v1/lists/team%40other.test', '/lists/{address}', 404, 'request.not_found'];
+        yield 'update' => ['PATCH', '/api/v1/lists/team%40other.test', '/lists/{address}', 404, 'request.not_found'];
+        yield 'delete' => ['DELETE', '/api/v1/lists/team%40other.test', '/lists/{address}', 404, 'request.not_found'];
         yield 'create' => ['POST', '/api/v1/lists', '/lists', 403, 'request.forbidden'];
     }
 
@@ -322,7 +434,7 @@ final class MailingListEndpointTest extends ContractTestCase
         $response = $this->send('GET', '/api/v1/lists/no-such%40example.test', token: $this->tokenFor('root'));
 
         self::assertSame(404, $response->getStatusCode());
-        $this->assertMatchesContract('get', '/lists/{listName}', $response);
+        $this->assertMatchesContract('get', '/lists/{address}', $response);
 
         // Byte for byte the framework's own 404 — that is what makes a hidden
         // list indistinguishable from an absent one (CLAUDE.md, U-44).

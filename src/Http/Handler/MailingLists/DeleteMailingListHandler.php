@@ -11,7 +11,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
 /**
- * `DELETE /lists/{listName}`.
+ * `DELETE /lists/{address}`.
  *
  * `204` and no body — and the `X-Mailadmin-Effect` header, which is the reason
  * the notice about the configuration run is a header at all: this is the
@@ -33,7 +33,7 @@ final readonly class DeleteMailingListHandler implements ApiHandler
         try {
             $this->lists->handle(
                 actor: $actor,
-                address: MailingListPath::name($request),
+                address: MailingListPath::address($request),
                 ifMatch: MailingListPath::ifMatch($request),
             );
         } catch (MailingListFailure $failure) {

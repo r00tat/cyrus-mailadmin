@@ -127,7 +127,7 @@ export function MailingListListPage(): ReactNode {
             />
           </Stack>
         }
-        onRowClick={(row) => void navigate(listPath(row.name))}
+        onRowClick={(row) => void navigate(listPath(row.address))}
       />
       <MailingListCreateDialog open={creating} onClose={() => setCreating(false)} />
     </>
