@@ -34,6 +34,7 @@ from mysql.connector.pooling import PooledMySQLConnection
 DEFAULT_CONFIG_PATH = "/etc/mailadmin-maillist/maillist.ini"
 CONFIG_ENV_VAR = "MAILLIST_CONFIG"
 SMTP_TIMEOUT = 30
+MAX_LOOP_HOPS = 10  # safety net: this many X-Loop headers means the message circulates
 
 # Exit codes from sysexits.h; Postfix pipe(8) maps them to deliver/bounce/defer.
 EX_OK = 0
@@ -219,7 +220,7 @@ def get_list_info(cnx: DBConnection, msg_id: str, delivered_to: str) -> ListInfo
         mysql.connector.Error: propagates; the caller logs it once.
     """
     query = "SELECT tag, address, members FROM lists WHERE REPLACE(address, '@', '.') = %s"
-    logger.debug(f"{msg_id} - Query: {query} with param: {delivered_to}")
+    logger.debug(f"{msg_id} - Query: {query} with param: {sanitize_text(delivered_to)}")
     with closing(cnx.cursor()) as cursor:
         cursor.execute(query, (delivered_to,))
         rows = cursor.fetchall()
@@ -249,12 +250,20 @@ def get_list_info(cnx: DBConnection, msg_id: str, delivered_to: str) -> ListInfo
 _BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
 
+_ADDRESS_FORBIDDEN = re.compile(r'[\s<>"(),;:\\\[\]]')
+
+
 def _is_plain_address(address: str) -> bool:
-    """ASCII local@domain with a dotted domain. Anything else cannot be sent without SMTPUTF8."""
-    if not address.isascii():
+    """ASCII local@domain with a dotted domain. Anything else cannot be sent without SMTPUTF8.
+
+    Deliberately stricter than RFC 5322: quoted local parts, comments and similar are rejected.
+    """
+    if not address.isascii() or _ADDRESS_FORBIDDEN.search(address):
         return False
     local, at, domain = address.rpartition("@")
-    return bool(at and local and "." in domain and not domain.startswith(".") and not domain.endswith("."))
+    if not (at and local and domain) or "@" in local:
+        return False
+    return "." in domain and ".." not in domain and not domain.startswith(".") and not domain.endswith(".")
 
 
 def normalize_recipients(members: str, msg_id: str) -> list[str]:
@@ -266,6 +275,7 @@ def normalize_recipients(members: str, msg_id: str) -> list[str]:
     text = _BR.sub("\n", html.unescape(members))
     recipients: list[str] = []
     seen: set[str] = set()
+    skipped_lines: list[int] = []
     for line_no, line in enumerate(text.splitlines(), start=1):
         line = line.strip()
         if not line:
@@ -276,6 +286,7 @@ def normalize_recipients(members: str, msg_id: str) -> list[str]:
             if not _is_plain_address(address):
                 logger.warning(f"{msg_id} - Skipping invalid recipient entry in line {line_no}")
                 logger.debug(f"{msg_id} - Invalid recipient entry in line {line_no}: {line!r}")
+                skipped_lines.append(line_no)
                 continue
             key = address.lower()
             if key in seen:
@@ -283,6 +294,10 @@ def normalize_recipients(members: str, msg_id: str) -> list[str]:
             seen.add(key)
             recipients.append(address)
 
+    if skipped_lines:
+        # Only counts and line numbers; the entries themselves are personal data.
+        lines = ", ".join(str(n) for n in dict.fromkeys(skipped_lines))
+        logger.warning(f"{msg_id} - Skipped {len(skipped_lines)} invalid member entries (lines {lines})")
     logger.info(f"{msg_id} - Normalized {len(recipients)} unique recipients")
     logger.debug(f"{msg_id} - Recipients: {', '.join(recipients)}")
     return recipients
@@ -394,11 +409,16 @@ def parse_incoming_message() -> EmailMessage:
 
 
 def should_drop_for_loop(incoming: EmailMessage, loop_marker: str, list_address: str) -> bool:
-    """Return True when this list already processed the message (marker and its own List-Id).
+    """Return True when the message already passed this list or has circulated too long.
 
-    Postfix runs the transport with flags=Rq, so X-Original-To is absent; the marker alone is not enough
-    either, because a list nested in another list legitimately receives marked mail.
+    Every list appends its own address as an X-Loop header (never replacing earlier ones), so a cycle
+    A -> B -> A is caught on the second pass through A, however many lists are in between. Postfix runs
+    the transport with flags=Rq, so X-Original-To is not available. The marker plus the list's own List-Id
+    is kept as an additional check; List-Id alone is not enough because it is overwritten on each hop.
     """
+    hops = [str(value).strip().lower() for value in incoming.get_all("X-Loop") or []]
+    if len(hops) >= MAX_LOOP_HOPS or list_address.strip().lower() in hops:
+        return True
     if incoming.get("X-maillist") != loop_marker:
         return False
     return str(incoming.get("List-Id", "")).strip().lower() == f"<{list_address}>".lower()
@@ -449,8 +469,10 @@ def apply_list_headers(
     tag = sanitize_text(tag).strip() if tag else None
     subject = str(incoming.get("Subject", ""))
     if tag and f"[{tag}]" not in subject:
-        set_or_replace_header(incoming, "Subject", f"[{tag}] {subject}")
+        # A decoded subject can contain CR/LF; rebuild it from a sanitised copy.
+        set_or_replace_header(incoming, "Subject", f"[{tag}] {sanitize_text(subject, limit=998)}")
 
+    incoming["X-Loop"] = address  # appended, never replaced: the trace of lists this message passed
     set_or_replace_header(incoming, "X-maillist", lists.loop_marker)
     set_or_replace_header(incoming, "List-Id", f"<{address}>")
     set_or_replace_header(incoming, "List-Post", f"<mailto:{address}>")
@@ -637,11 +659,13 @@ def deliver(settings: Settings, args: argparse.Namespace, incoming: EmailMessage
             list_info = get_list_info(cnx, msg_id, list_key)
     except AmbiguousListError as exc:
         logger.error(f"{msg_id} - The list key matches {exc.count} lists; refusing to guess, message stays queued")
+        # Every Postfix retry sends another report. Accepted on purpose: mailadmin prevents duplicate list
+        # addresses on create, so this state needs manual database edits and deserves the noise.
         notify_ambiguous_list(settings, msg_id, exc.count)
         return EX_TEMPFAIL
 
     if not list_info:
-        logger.warning(f"{msg_id} - No mailing list found for {list_key}")
+        logger.warning(f"{msg_id} - No mailing list found for {sanitize_text(list_key)}")
         return EX_NOUSER
 
     if should_drop_for_loop(incoming, settings.lists.loop_marker, list_info.address):

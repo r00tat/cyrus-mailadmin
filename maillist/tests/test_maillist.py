@@ -978,7 +978,8 @@ def test_non_ascii_and_dotless_domain_addresses_are_skipped(caplog) -> None:
     quiet = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG)
     assert "example.org" not in loud and "localhost" not in loud
     assert "j\u00f6rg@example.org" in quiet
-    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 4
+    # four per-entry warnings plus one aggregate
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 5
 
 
 def test_unencodable_recipient_is_a_permanent_failure_not_a_crash(run_main) -> None:
@@ -1131,3 +1132,167 @@ def test_member_count_logged_is_the_normalised_count(run_main, caplog) -> None:
     with caplog.at_level("INFO", logger="maillist"):
         run_main(["list.example.org"], rows=rows)
     assert any("with 1 members" in r.getMessage() for r in caplog.records)
+
+
+# --- review round 2 --------------------------------------------------------------
+
+
+def _outgoing(smtps) -> bytes:
+    batches = [call[2] for s in smtps for call in s.sent if isinstance(call[1], list)]
+    assert batches, "nothing was delivered"
+    return batches[0]
+
+
+def _rows(address: str, members: str = "member@example.net"):
+    return (("TAG", address, members),)
+
+
+def test_two_lists_containing_each_other_do_not_loop(run_main) -> None:
+    a_rows = _rows("a@example.org", "b@example.org")
+    code, _, smtps = run_main(["a.example.org"], rows=a_rows)
+    assert code == maillist.EX_OK
+    to_b = _outgoing(smtps)
+
+    code, _, smtps = run_main(["b.example.org"], rows=_rows("b@example.org", "a@example.org"), raw=to_b)
+    assert code == maillist.EX_OK
+    back_to_a = _outgoing(smtps)
+
+    code, connection, smtps = run_main(["a.example.org"], rows=a_rows, raw=back_to_a)
+    assert code == maillist.EX_OK
+    assert [s for s in smtps if s.sent] == []  # second pass through A is dropped
+
+
+def test_chain_of_distinct_lists_delivers_and_records_both_hops(run_main) -> None:
+    from email import policy
+    from email.parser import BytesParser
+
+    _, _, smtps = run_main(["a.example.org"], rows=_rows("a@example.org", "b@example.org"))
+    code, _, smtps = run_main(["b.example.org"], rows=_rows("b@example.org"), raw=_outgoing(smtps))
+    assert code == maillist.EX_OK
+    out = BytesParser(policy=policy.SMTP).parsebytes(_outgoing(smtps))
+    assert out.get_all("X-Loop") == ["a@example.org", "b@example.org"]
+    assert out["List-Id"] == "<b@example.org>"
+
+
+def test_x_loop_is_appended_never_replaced(settings) -> None:
+    msg = EmailMessage()
+    msg["From"] = "Author <author@example.net>"
+    msg["X-Loop"] = "other@example.org"
+    maillist.apply_list_headers(msg, None, "list@example.org", "list@example.org", settings.lists)
+    assert msg.get_all("X-Loop") == ["other@example.org", "list@example.org"]
+
+
+def test_loop_detected_by_own_address_in_any_x_loop_header(settings) -> None:
+    msg = EmailMessage()
+    msg["X-Loop"] = "first@example.org"
+    msg["X-Loop"] = " LIST@example.org "
+    msg["List-Id"] = "<unrelated@example.org>"
+    assert maillist.should_drop_for_loop(msg, settings.lists.loop_marker, "list@example.org") is True
+
+
+def test_other_lists_in_x_loop_are_not_a_loop(settings) -> None:
+    msg = EmailMessage()
+    msg["X-Loop"] = "first@example.org"
+    assert maillist.should_drop_for_loop(msg, settings.lists.loop_marker, "list@example.org") is False
+
+
+def test_hop_limit_drops_regardless_of_list(settings) -> None:
+    def with_hops(count: int) -> EmailMessage:
+        msg = EmailMessage()
+        for i in range(count):
+            msg["X-Loop"] = f"hop{i}@example.org"
+        return msg
+
+    assert maillist.MAX_LOOP_HOPS == 10
+    assert maillist.should_drop_for_loop(with_hops(10), settings.lists.loop_marker, "list@example.org") is True
+    assert maillist.should_drop_for_loop(with_hops(9), settings.lists.loop_marker, "list@example.org") is False
+
+
+def test_hop_limit_is_enforced_by_main(run_main) -> None:
+    hops = b"".join(b"X-Loop: hop%d@example.org\r\n" % i for i in range(10))
+    raw = RAW_MAIL.replace(b"Subject:", hops + b"Subject:")
+    code, _, smtps = run_main(["list.example.org"], raw=raw)
+    assert code == maillist.EX_OK
+    assert [s for s in smtps if s.sent] == []
+
+
+def test_list_key_from_header_is_sanitised_in_logs(run_main, config_file, caplog) -> None:
+    config_file.write_text(config_file.read_text() + "level = DEBUG\n")
+    raw = RAW_MAIL.replace(
+        b"Delivered-To: list.example.org@maillist.invalid", b"Delivered-To: =?utf-8?q?x=0D=0Ay?=@maillist.invalid"
+    )
+    with caplog.at_level("DEBUG", logger="maillist"):
+        code, _, _ = run_main([], rows=(), raw=raw)
+    assert code == maillist.EX_NOUSER
+    assert any("x  y" in r.getMessage() for r in caplog.records)
+    assert not any("\r" in r.getMessage() or "\n" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "a b@example.org",
+        "a@exa mple.org",
+        "a<b@example.org",
+        "a>@example.org",
+        'a"b@example.org',
+        "a(b)@example.org",
+        "a,b@example.org",
+        "a;b@example.org",
+        "a:b@example.org",
+        "a\\b@example.org",
+        "a[b]@example.org",
+        "@example.org",
+        "a@",
+        "a@example..org",
+        "a@.example.org",
+        "a@example.org.",
+        "a@b@example.org",
+        "j\u00f6rg@example.org",
+        "user@localhost",
+    ],
+)
+def test_is_plain_address_rejects(address: str) -> None:
+    assert maillist._is_plain_address(address) is False
+
+
+@pytest.mark.parametrize("address", ["a@example.org", "first.last+tag@mail.example.org", "a_b-c@x.example.co"])
+def test_is_plain_address_accepts(address: str) -> None:
+    assert maillist._is_plain_address(address) is True
+
+
+def test_skipped_members_are_summarised_in_one_warning(caplog) -> None:
+    members = "bad one\nok@example.org\nuser@localhost\nother@example.org"
+    with caplog.at_level("WARNING", logger="maillist"):
+        maillist.normalize_recipients(members, "MSG")
+    summaries = [r.getMessage() for r in caplog.records if "skipped" in r.getMessage().lower()]
+    assert len(summaries) == 1
+    assert "2" in summaries[0] and "1" in summaries[0] and "3" in summaries[0]  # count and line numbers
+    assert "example.org" not in summaries[0] and "localhost" not in summaries[0]
+
+
+def test_no_summary_warning_when_nothing_is_skipped(caplog) -> None:
+    with caplog.at_level("WARNING", logger="maillist"):
+        maillist.normalize_recipients("ok@example.org", "MSG")
+    assert caplog.records == []
+
+
+def test_decoded_subject_with_crlf_cannot_inject_headers(run_main) -> None:
+    from email import policy
+    from email.parser import BytesParser
+
+    raw = RAW_MAIL.replace(b"Subject: Hello", b"Subject: =?utf-8?q?Hello=0D=0ABcc:_x@example.net?=")
+    code, _, smtps = run_main(["list.example.org"], raw=raw)
+    assert code == maillist.EX_OK
+    out = BytesParser(policy=policy.SMTP).parsebytes(_outgoing(smtps))
+    assert out["Bcc"] is None
+    assert "\r" not in out["Subject"] and "\n" not in out["Subject"]
+    assert out["Subject"].startswith("[TAG] Hello")
+
+
+def test_subject_is_capped_when_tag_is_prepended(settings) -> None:
+    msg = EmailMessage()
+    msg["From"] = "Author <author@example.net>"
+    msg["Subject"] = "x" * 3000
+    maillist.apply_list_headers(msg, "TAG", "list@example.org", "list@example.org", settings.lists)
+    assert len(msg["Subject"]) <= 998 + len("[TAG] ")
