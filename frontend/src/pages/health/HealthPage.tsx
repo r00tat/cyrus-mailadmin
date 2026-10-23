@@ -154,7 +154,7 @@ export function HealthPage(): ReactNode {
             loading={health.isFetching}
           />
 
-          <ListDelivery settings={health.data.list_delivery} />
+          <ListDeliverySection settings={health.data.list_delivery} />
         </Stack>
       )}
     </>
@@ -167,7 +167,7 @@ export function HealthPage(): ReactNode {
  * is a configuration error — Postfix would deliver locally and the pipe
  * transport would never see the mail — and gets a warning of its own.
  */
-function ListDelivery({ settings }: { settings: ListDeliverySettings }): ReactNode {
+function ListDeliverySection({ settings }: { settings: ListDeliverySettings }): ReactNode {
   const { t } = useTranslation();
 
   return (

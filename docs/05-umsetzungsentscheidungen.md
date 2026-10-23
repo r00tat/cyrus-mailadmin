@@ -1826,6 +1826,10 @@ solange kein Client sich darauf verlässt, dass `If-Match` weggelassen werden da
 
 ## U-56 — `lists.members` wird weit gelesen, eng geschrieben und unverändert byteweise erhalten
 
+> **Ersetzt durch U-134.** Geschrieben wird seit dem Pipe-Transport ein Eintrag pro Zeile, nicht
+> komma-separiert: `members` liest allein `maillist.py`, und das trennt an Zeilenumbrüchen. Weites
+> Lesen und Bytetreue gelten weiter.
+
 **Frage:** A5/1 — wie sind die Einträge in `lists.members` getrennt? Komma, Semikolon,
 Zeilenumbruch? Das Paketdokument verlangt, das **am Bestand zu prüfen**, bevor irgendetwas
 geschrieben wird; ein falsches Trennzeichen macht die 22 Bestandslisten unbrauchbar. Aus der
@@ -1897,6 +1901,9 @@ und nur warnen: das ist die Variante mit dem Kommando in der Aliasdatei.
 
 ## U-58 — Listen bleiben Superuser-Sache, und `tag` bleibt uninterpretiert
 
+> **Im Punkt „Rolle“ geändert durch U-136.** Domainmaster verwalten die Listen ihrer Domains,
+> seit die Adresse die Identität ist (U-135). Was hier über `tag` steht, gilt weiter.
+
 **Frage:** A5/2 und A5/3 — wofür wird `tag` verwendet? Und dürfen Domainmaster Listen ihrer
 eigenen Domain verwalten? S3 hatte beides als Annahme offen gelassen und A5 ausdrücklich erlaubt
 zu erweitern.
@@ -1935,6 +1942,9 @@ zwischenzeitlich mit einer erfundenen Bedeutung befüllt hat.
 
 ## U-59 — Der Hinweis auf den Konfigurationslauf ist ein Antwortkopf
 
+> **Eingeschränkt durch U-143.** Der Kopf erscheint nur noch bei
+> `MAILADMIN_LIST_DELIVERY=alias`; im Transportmodus wirkt eine Änderung sofort.
+
 **Frage:** A5/5 — wie deutlich wird darauf hingewiesen, dass eine Änderung erst nach dem nächsten
 Konfigurationslauf wirkt? Die Definition of Done verlangt den Hinweis **nach jeder** Änderung.
 
@@ -1963,6 +1973,10 @@ Stelle, die niemand mit dem Server abgleicht.
 ---
 
 ## U-60 — Eine Liste wird über ihren Namen angesprochen; Umbenennen ist Löschen und Anlegen
+
+> **Ersetzt durch U-135.** Die Produktions-DDL hat eine Spalte `id` als Primärschlüssel und keinen
+> Unique-Index auf `name`. Eine Liste wird über ihre Adresse angesprochen, `name` ist änderbarer
+> Anzeigetext.
 
 **Frage:** Nicht gestellt, aber der Vertrag verlangt es: Architektur 7.2 nennt
 `PATCH/DELETE /lists/{id}`, und das Paketdokument führt eine Spalte `id` auf. Die Tabelle hat
@@ -4722,6 +4736,460 @@ die CLAUDE.md für das Altsystem beschreibt.
 als alleinige Lösung, weil eine echte Änderung der Einheit dann weiter gerundet hätte.
 
 **Korrekturkosten:** Gering; alle Änderungen liegen in der Oberfläche und sind getestet.
+
+---
+
+## U-134 — `lists.members` wird zeilenweise geschrieben; gelesen wird weiter tolerant
+
+> Ersetzt U-56 im Punkt „geschrieben wird komma-separiert". Bytetreue und weites Lesen bleiben.
+
+**Frage:** U-56 hat das Trennzeichen offen gelassen und Komma gerendert, unter der Annahme, Salt
+schreibe `members` in die Aliasdatei. Was gilt, nachdem bekannt ist, wer die Spalte wirklich liest?
+
+**Entscheidung:**
+
+- **Geschrieben wird ein Eintrag pro Zeile**, getrennt durch `\n` (`MemberList::SEPARATOR`).
+  Ein Eintrag ist `user@domain` oder `Name <user@domain>`.
+- **Gelesen wird an `\r\n`, `\n`, `,`, `;` und `<br>` in jeder Schreibweise**, nachdem
+  HTML-Entities der Altanwendung dekodiert sind (erst dekodieren, dann trennen).
+- **Unverändert bleibt U-56s Kern:** Eine Liste, deren Mitglieder sich nicht geändert haben,
+  wird byteweise zurückgeschrieben, samt `NULL`. Erst eine geänderte Liste wird vollständig
+  kanonisch geschrieben; dekodierte Altbestandseinträge stehen danach als Klartext in der Spalte.
+- **Neu abgelehnt** wird ein hinzukommender Eintrag, der nicht als er selbst zurückgelesen würde:
+  `,`, `;` oder `<br>` im Anzeigenamen (beim Lesen ein Trenner) und Entities (würden dekodiert).
+  Bestandseinträge bleiben unangetastet (U-22, U-57).
+- `MemberList::deliverableAddresses()` liefert die Adressen, an die `maillist.py` zustellen wird:
+  brauchbare Einträge, ohne Dubletten (Vergleich ohne Groß-/Kleinschreibung, der erste gewinnt).
+  Golden-Dateien unter `tests/Fixtures/MemberFormat/` sind der gemeinsame Vertrag zwischen
+  `MemberList` und `normalize_recipients()` in `maillist/`; beide Testsuiten lesen sie.
+
+**Warum:** Die Aliasdatei enthält nur die Pipe-Zeile auf das Listenskript, nie die Mitglieder.
+`members` liest allein `maillist.py`, und das trennt an Zeilenumbrüchen. Eine in mailadmin
+geänderte Liste wäre mit Kommas ein einziger ungültiger Empfänger `a@x,b@y` geworden. Der lesende
+Blick in die Produktion (Bestandsanalyse 4) bestätigt das Format: Die Einträge sind durch
+Zeilenumbrüche und `<br />` getrennt, eine Liste durch Kommas, keine trägt Entities.
+
+**Alternative:** Weiter mit Komma schreiben und nur `maillist.py` an Kommas trennen lassen. Das
+Skript tut das inzwischen auch, als Schutz für Daten, die die frühere Fassung geschrieben haben
+könnte. Als Schreibformat wäre Komma aber das schlechtere: Anzeigenamen mit Komma ließen sich nicht
+mehr eindeutig lesen.
+
+**Korrekturkosten:** Gering. Eine Konstante und die Golden-Dateien.
+
+---
+
+## U-135 — Eine Liste wird über ihre Adresse identifiziert; der Name ist Anzeigetext
+
+> Ersetzt U-60.
+
+**Frage:** U-60 nahm an, `lists` habe vier Spalten mit `name` als Primärschlüssel. Die
+Produktions-DDL (lesend erhoben, `SHOW CREATE TABLE`) sagt etwas anderes. Worüber wird eine Liste
+dann angesprochen, und was bedeutet `name`?
+
+**Entscheidung:**
+
+- **Produktions-DDL.** `lists` hat `id` (`int unsigned`, `AUTO_INCREMENT`, Primärschlüssel),
+  `name`, `tag`, `address` (je `varchar(255) NOT NULL`) und `members` (`text NOT NULL`), MyISAM,
+  `latin1`. **Es gibt keinen Unique-Index** auf `name` oder `address`. Das Basisschema der
+  Testumgebung (`docker/db/init/00-baseline-schema.sql`) übernimmt genau diese Definition.
+- **Identität ist die Adresse:** `GET/PATCH/DELETE /lists/{address}`, URL-kodiert. Die Adresse
+  wird beim Anlegen kleingeschrieben und ist danach **unveränderlich**; der `PATCH`-Körper kennt
+  kein `address` (`additionalProperties: false`, also `422`). Wer die Adresse ändern will, löscht
+  die Liste und legt sie neu an.
+- **Die Eindeutigkeit sichert die Anwendung**, nicht die Datenbank: Beim Anlegen darf die Adresse
+  weder in `lists.address` noch in `virtual.alias` noch als Kontoname stehen, und keine Liste darf
+  denselben Listenschlüssel `REPLACE(address,'@','.')` haben. Damit ist auch die Mehrdeutigkeit
+  `a.b@c` gegenüber `a@b.c` abgefangen. Jeder Treffer ist `409 list.address_taken`;
+  `list.already_exists` entfällt. `list.not_found` gibt es weiterhin nicht (U-44).
+- **Altbestand mit doppelter Adresse:** `find` liefert die Zeile mit der kleinsten `id`, `remove`
+  löscht alle Zeilen der Adresse.
+- **`name` ist freier Anzeigetext**, darf doppelt vorkommen und ist per `PATCH` änderbar. Die
+  strenge Tür `MailingListName::fromString()` verlangt nur, was die Spalte speichern kann: nicht
+  leer, höchstens 255 Zeichen, keine Steuerzeichen, nur `latin1` (U-137). Leerzeichen,
+  Doppelpunkte und Umlaute sind erlaubt.
+- **Die tolerante Tür `MailingListName::fromStoredValue()`** nimmt jeden gespeicherten Wert an,
+  ohne zu trimmen oder abzulehnen, und markiert ihn nur über `isConventional()`. Eine ungewöhnliche
+  Zeile verschwindet nicht und lässt keine Liste scheitern (U-22); unverändert gespeichert behält
+  sie ihre Bytes.
+
+**Warum:** Die Adresse ist das, was Postfix und `maillist.py` kennen, und das Einzige, das in
+Produktion tatsächlich eindeutig ist. `name` wertet niemand aus: Salt schreibt die Aliasdatei aus
+der Adresse (`REPLACE(address,'@','.')`), nicht aus `lists.name`, und mit dem Pipe-Transport
+entfällt auch das. Die Adresse als Pfad ist zudem unabhängig davon, welchen Primärschlüssel die
+Tabelle trägt. Unveränderlich ist sie, weil an ihr der `virtual`-Eintrag und der Listenschlüssel
+hängen; eine Adressänderung wäre ein Identitätswechsel über zwei Tabellen, keine Feldänderung.
+
+**Alternative:** `id` als Pfad. Sie existiert zwar, ist aber für niemanden außerhalb der Tabelle
+bedeutsam, und ein Client müsste zu jeder Adresse erst die `id` suchen. — Ein Unique-Index auf
+`address`: eine Änderung an einer Bestandstabelle (Regel 1), und er würde am doppelten Altbestand
+scheitern.
+
+**Korrekturkosten:** Hoch, sobald Clients existieren — es ist die Gestalt jeder Listen-URL.
+
+---
+
+## U-136 — Domainmaster verwalten die Listen ihrer Domains
+
+> Ändert U-58 im Punkt „Rolle". Was U-58 über `tag` sagt, gilt weiter.
+
+**Frage:** U-58 ließ Listen beim Superuser, weil `name` ein globaler Namensraum ohne Domainanteil
+schien. Die Altanwendung ließ Domain-Admins die Listen ihrer Domain pflegen. Trägt das Argument
+noch?
+
+**Entscheidung:** **Domainmaster erhalten `list.read`, `list.write` und `list.delete`.**
+`ListPolicy` prüft die Domain der Listenadresse:
+
+- **Lesen, Ändern, Löschen:** Eine Liste einer fremden Domain ergibt `404`, nicht unterscheidbar
+  von einer, die es nicht gibt (U-44).
+- **Anlegen** für eine Domain außerhalb des eigenen Zuschnitts ergibt `403`
+  (`ListPolicy::requireCreateIn()`), weil die Adresse vom Client kommt und es nichts zu verbergen
+  gibt. Eine Domain, die nicht in `domain` steht, ergibt `422 list.unknown_domain`.
+- Die Listenabfrage engt über `list_domain` ein, wie U-58 es vorbereitet hatte.
+
+**Warum:** Mit U-135 ist die Identität die Adresse, und die trägt ihre Domain. Den Namen, den U-58
+als globalen Namensraum fürchtete, belegt niemand mehr; ein Domainmaster kann einem anderen nichts
+wegnehmen außer einer Adresse in dessen Domain, und die sieht er nicht. Ohne die Erweiterung
+fehlte eine Funktion der Altanwendung, die abgelöst werden soll.
+
+Eine Ausnahme bleibt bewusst: Die Prüfung auf gleichen Listenschlüssel kann einem Domainmaster
+verraten, dass in einer anderen Domain eine Liste existiert (`a.b@own.test` gegen
+`a@b.own.test`). Die Ablehnung ist trotzdem nötig, weil `maillist.py` sonst zwei Listen unter
+einem Schlüssel fände.
+
+**Alternative:** Weiter nur Superuser. Dann bliebe die Altanwendung für Domain-Admins in Betrieb,
+samt ihren Sicherheitsmängeln.
+
+**Korrekturkosten:** Gering. Drei Rechte in `RolePermissions::domainMaster()`.
+
+---
+
+## U-137 — Eingaberegeln einer Liste: kein `+` in der Adresse, nur `latin1` in Name, Tag und Mitgliedern
+
+**Frage:** Welche Werte kann die Zustellkette nicht tragen, und wo werden sie abgelehnt?
+
+**Entscheidung:**
+
+1. **Kein `+` im Local Part der Listenadresse:** `422 list.address_has_extension` am Feld
+   `address`. Das Trennzeichen steht als Konstante mit Begründung im Code, nicht in der
+   Konfiguration.
+2. **Nur druckbares `latin1`** in Name, Tag und neuen Mitgliedern, also U+0000–U+007F und
+   U+00A0–U+00FF ohne die C1-Steuerzeichen: `list.name_outside_latin1`,
+   `list.tag_outside_latin1`, `list.member_outside_latin1`. Steuerzeichen lehnen Name und Tag
+   zusätzlich ab. Die Regel steht an genau einer Stelle, `Latin1Text`; Längen zählen dort Zeichen,
+   nicht Bytes, so wie `varchar(255)` in `latin1`.
+3. Beides gilt nur für **neue oder geänderte** Werte. Gespeicherte werden gelesen, wie sie sind
+   (U-22).
+
+**Warum, für `+`:** Der Transport übergibt `${user}`, den Local Part ohne Adresserweiterung. Bei
+`recipient_delimiter = +` (Postfix-Standard, auch in Produktion) würde ein `+` im Listenschlüssel
+abgeschnitten, und die Liste wäre nicht auffindbar. `${mailbox}` hilft nicht: Wegen
+`propagate_unmatched_extensions` käme `team+x@…` dann als `schluessel+x` an. Mit `${user}` erreicht
+Mail an `team+x@domain` die Liste `team` — die Erweiterung funktioniert also für die Absender, nur
+die Liste selbst darf keine tragen. Das Umstellungskommando (U-142) überspringt Altlisten mit `+`.
+
+**Warum, für `latin1`:** `lists` ist eine `latin1`-Tabelle, die Verbindung spricht `utf8mb4`.
+MariaDB wandelt bei jedem Schreiben um. Ein Umlaut kommt heil an; ein Zeichen, das `latin1` nicht
+fasst, lässt einen strikten Server die Anweisung verweigern (Fehler 1366, nach außen ein
+undurchsichtiges `500`), und ein nachsichtiger speichert `?`. Beides ist nicht, was im Formular
+stand. MariaDBs `latin1` ist eigentlich `cp1252` und nähme `€`, aber ob `maillist.py` und andere
+Leser das genauso sehen, ist nicht belegt; die engere Grenze ist die sichere.
+
+**Alternative:** Für `latin1`: die Tabelle auf `utf8mb4` umstellen — keine additive Migration und
+verboten (Regel 1). Oder Zeichen als Entities speichern, wie die Altanwendung: Genau das hat
+`maillist.py` heute zu dekodieren. — Für `+`: Adressen mit `+` über einen eigenen Schlüssel
+zulassen. Das hätte die Datenbankabfrage von `maillist.py` geändert und Alt- und Neuweg
+während der Umstellung getrennt.
+
+**Korrekturkosten:** Gering. `Latin1Text` und eine Konstante in `CreateMailingList`.
+
+---
+
+## U-138 — Anlegen und Löschen über `lists` und `virtual`, unter der Namensraumsperre
+
+**Frage:** Zu einer Liste gehören eine Zeile in `lists` und eine in `virtual`. Beide Tabellen
+sind MyISAM, eine Transaktion über beide gibt es nicht. In welcher Reihenfolge wird geschrieben,
+unter welcher Sperre, und was bleibt bei einem Fehler zurück?
+
+**Entscheidung:**
+
+- **Der `virtual`-Eintrag einer Liste:** `alias = <Adresse>`,
+  `dest = REPLACE(address,'@','.') + '@' + <Pseudodomain>`, `username = ''`, `status = 1`. Die
+  Pseudodomain kommt aus `MAILADMIN_LIST_TRANSPORT_DOMAIN` (Standard `maillist.invalid`, RFC 2606).
+  `username` bleibt leer, damit `sender_canonical_maps` (Abfrage über `username`) nicht auf
+  Listeneinträge anspringt.
+- **Anlegen: `lists` zuerst, dann `virtual`.** Scheitert `virtual`, werden dessen Zeilen
+  zurückgesetzt (`RowWriter::restore()`) und die `lists`-Zeile wieder entfernt. Scheitert auch
+  das, entsteht ein Reparatureintrag `list.create`/`lists.remove`, und der ursprüngliche Fehler
+  geht an den Client.
+- **Löschen: `virtual` zuerst, dann `lists`.** Entfernt werden die `virtual`-Zeilen der Adresse,
+  die als Listeneintrag erkannt werden (U-139), in Transport- wie Altform; Zeilen anderen Typs unter
+  derselben Adresse bleiben und werden protokolliert. Scheitert danach `lists`, gilt das Löschen
+  trotzdem als erfolgt (`204`): Es entsteht ein Reparatureintrag `list.delete`/`lists.remove` und
+  eine `error`-Logzeile, so wie `DeleteAccount` ein nicht entferntes Postfach meldet.
+- **Ändern** schreibt nur `lists` (`name`, `tag`, `members`); `virtual` bleibt unberührt.
+  Scheitert das Audit, wird die Zeile auf den gelesenen Stand zurückgesetzt (U-105), sonst
+  `lists.restore` in die Warteschlange (manuell).
+- **Sperre:** Anlegen, Ändern, Löschen und die Wiederholung aus der Warteschlange laufen unter
+  `DomainStore::withNamespaceLock()`, derselben Sperre, die alle Adress-Anwendungsfälle nehmen
+  (U-97). Die Spec nannte eine Sperre pro Listenadresse.
+- **Wiederholung:** `RepairCatalogue` kennt den Schritt `lists.remove`. Die Wiederholung
+  entfernt die `lists`-Zeile der Adresse, wenn unter der Sperre keine `virtual`-Zeile mehr die
+  Adresse trägt; sonst lehnt sie ab.
+- **Audit:** Anlegen und Löschen schreiben einen Haupteintrag `list.create`/`list.delete` und
+  den `virtual`-Eintrag als Kindeintrag (`partOf`), wie bei Domains. Ändern schreibt
+  `list.update`.
+
+**Warum:** Die Reihenfolge folgt „so scheitern, dass niemand Mail verliert" (CLAUDE.md). Eine
+`lists`-Zeile ohne `virtual` empfängt nichts und ist harmlos; ein `virtual`-Eintrag ohne
+`lists`-Zeile ließe `maillist.py` mit `67` bouncen. Deshalb kommt `lists` beim Anlegen zuerst
+und geht beim Löschen zuletzt.
+
+Die Namensraumsperre ist strenger als eine Sperre pro Adresse und schließt genau das Rennen aus,
+das eine Adresssperre offen ließe: Ein Alias und eine Liste können nicht gleichzeitig dieselbe
+Adresse belegen, weil die Adressverwaltung dieselbe Sperre nimmt. Dass auch Ändern sie nimmt, hält
+ein gleichzeitiges Löschen davon ab, zwischen Lesen und Zurücksetzen zu fallen.
+
+**Alternative:** Eine Sperre pro Listenadresse, wie in der Spec. Weniger Wartezeit, aber das
+Rennen mit der Aliasanlage bliebe offen. — `virtual` beim Anlegen zuerst: Dann gäbe es ein
+Zeitfenster, in dem Mail ankommt und mangels Liste bounct.
+
+**Korrekturkosten:** Gering. Die Reihenfolge steht in `CreateMailingList` und
+`DeleteMailingList`, der Retry in `RepairCatalogue`.
+
+---
+
+## U-139 — Listeneinträge in `virtual` sind ein eigener Typ, streng erkannt; Transportziele gehören nur ihnen
+
+**Frage:** `virtual` trägt bisher Kontoadresse, Alias, Catchall und Weiterleitung, nur an der
+Feldbelegung unterscheidbar. Wie erkennt die Adressverwaltung einen Listeneintrag, und wie
+verhindert sie, dass ein gewöhnlicher Alias die Pseudodomain als Ziel nennt?
+
+**Entscheidung:**
+
+- **`VirtualEntryType::MailingList` (`mailing_list`).** Eine Zeile ist ein Listeneintrag, wenn
+  (1) sie genau die Form hat, die A5 schreibt — leeres `username`, genau ein Ziel, und dieses Ziel
+  ist `<Listenschlüssel des alias>@<Pseudodomain>` —, oder (2) sie die Altform
+  `dest = username = REPLACE(alias,'@','.')` hat **und** `lists` eine Zeile mit dieser Adresse
+  enthält. Die Regel steht vor „leeres `username` → Weiterleitung".
+- **Streng:** Eine Zeile, die die Pseudodomain nennt, aber nicht genau Form (1) hat, ist **kein**
+  Listeneintrag, sondern `unknown` — angezeigt, nicht geraten.
+- Die Prüfung hängt an `MailingListRecognition`, einer reinen Funktion. Die Aufrufer laden die
+  Listenadressen der betroffenen Domains mit einer Abfrage pro Domain, nicht pro Zeile.
+- **In der Adressverwaltung** erscheinen Listeneinträge nur lesend (`editable: false`) mit Verweis
+  auf die Liste; Löschen dort ergibt `409 address.not_editable`. Ändern und Löschen laufen nur über
+  `/lists`.
+- **Transportziele sind reserviert.** `DestinationRules` lehnt für Aliase, Weiterleitungen und
+  Catchall jedes neue Ziel auf der Pseudodomain ab, dazu Routing-Schreibweisen, mit denen sich das
+  umgehen ließe: `%` oder `!` im Local Part und eine Quellroute mit führendem `@`
+  (`address.invalid_destination`). Domains werden dabei normalisiert verglichen: kleingeschrieben,
+  getrimmt, ohne abschließenden Punkt. Gespeicherte Zeilen mit solchen Zielen werden gelesen und
+  behalten (U-22).
+- **Die Pseudodomain ist keine Domain.** Anlegen oder Umbenennen einer Domain auf die
+  Pseudodomain (gleich in welcher Schreibweise) ergibt `422 domain.invalid_name`.
+
+**Warum:** Regel (2) braucht `lists`, weil die Altform Feld für Feld auch die Adresszeile eines
+Kontos im Punktschema ist; ohne die Gegenprobe würde ein Konto als Liste erkannt. Die Strenge in
+Regel (1) verhindert, dass eine fremde Zeile mit einem Transportziel als Liste gilt und dann über
+`/lists` gelöscht oder in der Adressverwaltung nicht mehr entfernt werden kann.
+
+Die Sperre der Transportziele ist ein Zugriffsschutz: Postfix prüft nach der `virtual`-Auflösung
+nichts mehr. Ein Alias auf `<schluessel>@<Pseudodomain>` speiste jede Liste, auch die einer
+fremden Domain, an `ListPolicy` vorbei. Eine verwaltete Pseudodomain wiederum würde Postfix lokal
+zustellen; keine Liste erreichte mehr den Transport.
+
+**Alternative:** Listeneinträge weiter als Alias bzw. Weiterleitung führen. Dann ließe die
+Adressverwaltung sie ändern und löschen, ohne dass `lists` mitgeht.
+
+**Korrekturkosten:** Gering. `MailingListRecognition`, `VirtualEntryClassifier`,
+`DestinationRules`.
+
+---
+
+## U-140 — Eine Domain mit Listen wird nicht umbenannt
+
+**Frage:** `DomainRepository::rename` schreibt `virtual.alias` um, lässt aber `lists.address`,
+den Listenschlüssel in `dest` und den Alt-`username` stehen. Mitziehen oder ablehnen?
+
+**Entscheidung:** **Ablehnen.** Hat die Domain mindestens eine Zeile in `lists`, antwortet die
+Umbenennung mit `409 domain.rename_blocked_by_mailing_list`, vor jedem Mailstore- oder
+Datenbankschritt. Wer umbenennen will, löscht die Listen vorher und legt sie danach neu an.
+
+**Warum:** Ohne die Sperre passen danach `lists.address` und `virtual.alias` nicht mehr zusammen.
+Im Transportmodus läuft die Zustellung zwar weiter, aber `/lists` findet den `virtual`-Eintrag
+beim Löschen nicht mehr. In der Altform würde der Eintrag zum gewöhnlichen Alias und über die
+Aliasverwaltung änderbar. Mitziehen hieße, `lists`, `dest` und im Altmodus die Aliasdatei gemeinsam
+umzustellen — nicht atomar, und im Altmodus ohne Salt-Lauf nicht vollständig. Das Vorbild ist
+`domain.rename_blocked_by_account`.
+
+**Alternative:** Mitziehen im Transportmodus und nur im Altmodus ablehnen. Möglich, sobald der
+Altweg entfallen ist; bis dahin wären es zwei Verhalten für denselben Aufruf.
+
+**Korrekturkosten:** Mittel. Das Mitziehen wäre ein eigener Ablauf über zwei Tabellen mit
+Kompensation.
+
+---
+
+## U-141 — Das Listenskript liegt in diesem Repository, mit eigenem Installer und eigenem Release
+
+**Frage:** `maillist.py` lag in einem eigenen Altrepository, mit Zugangsdaten im Quelltext und
+ohne Tests. mailadmin und das Skript teilen sich das Format von `members` und den Listenschlüssel.
+Wo lebt das Skript?
+
+**Entscheidung:**
+
+- **`maillist/` in diesem Repository**, übernommen **ohne** die Historie des Altrepositorys, weil
+  diese ein Datenbankpasswort enthält. Produktionshosts und -adressen stehen nicht mehr im Code,
+  sondern in einer Konfigurationsdatei (`maillist.ini`, Pfad über `MAILLIST_CONFIG` mit festem
+  Standard). `click` und PyYAML sind durch `argparse` und `configparser` ersetzt, damit das Skript
+  mit dem System-Python des Mailservers läuft; Abhängigkeit bleibt nur `mysql.connector`.
+- **Eigener Installer** (`maillist/install`): Releases nebeneinander mit atomarem
+  `current`-Symlink, Prüfung als Listenbenutzer mit `maillist.py --check` vor dem Umschalten,
+  Rückweg über `--rollback`, eine Konfigurationsdatei, die einmal angelegt und nie überschrieben
+  wird. Er ist gegen Symlink-, Hardlink- und Shared-Directory-Angriffe gehärtet.
+- **Eigenes Release-Archiv:** `release.yml` baut neben dem mailadmin-Archiv
+  `maillist-<tag>.tar.gz` und `install-maillist` und führt beide in `SHA256SUMS`. `maillist/`
+  gehört nicht ins mailadmin-Archiv und ist im Webroot gesperrt. Der CI-Lauf prüft das Skript mit
+  `pytest` und `ruff`.
+- Installation, Postfix-Konfiguration und Umstellung beschreibt
+  `docs/deployment/maillist.md`.
+
+**Warum:** Das Format von `members` ist ein Vertrag zwischen zwei Programmen. Liegen beide in
+einem Repository, prüfen dieselben Golden-Dateien beide Seiten (U-134), und eine Änderung an einer
+Seite bricht den Test der anderen. Das Skript läuft auf dem Mailserver und nicht auf dem Webserver;
+deshalb ein eigenes Archiv mit eigenem Installer statt eines Teils der mailadmin-Installation.
+
+**Alternative:** Das Altrepository weiterführen. Dann bliebe das Passwort in dessen Historie, und
+der Formatvertrag hätte zwei Kopien.
+
+**Korrekturkosten:** Gering. Das Verzeichnis lässt sich samt Workflow-Schritten wieder herauslösen.
+
+---
+
+## U-142 — Das Listenskript antwortet mit `sysexits`-Codes und verliert bei Teilfehlern keine Mail
+
+**Frage:** Postfix wertet beim `pipe(8)`-Transport den Exit-Code aus. Das Altskript endete bei
+Datenbankfehlern mit `1` — Postfix bounct, und eine Mail geht verloren, die ein späterer Versuch
+zugestellt hätte. Wie bildet das Skript seine Fälle ab?
+
+**Entscheidung:**
+
+| Fall | Code | Wirkung in Postfix |
+|---|---|---|
+| zugestellt, oder bewusst verworfen (Schleife, Bounce) | `0` (`EX_OK`) | erledigt |
+| kein Listenschlüssel (kein Argument, keine Rückfallebene) | `64` (`EX_USAGE`) | Bounce |
+| Liste nicht gefunden, oder Liste ohne brauchbaren Empfänger | `67` (`EX_NOUSER`) | Bounce |
+| unerwarteter Fehler | `70` (`EX_SOFTWARE`) | Bounce, Fehlerbericht an die Admins |
+| Datenbank, SMTP-Relay oder Konfiguration vorübergehend nicht nutzbar; Schlüssel trifft mehrere Listen | `75` (`EX_TEMPFAIL`) | erneuter Versuch |
+
+- **Teilfehler beim Versand:** `75` nur, solange **kein** Empfänger angenommen wurde — dann kann
+  Postfix wiederholen, ohne doppelt zuzustellen. Sobald einer angenommen ist, gilt die Mail als
+  zugestellt (`0`), und die abgelehnten Empfänger gehen als Bericht an die Admins. Auch wenn alle
+  Empfänger dauerhaft abgelehnt werden, gibt es `0` plus Bericht; ein Bounce würde dem Absender
+  den Zustand der Mitgliederliste verraten.
+- **Schleifenschutz:** Jede Liste hängt ihre Adresse als `X-Loop`-Kopf an, ohne frühere zu
+  ersetzen, und verwirft eine Mail, die ihre Adresse schon trägt oder `MAX_LOOP_HOPS = 10` solcher
+  Köpfe hat. So endet `A → B → A` beim zweiten Durchlauf durch A, gleich wie viele Listen
+  dazwischen liegen. Zusätzlich gilt der bisherige Marker (`X-maillist`, konfigurierbar als
+  `loop_marker`) zusammen mit der eigenen `List-Id`.
+- Im Pipe-Modus schreibt das Skript nichts auf stdout oder stderr, weil Postfix beides in Bounces
+  kopiert. Empfängeradressen erscheinen nur auf `DEBUG`.
+- Den Listenschlüssel liest das Skript aus dem Argument. Die Rückfallebene `Delivered-To` gilt nur
+  während der Umstellung, verlangt genau einen solchen Kopf und lässt sich mit
+  `delivered_to_fallback = no` abschalten.
+
+**Warum:** „So scheitern, dass niemand Mail verliert" gilt auch für das Skript. Ein
+vorübergehender Fehler ist eine Mail in der Warteschlange, kein Bounce. Doppelte Zustellung ist
+der umgekehrte Fehler und genauso zu vermeiden; deshalb wiederholt Postfix nur, wenn noch niemand
+die Mail bekommen hat. Der Schleifenschutz über `X-Loop` funktioniert unter `flags=Rq`, wo
+`X-Original-To` fehlt, und lässt verschachtelte Listen durch.
+
+**Alternative:** Bei jedem Teilfehler `75`. Postfix würde wiederholen und den bereits bedienten
+Empfängern noch einmal zustellen.
+
+**Korrekturkosten:** Gering. Die Abbildung steht an wenigen `return`-Stellen in `maillist.py`,
+mit Tests je Fall.
+
+---
+
+## U-143 — Umstellung der Altlisten, Hinweis auf den Konfigurationslauf nur im Altmodus, Einstellungen in der Betriebsübersicht
+
+> Ändert U-59: Der Kopf `X-Mailadmin-Effect: pending-configuration-run` erscheint nur noch im
+> Altmodus.
+
+**Frage:** Bestehende Listen zeigen in `virtual` auf den Aliasweg. Wie kommen sie auf den
+Transport, wie erfährt der Betrieb den Stand, und was wird aus dem Hinweis auf den
+Konfigurationslauf?
+
+**Entscheidung:**
+
+- **`MAILADMIN_LIST_DELIVERY=alias|transport`** (Standard `alias`) sagt, ob der Aliasweg noch
+  aktiv ist. Nur bei `alias` tragen schreibende Antworten den Kopf aus U-59. Die Oberfläche zeigt
+  den Hinweis nur noch, wenn die Antwort den Kopf trägt; der ständige Hinweis auf jeder Listenseite,
+  im Anlegedialog und in der Löschbestätigung ist entfallen. Im Transportmodus wirkt eine Änderung
+  sofort.
+- **Umstellungskommando `bin/migrate-list-delivery.php [--dry-run] [--revert]`** (im installierten
+  System `mailadmin migrate-list-delivery`, im Checkout `composer lists:migrate-delivery`). Vorwärts
+  setzt es für jede Liste die Altform `dest = username = <schluessel>` auf
+  `dest = <schluessel>@<Pseudodomain>`, `username = ''`; `--revert` macht das Umgekehrte. Je Zeile
+  ein `UPDATE` unter der Namensraumsperre. Ausgabe je Liste (`migrated`, `reverted`, `unchanged`,
+  `no virtual entry`, `skipped: …`, `failed: …`) und Summen. Listen mit `+` (U-137) und Adressen
+  mit Einträgen anderen Typs werden übersprungen, fehlende `virtual`-Einträge nicht angelegt.
+- **Wiederaufnahme:** Stehen nach einem Abbruch Alt- und Transportform einer Liste nebeneinander,
+  stellt der nächste Lauf die übrigen Zeilen um, statt die Liste zu überspringen. Ein zweiter Lauf
+  ändert nichts.
+- **Verwaltete Pseudodomain:** Steht die Pseudodomain als Zeile in `domain`, bricht der
+  Vorwärtslauf vor der ersten Änderung mit `1` ab, auch im Trockenlauf. `--revert` läuft trotzdem.
+- **Systemakteur:** Das Revisionsprotokoll braucht einen Akteur. `ActorContext::system($label)`
+  hat die Rechte eines Superusers ohne Rolle und erscheint als `<system:migrate-list-delivery>`;
+  diesen Namen kann kein angelegter Administrator tragen. Jede geänderte Zeile bekommt
+  `list.delivery_migrate` bzw. `list.delivery_revert`.
+- **Betriebsübersicht:** `GET /maintenance/health` liefert `list_delivery` mit `mode`,
+  `transport_domain` und `transport_domain_is_managed` (Schreibweise `snake_case` wie der übrige
+  Vertrag). `transport_domain_is_managed` ist `true` bei einer verwalteten Pseudodomain — die
+  Oberfläche warnt dann — und `null`, wenn die Datenbank nicht antwortet. Der Block ist eine
+  Einstellung, keine Prüfung, und ändert `status` nie.
+
+**Warum:** Die Umstellung muss Liste für Liste rücknehmbar sein, und zwischen den Schritten müssen
+alle Listen weiter zustellen. Ein einzelnes `UPDATE` je Zeile lässt Postfix nie einen halben oder
+fehlenden Eintrag sehen. Der Hinweis auf den Konfigurationslauf war eine Eigenschaft des Aliaswegs;
+mit dem Transport stimmt er nicht mehr, und ein Hinweis, der nicht stimmt, wird überlesen, wenn er
+einmal wieder gilt. Die Einstellung gehört in die Betriebsübersicht, weil eine falsche
+Pseudodomain sonst erst an ausbleibenden Listenmails auffällt.
+
+**Alternative:** Eine Migration statt eines Kommandos. Migrationen sind additiv und laufen ohne
+Trockenlauf; diese Umstellung ändert Bestandszeilen und muss sich zurücknehmen lassen.
+
+**Korrekturkosten:** Gering. Das Kommando wird nach der Umstellung nicht mehr gebraucht.
+
+---
+
+## U-144 — Die Testumgebung stellt Listen über einen Pipe-Transport mit Stub zu
+
+**Frage:** Wie wird Ende zu Ende geprüft, dass eine in mailadmin angelegte Liste ihre Mail mit dem
+richtigen Listenschlüssel beim Skript abliefert, ohne `maillist.py` samt SMTP-Relay in die
+Testumgebung zu holen?
+
+**Entscheidung:** Postfix in `docker/mail/` bekommt den Transport `maillist` mit einem Stub, der
+sein Argument und die Mail protokolliert, dazu `transport_maps`,
+`maillist_destination_recipient_limit = 1` und die Sperre der direkten Adressierung
+(`check_recipient_access hash:/etc/postfix/maillist_block`). Der Integrationstest legt eine Liste
+an, schickt eine Mail und erwartet beim Stub `key=<schluessel>`; nach dem Löschen kommt nichts mehr
+an. Ein direkter Versand an `<schluessel>@maillist.invalid` wird bei `RCPT TO` abgelehnt.
+
+Die Sperre steht in **`smtpd_recipient_restrictions`**, nicht in `smtpd_relay_restrictions`: Der
+submission-Dienst in `master.cf` überschreibt `smtpd_relay_restrictions` per `-o`, die Prüfung
+wäre dort wirkungslos gewesen. `docs/deployment/maillist.md` schreibt das für die Produktion vor,
+samt dem Hinweis, jede `-o smtpd_recipient_restrictions=`-Überschreibung in `master.cf` zu prüfen.
+
+**Warum:** Was mailadmin verantwortet, endet beim Aufruf des Transports mit dem richtigen
+Schlüssel. Das Skript selbst ist mit eigenen Tests abgedeckt (U-142); der Stub macht den Test
+unabhängig von dessen Konfiguration und Datenbankzugang.
+
+**Alternative:** Das echte Skript im Container. Mehr Abdeckung, aber dann bräuchte die
+Testumgebung ein zweites Relay und eine Skriptkonfiguration, nur um zu zeigen, was die
+Skripttests schon zeigen.
+
+**Korrekturkosten:** Gering.
 
 ---
 

@@ -263,6 +263,9 @@ paths:
 
         Always `200` — the request succeeded, whatever the dependencies are
         doing; `status` carries the verdict.
+
+        `list_delivery` reports the list delivery settings and never affects
+        `status`.
       x-permission: maintenance.read
       responses:
         '200':

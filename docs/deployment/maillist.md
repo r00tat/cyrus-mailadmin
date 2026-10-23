@@ -111,8 +111,11 @@ maillist.invalid    maillist:
 ```
 
 ```bash
-postmap /etc/postfix/transport
+postmap hash:/etc/postfix/transport
 ```
+
+Den Typ `hash:` immer ausdrücklich angeben. Ein `postmap` ohne Typ folgt `default_database_type`, das
+auch `lmdb` sein kann; die erzeugte Datei passt dann nicht mehr zu `hash:` in `main.cf`.
 
 In `main.cf` muss `transport_maps = hash:/etc/postfix/transport` auf diese Datei zeigen. Die Pseudodomain darf weder in `mydestination` noch in
 `virtual_alias_domains` stehen. `MAILADMIN_LIST_TRANSPORT_DOMAIN` in mailadmin muss dieselbe Domain
@@ -132,20 +135,30 @@ Schlüssels würde.
 
 Ein authentifizierter Absender dürfte sonst `schluessel@maillist.invalid` direkt adressieren und die
 Liste am Zugriffsschutz von mailadmin vorbei erreichen. Dagegen steht am Anfang von
-`smtpd_recipient_restrictions` (bzw. `smtpd_relay_restrictions`):
+`smtpd_recipient_restrictions` (nicht in `smtpd_relay_restrictions`: der submission-Dienst in
+`master.cf` überschreibt diese per `-o`, die Prüfung würde dort übergangen):
 
 ```text
 check_recipient_access hash:/etc/postfix/maillist_block
 ```
 
-mit der Datei
+Der Eintrag muss an erster Stelle stehen, damit kein vorheriges `permit_*` (etwa
+`permit_sasl_authenticated` oder `permit_mynetworks`) ihn überspringt.
+
+Dazu die Datei
 
 ```text
 maillist.invalid    REJECT
 ```
 
-(danach `postmap /etc/postfix/maillist_block`). Die Prüfung gilt für die RCPT-TO-Adresse vor der
-`virtual`-Auflösung. Über `virtual` umgeschriebene Listenmails laufen deshalb weiter durch.
+und danach `postmap hash:/etc/postfix/maillist_block`. Die Prüfung gilt für die RCPT-TO-Adresse vor
+der `virtual`-Auflösung. Über `virtual` umgeschriebene Listenmails laufen deshalb weiter durch.
+
+**`master.cf` prüfen.** Jeder `smtpd`-Dienst in `master.cf` (`smtp`, `submission`, `smtps`), der
+`-o smtpd_recipient_restrictions=…` setzt, ersetzt den Wert aus `main.cf` vollständig. Trage die
+Prüfung dort ebenfalls an erster Stelle ein, sonst ist die Pseudodomain über diesen Dienst direkt
+erreichbar. In der Testumgebung von mailadmin setzt der submission-Dienst nur
+`smtpd_relay_restrictions` per `-o`; deshalb steht die Prüfung dort in `smtpd_recipient_restrictions`.
 
 ## 4. Aktualisieren und zurückrollen
 
