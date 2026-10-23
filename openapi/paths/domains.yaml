@@ -232,7 +232,10 @@ paths:
             namespace of an existing subdomain, on an existing user name or on
             the key of a leftover forward (U-101) — an earlier domain of the new
             name left `domainadmin` assignments or `virtual` rows ending in
-            `@<new name>` behind (`domain.leftover_state`, U-99), or a rename
+            `@<new name>` behind (`domain.leftover_state`, U-99), the domain
+            still has mailing lists, which a rename would not carry along
+            (`domain.rename_blocked_by_mailing_list`; delete them first and
+            create them again under the new name), or a rename
             stopped part way (`domain.rename_incomplete`): it could not be fully
             undone, or the accounts of the domain changed while its mailboxes
             moved and everything was undone (U-100).

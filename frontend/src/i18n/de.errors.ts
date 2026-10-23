@@ -85,6 +85,8 @@ export const deErrors = {
     'Der Name würde einen bestehenden Benutzernamen mehrdeutig machen. Im Namensschema mit Punkt ergeben info.kunde@example.de und info@kunde.example.de denselben Benutzernamen.',
   'errors.domain.not_empty': 'Die Domain enthält noch Konten.',
   'errors.domain.prefix_taken': 'Dieses Präfix ist bereits vergeben.',
+  'errors.domain.rename_blocked_by_mailing_list':
+    'Die Domain hat noch Mailinglisten. Bitte die Listen zuerst löschen und nach der Umbenennung unter dem neuen Namen neu anlegen.',
   'errors.domain.rename_incomplete':
     'Die Umbenennung wurde nicht abgeschlossen. Was sich nicht zurücknehmen ließ, steht in der Reparaturwarteschlange.',
   'errors.domain.rename_not_confirmed': 'Die Umbenennung wurde nicht bestätigt.',

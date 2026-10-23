@@ -11,6 +11,7 @@ use Mailadmin\Application\Audit\AuditRequestContext;
 use Mailadmin\Application\Audit\AuditWriter;
 use Mailadmin\Application\Domain\DomainStore;
 use Mailadmin\Domain\Access\AdminDirectory;
+use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Mailstore\Mailstore;
 use Mailadmin\Domain\Model\AdminRole;
 use Mailadmin\Domain\Password\Password;
@@ -23,8 +24,10 @@ use Mailadmin\Infrastructure\Persistence\InMemoryAdminDirectory;
 use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
 use Mailadmin\Infrastructure\Persistence\InMemoryDomainStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryLoginAttemptLog;
+use Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository;
 use Mailadmin\Infrastructure\Persistence\InMemoryRefreshTokenStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryTokenDenylist;
+use Mailadmin\Infrastructure\Persistence\MailingListRepository;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
 use Mailadmin\Infrastructure\Security\LoginAttemptLog;
 use Mailadmin\Infrastructure\Security\PasswordHasher;
@@ -58,6 +61,7 @@ final class DomainEndpointTest extends ContractTestCase
     private ContainerInterface $container;
     private InMemoryDomainStore $store;
     private InMemoryAuditTrail $trail;
+    private InMemoryMailingListRepository $lists;
 
     protected function setUp(): void
     {
@@ -79,6 +83,8 @@ final class DomainEndpointTest extends ContractTestCase
         $this->store->given(DomainFixture::domain('example.test'), 'anna.example.test');
         $this->store->given(DomainFixture::domain('fremd.test', prefix: 'fremd.test'));
 
+        $this->lists = new InMemoryMailingListRepository();
+
         $auditContext = new AuditRequestContext();
         $this->trail = new InMemoryAuditTrail(context: $auditContext);
 
@@ -91,6 +97,7 @@ final class DomainEndpointTest extends ContractTestCase
             TokenDenylist::class => new InMemoryTokenDenylist(),
             LoginAttemptLog::class => new InMemoryLoginAttemptLog(),
             DomainStore::class => $this->store,
+            MailingListRepository::class => $this->lists,
             Mailstore::class => new InMemoryMailstore(),
             RepairQueue::class => new InMemoryRepairQueue(),
             AuditWriter::class => $this->trail,
@@ -319,6 +326,24 @@ final class DomainEndpointTest extends ContractTestCase
         $this->assertMatchesContract('patch', '/domains/{domain}', $response);
         self::assertSame('/api/v1/domains/neu.test', $response->getHeaderLine('Location'));
         self::assertSame('neu.test', self::bodyOf($response)['name']);
+    }
+
+    public function testARenameOfADomainWithMailingListsIsAConflict(): void
+    {
+        $this->lists->given(MailingList::fromStoredValues('Team', '', 'team@fremd.test', ''));
+        $token = $this->tokenFor('root');
+        $etag = $this->get('/api/v1/domains/fremd.test', $token)->getHeaderLine('ETag');
+
+        $response = $this->patch(
+            '/api/v1/domains/fremd.test',
+            ['name' => 'neu.test', 'confirm_rename' => true],
+            $token,
+            $etag,
+        );
+
+        self::assertSame(409, $response->getStatusCode());
+        $this->assertMatchesContract('patch', '/domains/{domain}', $response);
+        self::assertSame('domain.rename_blocked_by_mailing_list', self::bodyOf($response)['code']);
     }
 
     public function testDeletingADomainWithAccountsIsRefused(): void

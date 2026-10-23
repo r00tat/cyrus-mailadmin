@@ -465,6 +465,8 @@ final class DomainRepositoryIntegrationTest extends DatabaseTestCase
             RefusingAuditWriter::successes(new InMemoryAuditTrail()),
             new NullLogger(),
             \Mailadmin\Tests\Support\ListDeliveryFixture::delivery(),
+            // No `lists` table in this schema, and no list in the domain.
+            new \Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository(),
         );
 
         try {
