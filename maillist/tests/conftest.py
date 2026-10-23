@@ -76,11 +76,19 @@ class FakeConnection:
 
 
 class RecordingSMTP:
+    """Fake smtplib.SMTP. Subclass it to script failures."""
+
     instances: list["RecordingSMTP"] = []
 
     def __init__(self, host, port, timeout=None):
+        self._host = host
+        self.port = port
+        self.timeout = timeout
         self.sent: list[tuple[str, object, bytes]] = []
         self.messages = []
+        self.tls_context = None
+        self.tls_server_hostname = None
+        self.starttls_called = False
         RecordingSMTP.instances.append(self)
 
     def __enter__(self):
@@ -89,8 +97,13 @@ class RecordingSMTP:
     def __exit__(self, *exc):
         return False
 
-    def starttls(self):
+    def close(self):
         pass
+
+    def starttls(self, context=None):
+        self.starttls_called = True
+        self.tls_context = context
+        self.tls_server_hostname = self._host
 
     def sendmail(self, from_addr, to_addrs, message):
         self.sent.append((from_addr, to_addrs, message))
@@ -102,13 +115,19 @@ class RecordingSMTP:
 
 @pytest.fixture
 def run_main(monkeypatch, config_file):
-    def run(argv, rows=(("TAG", "list@example.org", "a@example.org\nb@example.org"),), raw=RAW_MAIL, connect=None):
+    def run(
+        argv,
+        rows=(("TAG", "list@example.org", "a@example.org\nb@example.org"),),
+        raw=RAW_MAIL,
+        connect=None,
+        smtp=RecordingSMTP,
+    ):
         RecordingSMTP.instances.clear()
         connection = FakeConnection(list(rows))
         monkeypatch.setenv("MAILLIST_CONFIG", str(config_file))
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw)))
         monkeypatch.setattr(maillist.mysql.connector, "connect", connect or (lambda **_: connection))
-        monkeypatch.setattr(maillist.smtplib, "SMTP", RecordingSMTP)
+        monkeypatch.setattr(maillist.smtplib, "SMTP", smtp)
         code = maillist.main(argv)
         return code, connection, RecordingSMTP.instances
 
