@@ -120,6 +120,10 @@ final class VirtualEntryClassifierTest extends TestCase
             new VirtualRow('@example.test', 'team.example.test@maillist.invalid', ''),
         ];
 
+        yield 'own key with a trailing dot' => [
+            new VirtualRow('team@example.test', 'team.example.test@maillist.invalid.', ''),
+        ];
+
         yield 'forward of an account into a list' => [
             new VirtualRow('anna.example.test', 'team.example.test@MAILLIST.invalid', ''),
         ];

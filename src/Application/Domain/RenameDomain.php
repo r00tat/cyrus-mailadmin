@@ -6,8 +6,10 @@ namespace Mailadmin\Application\Domain;
 
 use Mailadmin\Application\Audit\AuditEntry;
 use Mailadmin\Application\Audit\AuditWriter;
+use Mailadmin\Application\MailingList\ListDelivery;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\Exception\DomainError;
+use Mailadmin\Domain\Exception\InvalidAddress;
 use Mailadmin\Domain\Mailstore\Mailstore;
 use Mailadmin\Domain\Mailstore\MailstoreFailure;
 use Mailadmin\Domain\Model\DomainName;
@@ -134,6 +136,7 @@ final readonly class RenameDomain
         private DomainDefaults $defaults,
         private AuditWriter $audit,
         private LoggerInterface $logger,
+        private ListDelivery $delivery,
     ) {
     }
 
@@ -141,11 +144,18 @@ final readonly class RenameDomain
      * @throws \Mailadmin\Domain\Policy\AccessDenied
      * @throws \Mailadmin\Domain\Policy\ResourceNotVisible
      * @throws DomainOperationFailed
+     * @throws InvalidAddress when the target is the list transport domain
      * @throws \Mailadmin\Infrastructure\Persistence\PersistenceError
      */
     public function handle(ActorContext $actor, DomainName $from, DomainName $to): void
     {
         DomainPolicy::requireWrite($actor, $from);
+
+        // Before any mailbox moves: as a managed domain, the transport domain
+        // would stop every list (see CreateDomain).
+        if ($this->delivery->isTransportDomain($to)) {
+            throw InvalidAddress::transportDomainName($to->toString());
+        }
 
         if ($from->toString() === $to->toString()) {
             return;

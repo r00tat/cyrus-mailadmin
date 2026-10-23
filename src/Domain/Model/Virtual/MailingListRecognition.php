@@ -104,15 +104,35 @@ final readonly class MailingListRecognition
 
     /**
      * Is this a destination on the transport domain — something only a list's
-     * own row may name? Compared without regard to case.
+     * own row may name?
      */
     public function isTransportDestination(string $destination): bool
     {
-        $value = strtolower(trim($destination));
+        return self::isDestinationOnDomain($destination, $this->transportDomain);
+    }
+
+    /**
+     * The one definition of "this destination is on that domain", for the
+     * classifier and for the write rules alike: the part after the last `@`,
+     * compared after {@see normalizedDomain()}. `x@maillist.invalid.` is on
+     * `maillist.invalid` — DNS and Postfix treat the trailing dot as the root.
+     */
+    public static function isDestinationOnDomain(string $destination, DomainName $domain): bool
+    {
+        $value = trim($destination);
         $at = strrpos($value, '@');
 
         return $at !== false
-            && substr($value, $at + 1) === strtolower($this->transportDomain->toString());
+            && self::normalizedDomain(substr($value, $at + 1)) === self::normalizedDomain($domain->toString());
+    }
+
+    /**
+     * Lower case, without surrounding space and without trailing dots — the
+     * form in which two spellings of one domain compare equal.
+     */
+    public static function normalizedDomain(string $domain): string
+    {
+        return rtrim(strtolower(trim($domain)), '.');
     }
 
     /**

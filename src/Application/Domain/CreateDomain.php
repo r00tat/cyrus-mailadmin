@@ -6,7 +6,9 @@ namespace Mailadmin\Application\Domain;
 
 use Mailadmin\Application\Audit\AuditEntry;
 use Mailadmin\Application\Audit\AuditWriter;
+use Mailadmin\Application\MailingList\ListDelivery;
 use Mailadmin\Domain\Access\ActorContext;
+use Mailadmin\Domain\Exception\InvalidAddress;
 use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\LegacyPrefix;
 use Mailadmin\Domain\Policy\DomainPolicy;
@@ -61,6 +63,12 @@ use Mailadmin\Domain\Policy\DomainPolicy;
  * that account creation takes too (U-97). The primary key stays the guarantee
  * against webcyradm, which knows nothing of the lock.
  *
+ * ## Not the list transport domain
+ *
+ * Mail to the transport domain must reach the pipe transport. As a managed
+ * domain Postfix would deliver it as a virtual domain instead, and every list
+ * would stop. Any spelling (case, trailing dot) is `422 domain.invalid_name`.
+ *
  * ## The audit entry is written inside the transaction
  *
  * U-63, as in A4's `CreateAdmin`: the `domain` row and the `mailadmin_audit` row
@@ -74,6 +82,7 @@ final readonly class CreateDomain
         private DomainStore $store,
         private DomainDefaults $defaults,
         private AuditWriter $audit,
+        private ListDelivery $delivery,
     ) {
     }
 
@@ -86,6 +95,10 @@ final readonly class CreateDomain
     public function handle(ActorContext $actor, DomainDraft $draft): DomainSummary
     {
         DomainPolicy::requireCreate($actor);
+
+        if ($this->delivery->isTransportDomain($draft->name)) {
+            throw InvalidAddress::transportDomainName($draft->name->toString());
+        }
 
         // The courtesy round: the ordinary refusal takes no lock.
         $this->requireFree($draft->name);

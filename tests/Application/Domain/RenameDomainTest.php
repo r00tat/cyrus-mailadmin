@@ -678,4 +678,35 @@ final class RenameDomainTest extends DomainUseCaseTestCase
     {
         return MailboxIdentity::fromStoredUsername($storedUsername, DomainName::fromStoredValue($domain));
     }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function transportDomainSpellings(): iterable
+    {
+        yield 'as configured' => ['maillist.invalid'];
+        yield 'upper case with a trailing dot' => ['MailList.Invalid.'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('transportDomainSpellings')]
+    public function testNoDomainIsRenamedToTheListTransportDomain(string $name): void
+    {
+        $this->givenDomainWithTwoAccounts();
+        $storeBefore = $this->store->operations();
+        $mailstoreBefore = $this->mailstore->operations();
+
+        try {
+            $this->renameDomain()->handle(
+                DomainFixture::superuser(),
+                DomainFixture::name('old.test'),
+                DomainName::fromStoredValue($name),
+            );
+            self::fail('The domain was renamed to the transport domain.');
+        } catch (\Mailadmin\Domain\Exception\InvalidAddress $refused) {
+            self::assertSame('domain.invalid_name', $refused->code());
+        }
+
+        self::assertSame($storeBefore, $this->store->operations());
+        self::assertSame($mailstoreBefore, $this->mailstore->operations(), 'No mailbox was touched.');
+    }
 }

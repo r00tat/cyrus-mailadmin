@@ -46,7 +46,7 @@ Options -Indexes -MultiViews
     # the list because vendor/ and node_modules/ are not tracked in git — a file
     # placed inside them would be wiped by the next `composer install` /
     # `npm install`. Keep both lists in sync; a test enforces it.
-    RewriteRule ^(src|config|bin|docker|migrations|openapi|resources|tests|var|vendor|docs|frontend|node_modules)(/|$) - [F,L]
+    RewriteRule ^(src|config|bin|docker|migrations|openapi|resources|tests|var|vendor|docs|frontend|node_modules|maillist)(/|$) - [F,L]
 
     # --- Everything else is served out of public/ ---------------------------
     # Already inside public/: stop, and let public/.htaccess take over.

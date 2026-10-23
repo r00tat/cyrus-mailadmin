@@ -20,6 +20,7 @@ use Mailadmin\Infrastructure\Mailstore\InMemoryMailstore;
 use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
 use Mailadmin\Infrastructure\Persistence\InMemoryDomainStore;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
+use Mailadmin\Tests\Support\ListDeliveryFixture;
 use Mailadmin\Tests\Support\Mailstore\UnreliableMailstore;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -69,7 +70,7 @@ abstract class DomainUseCaseTestCase extends TestCase
 
     protected function createDomain(): CreateDomain
     {
-        return new CreateDomain($this->store, $this->defaults, $this->auditWriter);
+        return new CreateDomain($this->store, $this->defaults, $this->auditWriter, ListDeliveryFixture::delivery());
     }
 
     protected function renameDomain(): RenameDomain
@@ -81,6 +82,7 @@ abstract class DomainUseCaseTestCase extends TestCase
             $this->defaults,
             $this->auditWriter,
             new NullLogger(),
+            ListDeliveryFixture::delivery(),
         );
     }
 

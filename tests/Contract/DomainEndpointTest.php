@@ -223,6 +223,34 @@ final class DomainEndpointTest extends ContractTestCase
         self::assertSame('domain.invalid_name', self::bodyOf($response)['code']);
     }
 
+    public function testTheListTransportDomainIsRefusedOnTheNameField(): void
+    {
+        $response = $this->post('/api/v1/domains', ['name' => 'maillist.invalid'], $this->tokenFor('root'));
+
+        self::assertSame(422, $response->getStatusCode());
+        $this->assertMatchesContract('post', '/domains', $response);
+        self::assertSame('domain.invalid_name', self::bodyOf($response)['code']);
+        self::assertSame(['body.name' => 'domain.invalid_name'], self::bodyOf($response)['errors']);
+    }
+
+    public function testARenameToTheListTransportDomainIsRefusedOnTheNameField(): void
+    {
+        $token = $this->tokenFor('root');
+        $etag = $this->get('/api/v1/domains/fremd.test', $token)->getHeaderLine('ETag');
+
+        $response = $this->patch(
+            '/api/v1/domains/fremd.test',
+            ['name' => 'maillist.invalid', 'confirm_rename' => true],
+            $token,
+            $etag,
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        $this->assertMatchesContract('patch', '/domains/{domain}', $response);
+        self::assertSame('domain.invalid_name', self::bodyOf($response)['code']);
+        self::assertSame(['body.name' => 'domain.invalid_name'], self::bodyOf($response)['errors']);
+    }
+
     public function testAFieldTheContractDoesNotKnowIsRejectedAtTheBoundary(): void
     {
         // `additionalProperties: false`. The prefix is derived, never accepted

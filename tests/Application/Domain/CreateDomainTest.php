@@ -309,4 +309,27 @@ final class CreateDomainTest extends DomainUseCaseTestCase
 
         self::assertSame('kunde.test', $summary->name()->toString());
     }
+
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function transportDomainSpellings(): iterable
+    {
+        yield 'as configured' => ['maillist.invalid'];
+        yield 'upper case' => ['MailList.Invalid'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('transportDomainSpellings')]
+    public function testTheListTransportDomainCannotBeAManagedDomain(string $name): void
+    {
+        try {
+            $this->createDomain()->handle(DomainFixture::superuser(), DomainDraft::fromRequest(['name' => $name]));
+            self::fail('The transport domain was created as a domain.');
+        } catch (\Mailadmin\Domain\Exception\InvalidAddress $refused) {
+            self::assertSame('domain.invalid_name', $refused->code());
+        }
+
+        self::assertSame([], $this->store->operations());
+    }
 }

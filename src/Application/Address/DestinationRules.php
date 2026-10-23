@@ -35,6 +35,12 @@ use Mailadmin\Domain\Model\Virtual\DestinationList;
  * nothing after virtual rewriting, so an alias, forward or catchall naming
  * `<key>@<transport domain>` would feed any list — another domain's included —
  * and strand the row as something the address management cannot remove.
+ *
+ * **No routing syntax** either: a local part with `%` (the percent hack) or
+ * `!` (a UUCP bang path), or a source route starting with `@`, names one
+ * address and delivers to another, which is how the check above would be
+ * walked around. Only new destinations are refused; stored rows are read and
+ * kept as they are (U-22).
  */
 final readonly class DestinationRules
 {
@@ -77,7 +83,7 @@ final readonly class DestinationRules
         $list = DestinationList::of(...$values);
 
         foreach ($list->all() as $destination) {
-            if ($this->isOnTransport($destination)) {
+            if (self::routesElsewhere($destination) || $this->delivery->isTransportDestination($destination)) {
                 throw InvalidAddress::unusableDestination($destination);
             }
         }
@@ -122,12 +128,19 @@ final readonly class DestinationRules
         return $found;
     }
 
-    private function isOnTransport(string $destination): bool
+    /**
+     * A source route (`@relay:user@host`), or a local part carrying `%` or `!`.
+     */
+    private static function routesElsewhere(string $destination): bool
     {
-        $at = strrpos($destination, '@');
+        if (str_starts_with($destination, '@')) {
+            return true;
+        }
 
-        return $at !== false
-            && strcasecmp(substr($destination, $at + 1), $this->delivery->transportDomain->toString()) === 0;
+        $at = strrpos($destination, '@');
+        $localPart = $at === false ? $destination : substr($destination, 0, $at);
+
+        return str_contains($localPart, '%') || str_contains($localPart, '!');
     }
 
     /**

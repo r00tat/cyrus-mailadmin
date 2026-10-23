@@ -58,7 +58,11 @@ components:
         delivery). An account name is matched without regard to case and
         written in the spelling `accountuser` has. A name without `@` that is
         no account is refused (`address.invalid_destination`): Postfix would
-        complete it with its own domain (U-104).
+        complete it with its own domain (U-104). So is a destination on the
+        mailing list transport domain (any case, trailing dot or not), a source
+        route starting with `@`, and a local part containing `%` or `!` —
+        routing syntax that names one address and delivers to another. Stored
+        rows with such spellings are still shown and kept as they are.
       example: anna@example.test
 
     AddressDestinations:

@@ -647,4 +647,57 @@ final class AliasUseCaseTest extends AddressUseCaseTestCase
 
         self::assertSame(404, $failure->status);
     }
+
+
+    // -----------------------------------------------------------------
+    // Spellings that reach the list transport by another route
+    // -----------------------------------------------------------------
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function transportBypasses(): iterable
+    {
+        yield 'trailing dot' => ['team.other.test@maillist.invalid.'];
+        yield 'trailing dots, upper case' => ['team.other.test@MAILLIST.INVALID..'];
+        yield 'percent hack' => ['team.other.test%maillist.invalid@example.test'];
+        yield 'bang path with domain' => ['maillist.invalid!team.other.test@example.test'];
+        yield 'bang path without domain' => ['maillist.invalid!team.other.test'];
+        yield 'source route' => ['@example.test:team.other.test@maillist.invalid'];
+        yield 'source route to elsewhere' => ['@relay.test:someone@elsewhere.test'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('transportBypasses')]
+    public function testADestinationThatRoutesAroundTheTransportCheckIsRefused(string $destination): void
+    {
+        try {
+            $this->createAlias()->handle(
+                DomainFixture::domainMaster('anna', 'example.test'),
+                self::domain(),
+                new AliasDraft('sneak', [$destination]),
+            );
+            self::fail(sprintf('"%s" was accepted.', $destination));
+        } catch (InvalidAddress $refused) {
+            self::assertSame('address.invalid_destination', $refused->code());
+        }
+
+        self::assertSame([], $this->rowsOf('sneak@example.test'));
+    }
+
+    public function testExistingRowsWithSuchSpellingsAreStillReadAndChangedWithoutTouchingThem(): void
+    {
+        // Only new destinations are refused; a stored one is data (U-22).
+        $this->virtual->givenRow('old@example.test', 'a%b@elsewhere.test,host!user@elsewhere.test', 'example.test');
+
+        $state = $this->getAlias()->handle(DomainFixture::superuser(), 'old@example.test');
+        self::assertSame(['a%b@elsewhere.test', 'host!user@elsewhere.test'], $state->destinations()->all());
+        self::assertTrue($state->isEditable());
+
+        $this->updateAlias()->handle(DomainFixture::superuser(), 'old@example.test', new AliasChange(enabled: false), null);
+
+        self::assertSame(
+            ['old@example.test|a%b@elsewhere.test,host!user@elsewhere.test|example.test|0'],
+            $this->rowsOf('old@example.test'),
+        );
+    }
 }

@@ -1,0 +1,17 @@
+# mailadmin — deny all (U-25, layer 2)
+#
+# Independent of the rewrite in the project root: this works without mod_rewrite
+# and needs only `AllowOverride Limit` (or AuthConfig). Two independent layers,
+# because either one can be switched off by the vHost configuration.
+#
+# Do not remove. tests/Unit/Deployment/HtaccessProtectionTest.php fails without it.
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>
+
+Options -Indexes

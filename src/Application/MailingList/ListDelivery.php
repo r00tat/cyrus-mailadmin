@@ -73,6 +73,26 @@ final readonly class ListDelivery
         return self::listKey($address) . '@' . $this->transportDomain->toString();
     }
 
+    /**
+     * Is this destination on the transport domain? The definition is
+     * {@see MailingListRecognition::isDestinationOnDomain()}.
+     */
+    public function isTransportDestination(string $destination): bool
+    {
+        return MailingListRecognition::isDestinationOnDomain($destination, $this->transportDomain);
+    }
+
+    /**
+     * Is this the transport domain, in any spelling (case, trailing dot)? It
+     * must never be a managed domain: Postfix would deliver its mail locally
+     * and the pipe transport would never see it.
+     */
+    public function isTransportDomain(DomainName $domain): bool
+    {
+        return MailingListRecognition::normalizedDomain($domain->toString())
+            === MailingListRecognition::normalizedDomain($this->transportDomain->toString());
+    }
+
     /** True while the alias file path is still active: changes wait for a configuration run (U-59). */
     public function changesNeedConfigurationRun(): bool
     {

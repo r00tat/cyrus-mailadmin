@@ -464,6 +464,7 @@ final class DomainRepositoryIntegrationTest extends DatabaseTestCase
             new DomainDefaults(),
             RefusingAuditWriter::successes(new InMemoryAuditTrail()),
             new NullLogger(),
+            \Mailadmin\Tests\Support\ListDeliveryFixture::delivery(),
         );
 
         try {
