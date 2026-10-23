@@ -682,7 +682,7 @@ def test_default_config_path_needs_no_env_wrapper(env, monkeypatch, capsys) -> N
 
 
 def test_maillist_script_honours_config_environment_variable() -> None:
-    assert 'CONFIG_ENV_VAR = "MAILLIST_CONFIG"' in (ROOT / "maillist.py").read_text()
+    assert 'CONFIG_ENV_VAR = "MAILLIST_CONFIG"' in (ROOT / "config.py").read_text()
 
 
 @pytest.mark.parametrize("flag", ["--prefix", "--config", "--python"])
