@@ -5340,6 +5340,58 @@ entstünde.
 
 ---
 
+## U-147 — Das Listenskript ist in Module geteilt, flach neben `maillist.py`
+
+**Frage:** `maillist.py` war auf knapp 900 Zeilen gewachsen: Konfiguration, Lesen von `members`,
+Kopfzeilen, SMTP-Zustellung und Einstieg in einer Datei. Der Teil, der mit `MemberList` übereinstimmen
+muss (U-134, U-137), war darin nicht abgegrenzt. Wie wird das Skript aufgeteilt, ohne dass sich an
+Installation und Aufruf durch Postfix etwas ändert?
+
+**Entscheidung:** Fünf Module nebeneinander in `maillist/`, ohne Paketverzeichnis. Der Code ist
+unverändert verschoben, das Verhalten bleibt gleich.
+
+| Modul | Inhalt |
+|---|---|
+| `maillist.py` | Einstieg: Argumente, Datenbankabfrage der Liste, `deliver`, `--check`, `main` |
+| `config.py` | Einstellungen, `load_settings`, Logging, Pfadkonstanten und die `sysexits`-Codes |
+| `members.py` | Lesen von `members` — das Gegenstück zu `MemberList`, geprüft mit denselben Golden-Dateien |
+| `headers.py` | Schleifen- und Bounce-Erkennung, Listenköpfe, `sanitize_text` |
+| `delivery.py` | SMTP-Zustellung und die Berichte an die Admins |
+
+- **Abhängigkeiten nur in eine Richtung:** `config` importiert keines der anderen Module, `headers`
+  nur `config`, `delivery` `config` und `headers`, `maillist` alle. Die Exit-Codes stehen deshalb in
+  `config` und nicht im Einstieg: `delivery` gibt sie auch zurück, und ein Import aus `maillist.py`
+  lüde das als Skript gestartete Programm ein zweites Mal.
+- **Importpfad:** `maillist.py` setzt sein eigenes, aufgelöstes Verzeichnis an die erste Stelle von
+  `sys.path`, bevor es die Module importiert. Postfix startet das Skript ohne `-I`, dann steht das
+  Verzeichnis dort ohnehin; der Installer startet `--check` mit `-I`, und `-I` lässt es weg. So finden
+  beide Aufrufe dieselben Dateien, und weil der `current`-Symlink aufgelöst wird, kommen die Module aus
+  demselben Release-Verzeichnis wie `maillist.py`.
+- **Installer und Release:** Der Installer führt die fünf Dateien als `CODE_FILES`. Jede wird
+  kopiert, mit einem bestehenden Release verglichen und bekommt Mode `0644`; die Kennung eines
+  `dev`-Releases ist ein Hash über alle fünf. Eine Quelle oder ein Archiv ohne eines der Module wird
+  abgelehnt. `bin/package-release` packt alle in `maillist-<tag>.tar.gz`, damit deckt die Prüfsumme
+  in `SHA256SUMS` sie mit ab.
+
+**Warum flach:** Ein Paketverzeichnis bräuchte einen Starter, der das Paket importiert, oder
+`python3 -m`, und damit eine andere `argv`-Zeile in `master.cf`. Flache Module lassen den Aufruf
+`python3 <prefix>/current/maillist.py -- ${user}` unverändert, und der Installer behandelt sie wie
+die übrigen Release-Dateien. Keiner der Modulnamen ist ein Modul der Standardbibliothek.
+
+**Warum der Pfad im Skript gesetzt wird statt `--check` ohne `-I` zu starten:** `-I` gehört zur
+Härtung des Installers (Umgebung und Arbeitsverzeichnis des Aufrufers wirken nicht). Setzt das Skript
+seinen Pfad selbst, bleibt diese Härtung, und das Skript läuft unabhängig davon, mit welchen Schaltern
+der Interpreter gestartet wird, auch mit `-I`, `-P` oder `PYTHONSAFEPATH`.
+
+**Alternative:** `--check` ohne `-I`, aber mit `cwd="/"` und leerer Umgebung — das bildet den
+Postfix-Aufruf genau nach, gibt aber die Härtung auf und ließe ein Skript, das nur ohne `-I` läuft,
+unentdeckt.
+
+**Korrekturkosten:** Gering. Die Module lassen sich wieder zu einer Datei zusammenführen; Installer
+und Paketierung lesen die Liste aus je einer Konstante.
+
+---
+
 ## Verbleibende offene Punkte
 
 Diese sind **nicht** entschieden, weil sie ohne Betriebswissen nicht sinnvoll zu entscheiden

@@ -7,6 +7,24 @@ Rückfallebene über `Delivered-To`.
 
 Installation und Betrieb: [docs/deployment/maillist.md](../docs/deployment/maillist.md).
 
+## Aufbau
+
+Das Skript besteht aus fünf Modulen, die flach nebeneinander liegen und zusammen ein Release bilden
+(U-147):
+
+| Datei | Inhalt |
+|---|---|
+| `maillist.py` | Einstieg, den Postfix aufruft: Argumente, Datenbankabfrage, Zustellablauf, `--check` |
+| `config.py` | Konfiguration, Logging, Exit-Codes |
+| `members.py` | Lesen des Felds `members`; Gegenstück zu `src/Domain/MailingList/MemberList.php` |
+| `headers.py` | Schleifen- und Bounce-Erkennung, Listenköpfe |
+| `delivery.py` | SMTP-Zustellung und Fehlerberichte an die Admins |
+
+`maillist.py` importiert die anderen aus seinem eigenen Verzeichnis, auch wenn der Interpreter mit
+`-I` läuft. Wer ein Modul hinzufügt, trägt es in `CODE_FILES` in `install`, in `MAILLIST_FILES` in
+`bin/package-release` und in `py-modules` in `pyproject.toml` ein; ein Test prüft, dass alle drei
+Listen zum Verzeichnis passen.
+
 ## Herkunft und Lizenz
 
 Ursprünglich von Erich Malzer im Projekt maillist-py unter der Apache License 2.0 geschrieben. Als
@@ -43,4 +61,5 @@ uv run --project maillist --extra dev ruff check maillist maillist/install
 uv run --project maillist --extra dev ruff format --check maillist maillist/install
 ```
 
-Die Golden-Tests lesen `tests/Fixtures/MemberFormat` und brauchen deshalb den Checkout.
+Die Golden-Tests lesen `tests/Fixtures/MemberFormat` und brauchen deshalb den Checkout. Eine Änderung
+an `members.py` braucht die passende Änderung an `MemberList` und einen Fall in den Golden-Dateien.

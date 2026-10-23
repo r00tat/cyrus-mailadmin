@@ -1,7 +1,7 @@
 # Golden-Dateien für das Feld `lists.members`
 
 Gemeinsamer Vertrag zwischen mailadmin (schreibt `lists.members`) und
-`maillist/maillist.py` (liest es und verteilt die Mail).
+`maillist/members.py` (liest es für das Zustellskript `maillist/maillist.py`).
 
 - `<fall>.members` ist der gespeicherte Feldinhalt, byteweise. Keine Datei endet
   automatisch mit einem Zeilenumbruch; was drinsteht, ist der Wert.
