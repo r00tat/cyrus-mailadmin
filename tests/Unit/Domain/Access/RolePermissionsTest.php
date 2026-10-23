@@ -52,6 +52,10 @@ final class RolePermissionsTest extends TestCase
         yield 'reads addresses' => [Permission::AddressRead];
         yield 'writes addresses' => [Permission::AddressWrite];
         yield 'deletes addresses' => [Permission::AddressDelete];
+        // Mailing lists in their domains (spec 4.3, "Rechte").
+        yield 'reads mailing lists' => [Permission::ListRead];
+        yield 'writes mailing lists' => [Permission::ListWrite];
+        yield 'deletes mailing lists' => [Permission::ListDelete];
         yield 'reads their session' => [Permission::SessionRead];
         yield 'ends their session' => [Permission::SessionWrite];
         yield 'changes their own password' => [Permission::ProfilePasswordWrite];
@@ -77,9 +81,6 @@ final class RolePermissionsTest extends TestCase
         yield 'reads administrators' => [Permission::AdminRead];
         yield 'creates administrators' => [Permission::AdminWrite];
         yield 'deletes administrators' => [Permission::AdminDelete];
-        yield 'reads mailing lists' => [Permission::ListRead];
-        yield 'writes mailing lists' => [Permission::ListWrite];
-        yield 'deletes mailing lists' => [Permission::ListDelete];
         yield 'reads the audit trail' => [Permission::AuditRead];
         yield 'reads the reconciliation' => [Permission::MaintenanceRead];
         yield 'runs a bulk password reset' => [Permission::MaintenanceWrite];

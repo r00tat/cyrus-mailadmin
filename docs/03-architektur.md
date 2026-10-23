@@ -474,7 +474,7 @@ das kostet nichts und hielte eine spätere Verfeinerung offen, ohne den Code anz
 | `GET/POST /domains/{domain}/aliases` · `DELETE /aliases/{id}` | Aliase |
 | `GET/PUT/DELETE /domains/{domain}/catchall` | Catchall |
 | `GET/POST /admins` · `GET/PATCH/DELETE /admins/{username}` | Adminverwaltung, nur Superuser |
-| `GET/POST /lists` · `PATCH/DELETE /lists/{id}` | Mailinglisten |
+| `GET/POST /lists` · `GET/PATCH/DELETE /lists/{address}` | Mailinglisten: `lists` und der `virtual`-Eintrag auf die Listen-Pseudodomain (A5, U-135) |
 | `POST /maintenance/password-resets` | Massen-Passwortrücksetzung (E-7) |
 | `GET /maintenance/reconciliation` | Abweichungen Datenbank ↔ Mailstore |
 | `GET /health` | Erreichbarkeit von Datenbank, IMAP, ManageSieve |

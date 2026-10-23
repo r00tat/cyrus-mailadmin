@@ -227,6 +227,24 @@ final class DomainOperationFailed extends RuntimeException
     }
 
     /**
+     * The domain still has mailing lists, whose addresses a rename would not
+     * carry along. Raised before anything is touched.
+     */
+    public static function renameBlockedByMailingList(DomainName $name, int $lists): self
+    {
+        return new self(
+            DomainErrorCode::RENAME_BLOCKED_BY_MAILING_LIST,
+            409,
+            sprintf(
+                'The domain "%s" still has %d mailing list(s). A rename would not carry them along; '
+                . 'delete them first and create them again under the new name. Nothing was changed.',
+                $name->toString(),
+                $lists,
+            ),
+        );
+    }
+
+    /**
      * `If-Match` is required by this operation and was not sent (U-19, U-49).
      */
     public static function preconditionRequired(): self

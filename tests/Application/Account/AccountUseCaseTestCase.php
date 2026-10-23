@@ -17,7 +17,6 @@ use Mailadmin\Application\Account\ListAccounts;
 use Mailadmin\Application\Account\SetAccountPassword;
 use Mailadmin\Application\Account\SetAccountQuota;
 use Mailadmin\Application\Account\UpdateAccount;
-use Mailadmin\Application\Address\AddressReader;
 use Mailadmin\Application\Address\CatchallCleanup;
 use Mailadmin\Application\Address\RowWriter;
 use Mailadmin\Application\Audit\AuditWriter;
@@ -29,7 +28,6 @@ use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\LocalPart;
 use Mailadmin\Domain\Model\MailboxIdentity;
 use Mailadmin\Domain\Model\NamingScheme;
-use Mailadmin\Domain\Model\Virtual\VirtualEntryClassifier;
 use Mailadmin\Domain\Password\InMemoryCommonPasswordList;
 use Mailadmin\Domain\Password\PasswordPolicy;
 use Mailadmin\Infrastructure\Mailstore\InMemoryMailstore;
@@ -40,6 +38,7 @@ use Mailadmin\Infrastructure\Persistence\InMemoryVirtualStore;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
 use Mailadmin\Infrastructure\Security\PasswordHasher;
 use Mailadmin\Infrastructure\Security\PasswordHashingOptions;
+use Mailadmin\Tests\Support\ListDeliveryFixture;
 use Mailadmin\Tests\Support\Mailstore\UnreliableMailstore;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -170,7 +169,7 @@ abstract class AccountUseCaseTestCase extends TestCase
             new NullLogger(),
             $this->domains,
             $this->virtual,
-            new CatchallCleanup($this->virtual, new AddressReader($this->virtual, new VirtualEntryClassifier())),
+            new CatchallCleanup($this->virtual, ListDeliveryFixture::reader($this->virtual)),
             new RowWriter($this->virtual, $this->auditWriter, $this->repairs, new NullLogger()),
         );
     }

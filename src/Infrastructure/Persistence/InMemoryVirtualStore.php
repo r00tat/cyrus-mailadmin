@@ -182,6 +182,17 @@ final class InMemoryVirtualStore implements AddressStore
         return false;
     }
 
+    public function isSenderName(string $username): bool
+    {
+        foreach ($this->rows as $row) {
+            if ($row->username !== '' && strcasecmp($row->username, $username) === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function insert(VirtualRow $row): void
     {
         if ($this->insertFailure !== null) {
@@ -209,6 +220,20 @@ final class InMemoryVirtualStore implements AddressStore
                 unset($this->rows[$index]);
                 $this->rows = array_values($this->rows);
                 $this->operations[] = 'remove ' . $row->alias;
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function rewrite(VirtualRow $row, string $dest, string $username): bool
+    {
+        foreach ($this->rows as $index => $candidate) {
+            if ($candidate->equals($row)) {
+                $this->rows[$index] = new VirtualRow($row->alias, $dest, $username, $row->status);
+                $this->operations[] = 'rewrite ' . $row->alias;
 
                 return true;
             }

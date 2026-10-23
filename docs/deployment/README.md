@@ -18,6 +18,7 @@ dahinter.
 | [nginx.conf.example](nginx.conf.example) | nginx, Variante A |
 | [php-fpm-pool.conf.example](php-fpm-pool.conf.example) | eigener PHP-FPM-Pool mit der Konfiguration |
 | [allusers.sql.example](allusers.sql.example) | View `allusers` mit Kontosperre |
+| [maillist.md](maillist.md) | Listenskript `maillist.py`: Installation, Postfix-Transport, Betrieb |
 
 ---
 

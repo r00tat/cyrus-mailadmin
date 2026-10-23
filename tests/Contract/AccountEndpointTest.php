@@ -31,9 +31,11 @@ use Mailadmin\Infrastructure\Persistence\InMemoryAdminDirectory;
 use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
 use Mailadmin\Infrastructure\Persistence\InMemoryDomainStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryLoginAttemptLog;
+use Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository;
 use Mailadmin\Infrastructure\Persistence\InMemoryRefreshTokenStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryTokenDenylist;
 use Mailadmin\Infrastructure\Persistence\InMemoryVirtualStore;
+use Mailadmin\Infrastructure\Persistence\MailingListRepository;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
 use Mailadmin\Infrastructure\Security\LoginAttemptLog;
 use Mailadmin\Infrastructure\Security\PasswordHasher;
@@ -120,6 +122,7 @@ final class AccountEndpointTest extends ContractTestCase
             AccountStore::class => $this->accounts,
             // The catchall rows `DeleteAccount` looks at (U-128): in memory, never the real table.
             AddressStore::class => $this->virtual,
+            MailingListRepository::class => new InMemoryMailingListRepository(),
             Mailstore::class => $this->mailstore,
             RepairQueue::class => new InMemoryRepairQueue(),
             AuditWriter::class => $this->trail,

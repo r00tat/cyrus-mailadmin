@@ -4,22 +4,26 @@ declare(strict_types=1);
 
 namespace Mailadmin\Application\MailingList;
 
-use Mailadmin\Domain\Exception\InvalidMailingList;
+use Mailadmin\Domain\Access\ActorContext;
+use Mailadmin\Domain\Exception\InvalidAddress;
 use Mailadmin\Domain\MailingList\MailingList;
-use Mailadmin\Domain\MailingList\MailingListName;
+use Mailadmin\Domain\Model\EmailAddress;
+use Mailadmin\Domain\Policy\ListPolicy;
+use Mailadmin\Domain\Policy\ResourceNotVisible;
 use Mailadmin\Infrastructure\Persistence\MailingListRepository;
 
 /**
- * The three steps every mailing list operation that names one begins with.
+ * The steps every mailing list operation that names one begins with.
  *
  * Written once rather than four times, because each of them is a place where
  * getting it subtly wrong would not fail a test:
  *
- *  - **A name that could never be a row answers `404`, not `422`.** Otherwise
- *    the shape of the refusal tells a caller whether their guess was merely
- *    absent or malformed.
- *  - **A missing list answers with the framework's own `404` code**, so that it
- *    is indistinguishable from a list somebody may not see — see
+ *  - **A value that is no address answers `404`, not `422`** — otherwise the
+ *    shape of the refusal tells a caller whether their guess was merely absent
+ *    or malformed.
+ *  - **A missing list answers with the framework's own `404` code**, and a
+ *    list outside the actor's domains with `ResourceNotVisible`, which the
+ *    middleware turns into the same answer — see
  *    {@see MailingListErrorCode::NOT_FOUND}.
  *  - **`If-Match` is optional but never ignored.** Architecture 7.1 says writing
  *    methods *accept* the header and a mismatch is `412`; a handler that read it
@@ -33,23 +37,35 @@ final class MailingListGuard
     }
 
     /**
-     * @throws MailingListFailure when the value cannot name a row at all
+     * The list with this address, if the actor may see it.
+     *
+     * The address is parsed tolerantly, because it names a stored row; the
+     * table may hold an address this application would not hand out.
+     *
+     * @throws MailingListFailure when there is no such list
+     * @throws ResourceNotVisible when the list is in a domain the actor does not manage
+     * @throws \Mailadmin\Infrastructure\Persistence\PersistenceError
      */
-    public static function name(string $value): MailingListName
+    public static function load(MailingListRepository $repository, ActorContext $actor, string $address): MailingList
     {
-        try {
-            return MailingListName::fromStoredValue($value);
-        } catch (InvalidMailingList) {
-            throw MailingListFailure::notFound($value);
-        }
+        $wanted = self::parse($address);
+
+        $list = $repository->find($wanted) ?? throw MailingListFailure::notFound($address);
+
+        ListPolicy::requireVisible($actor, self::addressOf($list));
+
+        return $list;
     }
 
     /**
-     * @throws MailingListFailure when there is no such list
+     * The identity of a stored list.
+     *
+     * @throws MailingListFailure when the stored address is not an address at
+     *                            all, so the row cannot be addressed
      */
-    public static function load(MailingListRepository $repository, string $name): MailingList
+    public static function addressOf(MailingList $list): EmailAddress
     {
-        return $repository->find(self::name($name)) ?? throw MailingListFailure::notFound($name);
+        return self::parse($list->address);
     }
 
     /**
@@ -62,7 +78,19 @@ final class MailingListGuard
         }
 
         if (!MailingListView::matchesEtag($list, $ifMatch)) {
-            throw MailingListFailure::preconditionFailed($list->name->toString());
+            throw MailingListFailure::preconditionFailed($list->address);
+        }
+    }
+
+    /**
+     * @throws MailingListFailure
+     */
+    private static function parse(string $address): EmailAddress
+    {
+        try {
+            return EmailAddress::parseStored(trim($address));
+        } catch (InvalidAddress) {
+            throw MailingListFailure::notFound($address);
         }
     }
 }

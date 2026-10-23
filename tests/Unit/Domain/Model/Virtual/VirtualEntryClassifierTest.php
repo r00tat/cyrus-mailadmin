@@ -9,6 +9,8 @@ use Mailadmin\Domain\Model\Virtual\Alias;
 use Mailadmin\Domain\Model\Virtual\CatchAll;
 use Mailadmin\Domain\Model\Virtual\Forward;
 use Mailadmin\Domain\Model\Virtual\MailboxAddress;
+use Mailadmin\Domain\Model\Virtual\MailingListEntry;
+use Mailadmin\Domain\Model\Virtual\MailingListRecognition;
 use Mailadmin\Domain\Model\Virtual\UnknownReason;
 use Mailadmin\Domain\Model\Virtual\UnknownVirtualEntry;
 use Mailadmin\Domain\Model\Virtual\VirtualEntryClassifier;
@@ -24,13 +26,165 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(CatchAll::class)]
 #[CoversClass(Forward::class)]
 #[CoversClass(UnknownVirtualEntry::class)]
+#[CoversClass(MailingListEntry::class)]
+#[CoversClass(MailingListRecognition::class)]
 final class VirtualEntryClassifierTest extends TestCase
 {
     private VirtualEntryClassifier $classifier;
 
+    private MailingListRecognition $lists;
+
     protected function setUp(): void
     {
         $this->classifier = new VirtualEntryClassifier();
+        $this->lists = new MailingListRecognition(
+            DomainName::fromString('maillist.invalid'),
+            ['team@example.test'],
+        );
+    }
+
+    public function testARowDeliveringToTheListTransportIsAMailingList(): void
+    {
+        $row = new VirtualRow('team@example.test', 'team.example.test@maillist.invalid', '');
+
+        $entry = $this->classifier->classify($row, $this->lists);
+
+        self::assertInstanceOf(MailingListEntry::class, $entry);
+        self::assertSame(VirtualEntryType::MailingList, $entry->type());
+        self::assertSame('team@example.test', $entry->address->toString());
+        self::assertSame(['team.example.test@maillist.invalid'], $entry->destinations()->all());
+    }
+
+    public function testTheTransportDomainIsMatchedWithoutRegardToCaseOrSurroundingSpace(): void
+    {
+        $row = new VirtualRow('Team@example.test', ' Team.Example.Test@MAILLIST.Invalid ', '');
+
+        $entry = $this->classifier->classify($row, $this->lists);
+
+        self::assertInstanceOf(MailingListEntry::class, $entry);
+    }
+
+    public function testATransportRowWhoseListIsGoneIsUnknown(): void
+    {
+        // Exactly the form A5 writes, but `lists` has no row for it: the
+        // script finds no list and bounces. Shown as unknown, so that it is
+        // reported and can be removed like any other row nobody understands.
+        $row = new VirtualRow('crew@example.test', 'crew.example.test@maillist.invalid', '');
+
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
+
+        self::assertInstanceOf(UnknownVirtualEntry::class, $entry);
+        self::assertSame(UnknownReason::ListMissing, $entry->reason);
+    }
+
+    public function testDomainsToLookUpIncludeTheDomainOfATransportRow(): void
+    {
+        $rows = [
+            new VirtualRow('crew@Example.test', 'crew.example.test@maillist.invalid', ''),
+            new VirtualRow('info@other.test', 'extern@elsewhere.test', ''),
+        ];
+
+        self::assertSame(
+            ['example.test'],
+            array_map(
+                static fn (DomainName $domain): string => $domain->toString(),
+                MailingListRecognition::domainsToLookUp($rows, DomainName::fromString('maillist.invalid')),
+            ),
+        );
+    }
+
+    public function testALegacyListRowWithAListsRowIsAMailingList(): void
+    {
+        $row = new VirtualRow('Team@example.test', 'team.example.test', 'team.example.test');
+
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
+
+        self::assertInstanceOf(MailingListEntry::class, $entry);
+        self::assertSame(VirtualEntryType::MailingList, $entry->type());
+    }
+
+    public function testALegacyShapedRowWithoutAListsRowStaysAnAlias(): void
+    {
+        // dest = username = REPLACE(alias, '@', '.') is also exactly what an
+        // account's own address row looks like; only `lists` tells them apart.
+        $row = new VirtualRow('crew@example.test', 'crew.example.test', 'crew.example.test');
+
+        self::assertInstanceOf(Alias::class, $this->classifier->classify($row, $this->lists));
+    }
+
+    public function testAnEmptyUserNameWithAnOrdinaryDestinationStaysAForward(): void
+    {
+        $row = new VirtualRow('team@example.test', 'elsewhere@other.test', '');
+
+        self::assertInstanceOf(Forward::class, $this->classifier->classify($row, $this->lists));
+    }
+
+    /**
+     * @return iterable<string, array{VirtualRow}>
+     */
+    public static function transportMismatches(): iterable
+    {
+        yield 'transport first, then another target' => [
+            new VirtualRow('team@example.test', 'team.example.test@maillist.invalid,extern@elsewhere.test', ''),
+        ];
+
+        yield 'another target, then transport' => [
+            new VirtualRow('team@example.test', 'extern@elsewhere.test,team.example.test@maillist.invalid', ''),
+        ];
+
+        yield 'key of another list' => [
+            new VirtualRow('mine@example.test', 'team.example.test@maillist.invalid', ''),
+        ];
+
+        yield 'transport with a sender' => [
+            new VirtualRow('team@example.test', 'team.example.test@maillist.invalid', 'anna.example.test'),
+        ];
+
+        yield 'key that is no address' => [
+            new VirtualRow('team.example.test', 'team.example.test@maillist.invalid', ''),
+        ];
+
+        yield 'catchall into a list' => [
+            new VirtualRow('@example.test', 'team.example.test@maillist.invalid', ''),
+        ];
+
+        yield 'own key with a trailing dot' => [
+            new VirtualRow('team@example.test', 'team.example.test@maillist.invalid.', ''),
+        ];
+
+        yield 'forward of an account into a list' => [
+            new VirtualRow('anna.example.test', 'team.example.test@MAILLIST.invalid', ''),
+        ];
+    }
+
+    #[DataProvider('transportMismatches')]
+    public function testATransportDestinationThatIsNotExactlyTheListsOwnIsUnknown(VirtualRow $row): void
+    {
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
+
+        self::assertInstanceOf(UnknownVirtualEntry::class, $entry);
+        self::assertSame(UnknownReason::ListDestinationMismatch, $entry->reason);
+        self::assertTrue($entry->row()->equals($row));
+    }
+
+    public function testTheListKeyIsTheAddressWithItsAtSignReplaced(): void
+    {
+        self::assertSame(
+            'team.example.test',
+            MailingListRecognition::listKey(\Mailadmin\Domain\Model\EmailAddress::parseStored('team@example.test')),
+        );
+    }
+
+    public function testTheRecognitionNamesTheDomainsWhoseListsALegacyRowNeeds(): void
+    {
+        $domains = MailingListRecognition::domainsToLookUp([
+            new VirtualRow('team@example.test', 'team.example.test', 'team.example.test'),
+            new VirtualRow('Crew@Example.Test', 'crew.example.test', 'crew.example.test'),
+            new VirtualRow('office@other.test', 'anna.other.test', 'anna.other.test'),
+            new VirtualRow('info@third.test', 'extern@elsewhere.test', ''),
+        ], DomainName::fromString('maillist.invalid'));
+
+        self::assertSame(['example.test'], array_map(static fn (DomainName $d): string => $d->toString(), $domains));
     }
 
     public function testTheAccountsOwnAddressIsItsOwnType(): void
@@ -41,7 +195,7 @@ final class VirtualEntryClassifierTest extends TestCase
             'greta.mustermann.example.test',
         );
 
-        $entry = $this->classifier->classify($row, DomainName::fromString('example.test'));
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
 
         self::assertInstanceOf(MailboxAddress::class, $entry);
         self::assertSame(VirtualEntryType::MailboxAddress, $entry->type());
@@ -58,7 +212,7 @@ final class VirtualEntryClassifierTest extends TestCase
             'greta.mustermann@example.test',
         );
 
-        $entry = $this->classifier->classify($row, DomainName::fromString('example.test'));
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
 
         self::assertInstanceOf(MailboxAddress::class, $entry);
     }
@@ -71,7 +225,7 @@ final class VirtualEntryClassifierTest extends TestCase
             'greta.mustermann.example.test',
         );
 
-        $entry = $this->classifier->classify($row, DomainName::fromString('example.test'));
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
 
         self::assertInstanceOf(Alias::class, $entry);
         self::assertSame(VirtualEntryType::Alias, $entry->type());
@@ -89,7 +243,7 @@ final class VirtualEntryClassifierTest extends TestCase
             'info.example.test.example.test',
         );
 
-        $entry = $this->classifier->classify($row, DomainName::fromString('example.test'));
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
 
         self::assertInstanceOf(MailboxAddress::class, $entry);
         self::assertSame('info.example.test', $entry->identity->localPart->toString());
@@ -105,14 +259,14 @@ final class VirtualEntryClassifierTest extends TestCase
             'greta.mustermann.example.test',
         );
 
-        self::assertInstanceOf(Alias::class, $this->classifier->classify($row));
+        self::assertInstanceOf(Alias::class, $this->classifier->classify($row, $this->lists));
     }
 
     public function testACatchAllIsRecognisedByTheLeadingAtSign(): void
     {
         $row = new VirtualRow('@example.test', 'info.example.test', 'info.example.test');
 
-        $entry = $this->classifier->classify($row);
+        $entry = $this->classifier->classify($row, $this->lists);
 
         self::assertInstanceOf(CatchAll::class, $entry);
         self::assertSame('example.test', $entry->domain->toString());
@@ -123,7 +277,7 @@ final class VirtualEntryClassifierTest extends TestCase
     {
         $row = new VirtualRow('greta.mustermann.example.test', 'elsewhere@other.test', '');
 
-        $entry = $this->classifier->classify($row);
+        $entry = $this->classifier->classify($row, $this->lists);
 
         self::assertInstanceOf(Forward::class, $entry);
         self::assertSame('greta.mustermann.example.test', $entry->source);
@@ -139,7 +293,7 @@ final class VirtualEntryClassifierTest extends TestCase
             '',
         );
 
-        $entry = $this->classifier->classify($row);
+        $entry = $this->classifier->classify($row, $this->lists);
 
         self::assertInstanceOf(Forward::class, $entry);
         self::assertTrue($entry->keepsLocalCopy());
@@ -151,7 +305,7 @@ final class VirtualEntryClassifierTest extends TestCase
         VirtualRow $row,
         UnknownReason $expected,
     ): void {
-        $entry = $this->classifier->classify($row, DomainName::fromString('example.test'));
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
 
         self::assertInstanceOf(UnknownVirtualEntry::class, $entry);
         self::assertSame(VirtualEntryType::Unknown, $entry->type());
@@ -198,7 +352,7 @@ final class VirtualEntryClassifierTest extends TestCase
         // the interface has to be able to say so.
         $row = new VirtualRow('@example.test', 'info.example.test', 'info.example.test', 0);
 
-        $entry = $this->classifier->classify($row);
+        $entry = $this->classifier->classify($row, $this->lists);
 
         self::assertInstanceOf(CatchAll::class, $entry);
         self::assertFalse($entry->isEnabled());
@@ -215,7 +369,7 @@ final class VirtualEntryClassifierTest extends TestCase
             'someone.other.test',
         );
 
-        $entry = $this->classifier->classify($row, DomainName::fromString('example.test'));
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
 
         self::assertInstanceOf(Alias::class, $entry);
     }
@@ -232,7 +386,7 @@ final class VirtualEntryClassifierTest extends TestCase
             new VirtualRow('broken', '', ''),
         ];
 
-        $entries = $this->classifier->classifyAll($rows, [
+        $entries = $this->classifier->classifyAll($rows, $this->lists, [
             // The lookup ignores case, like every other name comparison here.
             'Greta.Mustermann.Example.Test' => DomainName::fromString('example.test'),
         ]);

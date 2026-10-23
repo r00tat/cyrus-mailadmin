@@ -53,8 +53,13 @@ final class InMemoryDomainStore implements DomainStore
 
     private ?Throwable $renameFailure = null;
 
+    private ?Throwable $existsFailure = null;
+
     /** @var list<string> `virtual.alias` values, as given */
     private array $aliases = [];
+
+    /** @var list<string> `lists.address` values, as given */
+    private array $listAddresses = [];
 
     /** @var list<string> `virtual.username` values, as given */
     private array $senderNames = [];
@@ -87,6 +92,12 @@ final class InMemoryDomainStore implements DomainStore
     public function givenAlias(string $alias): void
     {
         $this->aliases[] = $alias;
+    }
+
+    /** A row in `lists` with this address (U-145). */
+    public function givenListAddress(string $address): void
+    {
+        $this->listAddresses[] = $address;
     }
 
     /** A row in `virtual` whose `username` is this value (U-110). */
@@ -140,6 +151,12 @@ final class InMemoryDomainStore implements DomainStore
     public function failOnRename(Throwable $failure): void
     {
         $this->renameFailure = $failure;
+    }
+
+    /** Make every {@see exists()} fail — a database that cannot be asked. */
+    public function failOnExists(Throwable $failure): void
+    {
+        $this->existsFailure = $failure;
     }
 
     /**
@@ -214,6 +231,10 @@ final class InMemoryDomainStore implements DomainStore
 
     public function exists(DomainName $name): bool
     {
+        if ($this->existsFailure !== null) {
+            throw $this->existsFailure;
+        }
+
         return isset($this->domains[self::key($name)]);
     }
 
@@ -290,6 +311,16 @@ final class InMemoryDomainStore implements DomainStore
             foreach ($this->accounts[self::key($parent)] ?? [] as $username) {
                 if (!str_contains($username, '@') && str_ends_with(strtolower($username), $suffix)) {
                     return $username;
+                }
+            }
+
+            foreach ($this->listAddresses as $address) {
+                $at = strrpos($address, '@');
+
+                if ($at !== false
+                    && strcasecmp(substr($address, $at + 1), $parent->toString()) === 0
+                    && str_ends_with(strtolower(str_replace('@', '.', $address)), $suffix)) {
+                    return $address;
                 }
             }
         }

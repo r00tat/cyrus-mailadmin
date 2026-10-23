@@ -61,3 +61,10 @@ logs
 # nicht fuer die Open-Source-Veroeffentlichung
 /docs/internal/
 /webcyradm/
+
+# maillist (Python)
+maillist/.venv/
+maillist/**/__pycache__/
+maillist/.pytest_cache/
+maillist/.ruff_cache/
+maillist/*.egg-info/

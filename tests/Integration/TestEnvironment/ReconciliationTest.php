@@ -34,6 +34,7 @@ use Mailadmin\Infrastructure\Persistence\OpenConnection;
 use Mailadmin\Infrastructure\Persistence\SqlMaintenanceInventory;
 use Mailadmin\Tests\Support\DomainFixture;
 use Mailadmin\Tests\Support\FrozenClock;
+use Mailadmin\Tests\Support\ListDeliveryFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -193,6 +194,7 @@ final class ReconciliationTest extends TestCase
             new SqlMaintenanceInventory($this->connection()),
             new CyrusMailstore($this->pool()),
             new FrozenClock(),
+            ListDeliveryFixture::delivery(),
         ))->handle(DomainFixture::superuser());
     }
 

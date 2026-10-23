@@ -266,7 +266,7 @@ final class RepairQueueIntegrationTest extends DatabaseTestCase
         $mailstore->given(MailboxIdentity::fromStoredUsername('info.example.test', DomainName::fromStoredValue('example.test')));
         $mailstore->givenOrphan('user/cyrus');
 
-        $report = (new Reconcile($inventory, $mailstore, $this->clock))->handle(DomainFixture::superuser());
+        $report = (new Reconcile($inventory, $mailstore, $this->clock, \Mailadmin\Tests\Support\ListDeliveryFixture::delivery()))->handle(DomainFixture::superuser());
 
         self::assertCount(1, $report->findings);
         self::assertSame(FindingCategory::VirtualTargetMissing, $report->findings[0]->category);

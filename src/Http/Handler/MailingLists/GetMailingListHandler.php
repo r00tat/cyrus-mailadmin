@@ -11,7 +11,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
 /**
- * `GET /lists/{listName}`.
+ * `GET /lists/{address}`.
  *
  * Answers with an `ETag` so that the next `PATCH` or `DELETE` can carry
  * `If-Match` (U-19). That is the only reason a single-list read exists beside
@@ -32,7 +32,7 @@ final readonly class GetMailingListHandler implements ApiHandler
 
         try {
             return $this->responder->single(
-                $this->lists->handle($actor, MailingListPath::name($request)),
+                $this->lists->handle($actor, MailingListPath::address($request)),
             );
         } catch (MailingListFailure $failure) {
             return $this->responder->failure($request, $failure);

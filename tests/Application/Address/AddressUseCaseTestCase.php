@@ -30,6 +30,8 @@ use Mailadmin\Application\Address\SetVacation;
 use Mailadmin\Application\Address\UpdateAlias;
 use Mailadmin\Application\Address\VacationScripts;
 use Mailadmin\Application\Audit\AuditWriter;
+use Mailadmin\Application\MailingList\ListDelivery;
+use Mailadmin\Application\MailingList\ListDeliveryMode;
 use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\MailboxIdentity;
 use Mailadmin\Domain\Model\NamingScheme;
@@ -41,6 +43,7 @@ use Mailadmin\Infrastructure\Mailstore\SieveScriptInstaller;
 use Mailadmin\Infrastructure\Persistence\InMemoryAccountStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
 use Mailadmin\Infrastructure\Persistence\InMemoryDomainStore;
+use Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository;
 use Mailadmin\Infrastructure\Persistence\InMemoryVirtualStore;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
 use Mailadmin\Tests\Support\DomainFixture;
@@ -64,6 +67,7 @@ abstract class AddressUseCaseTestCase extends TestCase
     protected InMemorySieveStore $sieve;
     protected InMemoryRepairQueue $repairs;
     protected InMemoryAuditTrail $audit;
+    protected InMemoryMailingListRepository $mailingLists;
 
     /** What the use cases write to; the trail itself unless a test swaps it. */
     protected AuditWriter $auditWriter;
@@ -76,6 +80,7 @@ abstract class AddressUseCaseTestCase extends TestCase
         $this->sieve = new InMemorySieveStore();
         $this->repairs = new InMemoryRepairQueue();
         $this->audit = new InMemoryAuditTrail();
+        $this->mailingLists = new InMemoryMailingListRepository();
         $this->auditWriter = $this->audit;
 
         $this->domains->given(DomainFixture::domain('example.test'));
@@ -152,7 +157,12 @@ abstract class AddressUseCaseTestCase extends TestCase
 
     protected function reader(): AddressReader
     {
-        return new AddressReader($this->virtual, new VirtualEntryClassifier());
+        return new AddressReader(
+            $this->virtual,
+            new VirtualEntryClassifier(),
+            $this->mailingLists,
+            new ListDelivery(DomainName::fromString('maillist.invalid'), ListDeliveryMode::Transport),
+        );
     }
 
     protected function writer(): RowWriter
@@ -162,7 +172,7 @@ abstract class AddressUseCaseTestCase extends TestCase
 
     protected function destinations(): DestinationRules
     {
-        return new DestinationRules($this->virtual);
+        return new DestinationRules($this->virtual, \Mailadmin\Tests\Support\ListDeliveryFixture::delivery());
     }
 
     protected function loops(): LoopGuard

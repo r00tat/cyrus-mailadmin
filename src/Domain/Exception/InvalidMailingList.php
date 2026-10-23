@@ -31,7 +31,7 @@ final class InvalidMailingList extends DomainError
     {
         return new self(
             DomainErrorCode::LIST_INVALID_NAME,
-            sprintf('A mailing list name must not exceed %d bytes, got %d.', $limit, $length),
+            sprintf('A mailing list name must not exceed %d characters, got %d.', $limit, $length),
             ['length' => $length, 'limit' => $limit],
         );
     }
@@ -45,16 +45,27 @@ final class InvalidMailingList extends DomainError
         );
     }
 
-    public static function unconventionalName(string $name): self
+    /**
+     * `lists` is latin1. A character it cannot hold would make MariaDB refuse
+     * the write or store `?` — see {@see \Mailadmin\Domain\MailingList\MailingListName}.
+     * The excerpt is left out: it is exactly the text that may not render.
+     */
+    public static function nameOutsideLatin1(string $name): self
     {
         return new self(
-            DomainErrorCode::LIST_INVALID_NAME,
-            sprintf(
-                'Mailing list name "%s" uses characters that are not allowed for new lists. '
-                . 'Allowed: letters, digits and . - _ +, starting and ending with a letter or digit.',
-                self::excerpt($name),
-            ),
-            ['name' => self::excerpt($name)],
+            DomainErrorCode::LIST_NAME_OUTSIDE_LATIN1,
+            'A mailing list name may only use printable latin1 characters (ISO 8859-1); '
+            . 'the column cannot store the others.',
+            ['length' => strlen($name)],
+        );
+    }
+
+    /** See {@see nameOutsideLatin1()}. */
+    public static function tagOutsideLatin1(): self
+    {
+        return new self(
+            DomainErrorCode::LIST_TAG_OUTSIDE_LATIN1,
+            'A mailing list tag may only use latin1 characters (ISO 8859-1); the column cannot store the others.',
         );
     }
 
@@ -62,7 +73,7 @@ final class InvalidMailingList extends DomainError
     {
         return new self(
             DomainErrorCode::LIST_INVALID_TAG,
-            sprintf('A mailing list tag must not exceed %d bytes, got %d.', $limit, $length),
+            sprintf('A mailing list tag must not exceed %d characters, got %d.', $limit, $length),
             ['length' => $length, 'limit' => $limit],
         );
     }
@@ -98,13 +109,12 @@ final class InvalidMailingList extends DomainError
     }
 
     /**
-     * A member that is being **added** is not a mail address.
+     * A member that is being **added** is not a member this list can store.
      *
-     * This is the one rule in this class that is not about tidiness. `lists` is
-     * read by the configuration management, which renders it into an aliases
-     * file, and an aliases file gives `|command` and `/path/to/file` meanings
-     * that a mail address does not have. A member field that accepted arbitrary
-     * text would let anyone who may edit a list have the MTA run a command.
+     * It is either not a mail address, or it would not read back as exactly
+     * itself (a separator or an entity in the display name). The column is read
+     * by the delivery script, which treats every entry as a recipient, so
+     * arbitrary text must not get in.
      *
      * Members that are **already stored** are never checked against this: the
      * table predates this application, and refusing to save a list because a row
@@ -117,12 +127,47 @@ final class InvalidMailingList extends DomainError
         return new self(
             DomainErrorCode::LIST_INVALID_MEMBER,
             sprintf(
-                'Member "%s" is not a mail address. A new member has to be one: the configuration '
-                . 'management renders this column into an aliases file, where other shapes are '
-                . 'commands and file names.',
+                'Member "%s" is not a member this list can store. A new member has to be a mail '
+                . 'address whose display name contains no separator (comma, semicolon, line break) '
+                . 'and no HTML entity.',
                 self::excerpt($member),
             ),
             ['member' => self::excerpt($member)],
+        );
+    }
+
+    /**
+     * A member entry the latin1 column cannot hold. Carries the entry's
+     * position in the request and nothing of its text: the entry is an
+     * address, and this message may end up in a log.
+     */
+    public static function memberOutsideLatin1(int $index): self
+    {
+        return new self(
+            DomainErrorCode::LIST_MEMBER_OUTSIDE_LATIN1,
+            sprintf(
+                'Member entry %d may only use latin1 characters (ISO 8859-1); the column cannot store the others.',
+                $index,
+            ),
+            ['index' => $index],
+        );
+    }
+
+    /**
+     * A member being added is a mail address, but not one the delivery script
+     * delivers to as written (U-137). Position only, for the reason
+     * {@see memberOutsideLatin1()} gives.
+     */
+    public static function memberNotDeliverable(int $index): self
+    {
+        return new self(
+            DomainErrorCode::LIST_MEMBER_NOT_DELIVERABLE,
+            sprintf(
+                'Member entry %d is not an address the delivery script can deliver to: it has to be a plain '
+                . 'ASCII address with a dotted domain, optionally behind a simple display name.',
+                $index,
+            ),
+            ['index' => $index],
         );
     }
 

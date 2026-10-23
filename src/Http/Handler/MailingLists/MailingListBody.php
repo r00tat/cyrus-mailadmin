@@ -71,7 +71,7 @@ final class MailingListBody
     {
         return new MailingListChanges(
             tag: self::optionalText($body, 'tag'),
-            address: self::optionalText($body, 'address'),
+            name: self::optionalText($body, 'name'),
             members: self::members($body),
         );
     }

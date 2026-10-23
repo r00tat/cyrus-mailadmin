@@ -7,24 +7,37 @@ namespace Mailadmin\Domain\MailingList;
 use Mailadmin\Domain\Exception\InvalidMailingList;
 
 /**
- * The primary key of `lists`, and therefore the identity of a mailing list.
+ * The display name of a mailing list.
  *
- * `lists` has no surrogate key — `name` is the primary key (analysis 4.1), so
- * it is what a URL addresses (U-60). Two doors, the same shape as
- * {@see \Mailadmin\Domain\Model\LocalPart}: {@see fromString()} is strict for a
- * name somebody is creating, {@see fromStoredValue()} is tolerant for a row that
- * is already there and only marks it {@see isConventional()} `=== false` (U-22).
+ * The identity of a list is its address; `lists.name` is display text and may
+ * repeat (spec 4.3, "Identität"). Since the pipe transport, no aliases file is
+ * keyed by it, so spaces, colons and umlauts are as welcome here as in any
+ * other label.
  *
- * The strict rules are not decoration. The name ends up as the key of an entry
- * in an aliases file, where whitespace and `:` are structure; a name carrying
- * either would produce a file the MTA reads differently from what the form said.
- * Both doors therefore refuse those outright, and the strict door additionally
- * refuses anything that is not a plain label.
+ * Two doors, the same shape as {@see \Mailadmin\Domain\Model\LocalPart}:
+ * {@see fromString()} for a name somebody is entering, {@see fromStoredValue()}
+ * for every string a row can hold, which it only marks {@see isConventional()}
+ * `=== false` (U-22) — one odd row must neither disappear nor make a listing fail.
+ *
+ * ## What the strict door refuses, and why
+ *
+ * Only what cannot be stored as written:
+ *
+ *  - an empty name, after trimming;
+ *  - more than 255 characters — `lists.name` is a latin1 `varchar(255)`, so
+ *    the limit is in characters and every accepted character is one byte there;
+ *  - control characters (below U+0020, and U+007F), which no label needs and
+ *    which make a row look different in every tool that shows it;
+ *  - characters the latin1 column cannot hold — see {@see Latin1Text}
+ *    (`list.name_outside_latin1`).
  */
 final readonly class MailingListName
 {
-    /** `lists.name` is a `varchar(255)`. */
+    /** `lists.name` is a latin1 `varchar(255)`: 255 characters. */
     public const int MAX_LENGTH = 255;
+
+    /** C0 controls and DEL. */
+    private const string CONTROL = '/[\x00-\x1F\x7F]/';
 
     private function __construct(
         private string $value,
@@ -33,32 +46,43 @@ final readonly class MailingListName
     }
 
     /**
-     * The strict door: letters, digits, `.`, `-`, `_`, `+`, beginning and ending
-     * with a letter or a digit.
+     * The strict door: trimmed, 1–255 characters, no control characters,
+     * nothing latin1 cannot store.
      *
      * @throws InvalidMailingList
      */
     public static function fromString(string $value): self
     {
-        $name = self::guardUsable($value);
+        $name = trim($value);
 
-        if (!self::isConventionalValue($name)) {
-            throw InvalidMailingList::unconventionalName($name);
+        if ($name === '') {
+            throw InvalidMailingList::emptyName();
+        }
+
+        if (preg_match(self::CONTROL, $name) === 1) {
+            throw InvalidMailingList::nameHasForbiddenCharacter($name, 'it contains a control character');
+        }
+
+        if (!Latin1Text::fits($name)) {
+            throw InvalidMailingList::nameOutsideLatin1($name);
+        }
+
+        $length = Latin1Text::characters($name);
+
+        if ($length > self::MAX_LENGTH) {
+            throw InvalidMailingList::nameTooLong($length, self::MAX_LENGTH);
         }
 
         return new self($name, true);
     }
 
     /**
-     * The tolerant door: for a name that is already in the table.
-     *
-     * @throws InvalidMailingList
+     * The tolerant door: for a name that is already in the table. Nothing is
+     * refused, trimmed or changed, so a row saved unchanged keeps its bytes.
      */
     public static function fromStoredValue(string $value): self
     {
-        $name = self::guardUsable($value);
-
-        return new self($name, self::isConventionalValue($name));
+        return new self($value, self::isConventionalValue($value));
     }
 
     public function toString(): string
@@ -67,7 +91,8 @@ final readonly class MailingListName
     }
 
     /**
-     * False for a stored name this application would not accept from a form.
+     * False for a stored name the strict door would not hand back unchanged:
+     * one it would refuse, and one with surrounding whitespace it would trim.
      */
     public function isConventional(): bool
     {
@@ -75,50 +100,21 @@ final readonly class MailingListName
     }
 
     /**
-     * Case-sensitive, because the column is the primary key and MariaDB compares
-     * it under the table's collation — which the application does not control.
-     * An `equals()` that lower-cased would claim two names are one when the
-     * database might disagree.
+     * Case-sensitive, because MariaDB compares the column under the table's
+     * collation — which the application does not control. An `equals()` that
+     * lower-cased would claim two names are one when the database might disagree.
      */
     public function equals(self $other): bool
     {
         return $this->value === $other->value;
     }
 
-    /**
-     * @throws InvalidMailingList
-     */
-    private static function guardUsable(string $value): string
-    {
-        $name = trim($value);
-
-        if ($name === '') {
-            throw InvalidMailingList::emptyName();
-        }
-
-        if (strlen($name) > self::MAX_LENGTH) {
-            throw InvalidMailingList::nameTooLong(strlen($name), self::MAX_LENGTH);
-        }
-
-        if (preg_match('/[\s\x00-\x1F\x7F]/', $name) === 1) {
-            throw InvalidMailingList::nameHasForbiddenCharacter(
-                $name,
-                'it contains whitespace or a control character, both of which are structure in an aliases file',
-            );
-        }
-
-        if (str_contains($name, ':')) {
-            throw InvalidMailingList::nameHasForbiddenCharacter(
-                $name,
-                'it contains ":", which separates the key from the members in an aliases file',
-            );
-        }
-
-        return $name;
-    }
-
     private static function isConventionalValue(string $value): bool
     {
-        return preg_match('/^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$/', $value) === 1;
+        try {
+            return self::fromString($value)->value === $value;
+        } catch (InvalidMailingList) {
+            return false;
+        }
     }
 }

@@ -27,7 +27,32 @@ final readonly class ActorContext
         public string $username,
         public AdminRole $role,
         public DomainScope $scope,
+        private bool $system = false,
     ) {
+    }
+
+    /**
+     * The application itself, run from the command line by an operator — a
+     * maintenance command, not a person signed in.
+     *
+     * It holds a superuser's permissions, because whoever can run a command
+     * on the server can change the database anyway. Its name has angle
+     * brackets, which no administrator created in mailadmin can have (`AdminNewUsername`), and the
+     * audit trail records it without a role ({@see isSystem()}).
+     *
+     * @throws InvalidActorContext when the label is empty
+     */
+    public static function system(string $label): self
+    {
+        $name = self::guardUsername($label);
+
+        return new self('<system:' . $name . '>', AdminRole::Superuser, DomainScope::all(), true);
+    }
+
+    /** Is this {@see system()} rather than a signed-in administrator? */
+    public function isSystem(): bool
+    {
+        return $this->system;
     }
 
     /**

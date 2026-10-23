@@ -11,6 +11,7 @@ use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Domain\Model\ReservedLocalPart;
 use Mailadmin\Domain\Model\Virtual\MailboxAddress;
+use Mailadmin\Domain\Model\Virtual\MailingListEntry;
 use Mailadmin\Domain\Model\Virtual\VirtualRow;
 use Mailadmin\Domain\Policy\AddressPolicy;
 
@@ -27,6 +28,10 @@ use Mailadmin\Domain\Policy\AddressPolicy;
  * **An account's own address row is refused** with `address.not_editable`. It
  * is what delivers into the mailbox; removing it alone leaves an account that
  * receives nothing. It goes with the account (`DELETE /accounts/{account}`).
+ *
+ * **A mailing list's row is refused** the same way, with the reason
+ * `managed_by_mailing_list`: removed alone, it leaves a `lists` row nothing
+ * delivers to. It goes with the list (`DELETE /lists/{address}`).
  *
  * A row the domain's enabled catchall depends on is refused with
  * `address.needed_by_catchall` (U-112).
@@ -77,6 +82,10 @@ final readonly class DeleteDomainAddress
                     sprintf('The address "%s"', $found->alias()),
                     'it delivers into an account\'s mailbox and goes when the account is deleted',
                 );
+            }
+
+            if ($found instanceof MailingListEntry) {
+                throw AddressOperationFailed::managedByMailingList($found->alias());
             }
 
             if (!$confirmReserved && $found->isEnabled() && self::isMandatory($found->alias())) {

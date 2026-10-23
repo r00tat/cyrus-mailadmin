@@ -8,6 +8,7 @@ use Mailadmin\Application\Domain\DomainChange;
 use Mailadmin\Application\Domain\DomainOperationFailed;
 use Mailadmin\Application\Domain\UpdateDomain;
 use Mailadmin\Domain\Exception\DomainError;
+use Mailadmin\Domain\Exception\DomainErrorCode;
 use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Http\Handler\ApiHandler;
 use Mailadmin\Http\ParsedBody;
@@ -55,7 +56,13 @@ final readonly class UpdateDomainHandler implements ApiHandler
         } catch (DomainOperationFailed $failure) {
             return $this->responder->failure($request, $failure);
         } catch (DomainError $error) {
-            return $this->responder->invalid($request, $error, 'body');
+            // A name refused only here (the list transport domain) belongs
+            // to the name field like any other invalid name.
+            return $this->responder->invalid(
+                $request,
+                $error,
+                $error->code() === DomainErrorCode::DOMAIN_INVALID_NAME ? 'body.name' : 'body',
+            );
         }
 
         return $this->responder->domain(

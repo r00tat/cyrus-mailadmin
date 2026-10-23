@@ -92,6 +92,23 @@ final class AccountAddressesUseCaseTest extends AddressUseCaseTestCase
         self::assertSame([], $this->forwardRows(self::CARL));
     }
 
+    public function testAForwardCannotPointAtTheListTransport(): void
+    {
+        try {
+            $this->setForwards()->handle(
+                DomainFixture::superuser(),
+                self::ANNA,
+                new ForwardChange(['team.other.test@maillist.invalid']),
+                null,
+            );
+            self::fail('A transport destination was accepted.');
+        } catch (InvalidAddress $refused) {
+            self::assertSame('address.invalid_destination', $refused->code());
+        }
+
+        self::assertSame([], $this->forwardRows(self::ANNA));
+    }
+
     public function testAForwardOntoTheAccountItselfIsALoop(): void
     {
         $this->expectException(InvalidAddress::class);

@@ -71,6 +71,13 @@ smtpd_relay_restrictions =
     permit_sasl_authenticated
     reject_unauth_destination
 
+# Before anything else: the list pseudo-domain is never a valid RCPT TO
+# (docs/deployment/maillist.md, section 3). In smtpd_recipient_restrictions
+# rather than smtpd_relay_restrictions, because the submission service in
+# master.cf overrides the latter and would skip the check.
+smtpd_recipient_restrictions =
+    check_recipient_access hash:/etc/postfix/maillist_block
+
 smtpd_sender_restrictions =
     reject_authenticated_sender_login_mismatch
     permit_mynetworks
@@ -82,6 +89,22 @@ smtpd_sender_restrictions =
 # ---------------------------------------------------------------------------
 mailbox_transport = lmtp:unix:/run/cyrus/socket/lmtp
 virtual_transport = lmtp:unix:/run/cyrus/socket/lmtp
+
+# ---------------------------------------------------------------------------
+# Mailing lists through the pipe transport (docs/deployment/maillist.md).
+#
+# A list address resolves through `virtual` to `<list key>@maillist.invalid`,
+# and the transport map hands that domain to the `maillist` service in
+# master.cf. One recipient per call, so every call carries exactly one key.
+#
+# `recipient_delimiter = +` mirrors the target system. It is what makes
+# `team+x@domain` reach the list at all: the `virtual` lookup falls back to
+# `team@domain`, and propagate_unmatched_extensions (default: canonical,
+# virtual) carries `+x` over to the result, which `${user}` drops again.
+# ---------------------------------------------------------------------------
+transport_maps = hash:/etc/postfix/transport
+maillist_destination_recipient_limit = 1
+recipient_delimiter = +
 
 # Small queue lifetimes: a test that produces a bounce should see it in seconds,
 # not in days.

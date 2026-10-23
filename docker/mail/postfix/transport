@@ -1,0 +1,4 @@
+# The list pseudo-domain goes to the pipe transport (docs/deployment/maillist.md,
+# section 3). Must match MAILADMIN_LIST_TRANSPORT_DOMAIN. Compiled with postmap
+# at build time.
+maillist.invalid    maillist:

@@ -99,7 +99,10 @@ paths:
         `DELETE /domains/{domain}` (`domain.still_has_addresses`) are cleared.
 
         An account's own address row is refused with `address.not_editable`: it
-        is what delivers into the mailbox and goes with the account.
+        is what delivers into the mailbox and goes with the account. A mailing
+        list's row (`type: mailing_list`) is refused the same way, with
+        `errors.entry = managed_by_mailing_list`: it goes with the list
+        (`DELETE /lists/{address}`).
         `postmaster` and `abuse` need `confirm_reserved` (`address.reserved`,
         U-109).
 
@@ -123,7 +126,9 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: |
-            The row is an account's own address or a key without `@` that names
+            The row is an account's own address, a mailing list's row
+            (`address.not_editable` with `errors.entry = managed_by_mailing_list`)
+            or a key without `@` that names
             no account while the caller is no superuser (`address.not_editable`), a
             reserved address without confirmation (`address.reserved`), it
             changed while it was being removed (`address.not_editable`), or the

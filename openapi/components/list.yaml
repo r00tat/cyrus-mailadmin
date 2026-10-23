@@ -2,19 +2,19 @@
 # Schemas, parameters and headers owned by A5 — mailing lists.
 #
 # The resource is the legacy table `lists`, unchanged: `name`, `tag`, `address`,
-# `members` (E-1, analysis 4.1). Nothing here adds a column, and nothing here
-# renames one.
+# `members` (E-1, analysis 4.1), plus the `virtual` entry that routes the
+# address. Nothing here adds a column, and nothing here renames one.
 #
 # Two things about this resource are unlike every other one in the contract, and
 # both are visible in the schemas below:
 #
-#   * **The name is the identifier.** `lists` has no surrogate key, so the path
-#     carries the URL-encoded name (U-60) and `name` is absent from the update
-#     request: renaming a list is a delete and a create.
-#   * **A write does not take effect at once.** The application writes the
-#     database; the aliases file is rendered from it by the configuration
-#     management (E-4). Every state-changing answer says so through
-#     `MailingListEffect` (U-59).
+#   * **The address is the identifier.** `lists.name` has no unique index and is
+#     display text, so the path carries the URL-encoded address and `address`
+#     is absent from the update request: moving a list is a delete and a create
+#     (spec 4.3, "Identität").
+#   * **On the legacy alias path the aliases file lags behind.** It is rendered
+#     by the configuration management (E-4); a create or delete says so through
+#     `MailingListEffect` (U-59, U-143). Delivery itself does not wait.
 #
 components:
   schemas:
@@ -42,9 +42,9 @@ components:
           minLength: 1
           maxLength: 255
           description: |
-            The list name — the primary key of `lists` and the identifier in the
-            path. Immutable: to rename a list, delete it and create it again.
-          example: team-example
+            The display name of the list. Free to change; it may repeat across
+            lists and does not identify one — the address does.
+          example: Team Nord
         tag:
           type: string
           maxLength: 255
@@ -61,7 +61,9 @@ components:
         address:
           type: string
           maxLength: 255
-          description: The address that delivers to this list.
+          description: |
+            The address that delivers to this list, and its identifier in the
+            path. Immutable: to move a list, delete it and create it again.
           example: team-list@example.test
         members:
           type: array
@@ -77,8 +79,9 @@ components:
         unusable_members:
           type: array
           description: |
-            The subset of `members` that is not a mail address — shown, not
-            removed (U-22).
+            The subset of `members` the delivery script sends no mail to — not
+            a mail address, or an address it skips or would read differently
+            (U-137). Shown, not removed (U-22).
 
             An aliases file may legitimately contain a local user name, a file
             path or a pipe, and rows written before this application existed may
@@ -122,29 +125,25 @@ components:
         - address
       properties:
         name:
-          type: string
-          minLength: 1
-          maxLength: 255
-          pattern: '^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$'
-          description: |
-            Letters, digits and `. - _ +`, beginning and ending with a letter or
-            a digit.
-
-            Stricter than what the table can hold, on purpose: the name becomes
-            the key of an entry in an aliases file, where whitespace and `:` are
-            structure. Existing rows are not held to this — they are shown as
-            they are (U-22).
-          example: team-example
+          $ref: '#/components/schemas/MailingListDisplayName'
         tag:
           type: string
           maxLength: 255
           default: ''
-          description: Free-text label. See `MailingList.tag`.
+          description: |
+            Free-text label. See `MailingList.tag`. No control characters
+            (`list.invalid_tag`), at most 255 characters, and only characters
+            the latin1 column can store — an emoji or `€` is
+            `list.tag_outside_latin1`.
         address:
           type: string
           minLength: 3
           maxLength: 255
-          description: The address that will deliver to this list, once the configuration has run.
+          description: |
+            The address that will deliver to this list. It identifies the list
+            from now on and cannot be changed later. No `+` in the local part
+            (`list.address_has_extension`), and its domain must be one this
+            application manages (`list.unknown_domain`).
           example: team-list@example.test
         members:
           type: array
@@ -152,6 +151,19 @@ components:
             Every entry has to be a mail address. This is not tidiness: the
             column is rendered into an aliases file, where `|command` and
             `/path/to/file` are instructions rather than recipients.
+
+            A display name (`Jürgen <j@example.test>`) is fine, but every entry
+            has to fit the latin1 column: an emoji or `€` is
+            `list.member_outside_latin1`, reported at the entry's position
+            (`body.members.<n>`). A new entry also has to be an address the
+            delivery script sends to as written: plain ASCII, a dotted domain,
+            no quotes, comments, backslashes, `&`, control characters (tab
+            included), domain literals or group syntax
+            (`list.member_not_deliverable`, at the entry's position too). There
+            is no schema `pattern` for the control characters on purpose: a
+            `PATCH` sends stored entries back, and those are tolerated.
+            Entries that are already stored are kept as they are. The same rules apply to `tag` and `members`
+            on `PATCH`.
           items:
             type: string
             minLength: 3
@@ -168,15 +180,16 @@ components:
 
         `{"members": []}` therefore empties the list and `{}` changes nothing.
 
-        `name` is not among the fields: it identifies the list (U-60).
+        `address` is not among the fields: it identifies the list. A body that
+        sends it anyway — or any other field not listed here — is refused with
+        `422` rather than half applied.
       minProperties: 1
+      additionalProperties: false
       properties:
+        name:
+          $ref: '#/components/schemas/MailingListDisplayName'
         tag:
           type: string
-          maxLength: 255
-        address:
-          type: string
-          minLength: 3
           maxLength: 255
         members:
           type: array
@@ -184,6 +197,24 @@ components:
             type: string
             minLength: 3
             maxLength: 255
+
+    MailingListDisplayName:
+      type: string
+      minLength: 1
+      maxLength: 255
+      pattern: '^[^\x00-\x1F\x7F]*$'
+      description: |
+        Display text: spaces, colons and umlauts are fine, and two lists may
+        share a name. Surrounding whitespace is trimmed, and nothing but
+        whitespace is `list.invalid_name`.
+
+        Refused are control characters (below U+0020, and U+007F) and more
+        than 255 characters. `lists` is a latin1 table, so a character outside
+        printable ISO 8859-1 — an emoji, `€` — is refused as well, with
+        `list.name_outside_latin1`: the column could not store it as written.
+        Existing rows are not held to any of this — they are shown as they are
+        (U-22).
+      example: Team Nord
 
     MailingListSort:
       type: string
@@ -198,16 +229,23 @@ components:
       default: name
 
   parameters:
-    MailingListName:
-      name: listName
+    MailingListAddress:
+      name: address
       in: path
       required: true
       description: |
-        The list name, URL-encoded. `lists` has no surrogate key, so the name is
-        the identifier (U-60) — the same reasoning as U-18 for accounts.
+        The list address, URL-encoded (`team%40example.test`). The address
+        identifies a list; `lists.name` is display text and may repeat. A list
+        outside the actor's domains answers `404`, the same document as a list
+        that does not exist (U-44).
+
+        No `format: email` here, on purpose: the request validator checks the
+        path segment before it is decoded, so it would see `team%40example.test`
+        and refuse every list. The same shape as `AliasPath`; the use case parses
+        the decoded value.
       schema:
         type: string
-        minLength: 1
+        minLength: 3
         maxLength: 255
 
     MailingListSortField:
@@ -268,18 +306,23 @@ components:
   headers:
     MailingListEffect:
       description: |
-        Present on every answer that changed something. The one value is
-        `pending-configuration-run`.
+        Present on the answer to a create or a delete **while the legacy aliases
+        file is still rendered** (`MAILADMIN_LIST_DELIVERY=alias`). The one value
+        is `pending-configuration-run`.
 
-        Saving a mailing list writes the database and nothing else: the aliases
-        file is rendered from `lists` by the configuration management (E-4), so
-        until the next configuration run a new list does not deliver and a
-        deleted one still does. A stable keyword rather than a sentence — the
-        frontend translates it (E-16).
+        Delivery does not wait: a new list's `virtual` entry already routes the
+        address to the pipe transport, and a deleted list's entry is removed, so
+        mail to it stops at once. What waits is the aliases file the
+        configuration management renders from `lists` (E-4): until the next
+        configuration run it lacks the new list's line, or still holds the
+        deleted one. A change of name, tag or members waits for nothing and
+        carries no header; on the transport path
+        (`MAILADMIN_LIST_DELIVERY=transport`) no answer carries it (U-143). A
+        stable keyword rather than a sentence — the frontend translates it
+        (E-16).
 
-        A header rather than a body field because `DELETE` answers `204`, and the
-        write with the most surprising delay is the one that would otherwise have
-        no place to say so (U-59).
+        A header rather than a body field because `DELETE` answers `204` and
+        has no body (U-59).
       schema:
         type: string
         enum:

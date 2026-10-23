@@ -19,8 +19,9 @@ import type { TranslationKey } from '../i18n';
  * route checks with `RequirePermission` and, more to the point, the one the
  * backend checks on every request. Hiding an entry is courtesy, not
  * enforcement (architecture 11.2). With the role split of `RolePermissions`
- * a domain master sees the overview, domains, accounts and addresses; the
- * rest is the superuser's.
+ * a domain master sees the overview, domains, accounts, addresses and mailing
+ * lists; the rest is the superuser's. The entry follows the permission, never
+ * the role.
  *
  * The list is complete for the area views and owned by the foundation, not by
  * the work streams: a new top-level view is a change to the navigation, and

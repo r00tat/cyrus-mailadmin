@@ -23,10 +23,9 @@ use Mailadmin\Infrastructure\Persistence\PersistenceError;
  * `AuthorizationMiddleware` turns it into `403`, so that the 403/404 split is
  * spelled in one place rather than in every package (U-44).
  *
- * The repository then narrows the query with `Repository::scopedTo()` (U-45).
- * That is a no-op today — `list.*` is superuser only (U-58) — and it is written
- * anyway, because the alternative is an `if` that has to be remembered on the
- * day the permission is widened.
+ * The repository then narrows the query with `Repository::scopedTo()` (U-45):
+ * a domain master sees the lists whose address is in one of their domains
+ * (spec 4.3, "Rechte").
  */
 final readonly class ListMailingLists
 {

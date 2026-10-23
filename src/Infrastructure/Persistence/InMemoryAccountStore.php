@@ -43,6 +43,9 @@ final class InMemoryAccountStore implements AccountStore
     /** @var array<string, true> lower-cased `virtual.username` values of rows that are not an account's own */
     private array $senderNames = [];
 
+    /** @var array<string, true> lower-cased list keys, `REPLACE(address, '@', '.')` */
+    private array $listKeys = [];
+
     /** @var list<string> */
     private array $operations = [];
 
@@ -94,6 +97,12 @@ final class InMemoryAccountStore implements AccountStore
     public function givenSenderName(string $username): void
     {
         $this->senderNames[strtolower($username)] = true;
+    }
+
+    /** A row in `lists` with this address; its key is the address with `@` replaced by `.` (U-145). */
+    public function givenListAddress(string $address): void
+    {
+        $this->listKeys[strtolower(str_replace('@', '.', $address))] = true;
     }
 
     /** Make the next {@see create()} fail, after nothing was written. */
@@ -249,7 +258,8 @@ final class InMemoryAccountStore implements AccountStore
 
         return isset($this->foreignAliases[strtolower($identity->address()->toString())])
             || isset($this->foreignAliases[strtolower($identity->cyrusUsername())])
-            || isset($this->senderNames[strtolower($identity->cyrusUsername())]);
+            || isset($this->senderNames[strtolower($identity->cyrusUsername())])
+            || isset($this->listKeys[strtolower($identity->cyrusUsername())]);
     }
 
     public function create(

@@ -1,0 +1,2 @@
+# Golden files are byte-exact values; no line-ending conversion.
+tests/Fixtures/MemberFormat/*.members -text

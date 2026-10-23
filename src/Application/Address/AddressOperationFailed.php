@@ -18,10 +18,22 @@ use RuntimeException;
  */
 final class AddressOperationFailed extends RuntimeException
 {
+    /**
+     * The `reason` of an `address.not_editable` for a row that belongs to a
+     * mailing list: it is changed and removed through `/lists` (A5). Sent as
+     * `errors.entry`, so that a client can point at the list.
+     */
+    public const string MANAGED_BY_MAILING_LIST = 'managed_by_mailing_list';
+
+    /**
+     * @param string|null $reason a stable key that narrows the code down, for
+     *                            the client; `null` for most refusals
+     */
     private function __construct(
         public readonly string $errorCode,
         public readonly int $status,
         string $message,
+        public readonly ?string $reason = null,
     ) {
         parent::__construct($message);
     }
@@ -55,6 +67,24 @@ final class AddressOperationFailed extends RuntimeException
             AddressErrorCode::NOT_EDITABLE,
             409,
             sprintf('%s cannot be changed here: %s', $what, $why),
+        );
+    }
+
+    /**
+     * The row routes a mailing list's address. It goes with the list
+     * (`DELETE /lists/{address}`), never on its own.
+     */
+    public static function managedByMailingList(string $address): self
+    {
+        return new self(
+            AddressErrorCode::NOT_EDITABLE,
+            409,
+            sprintf(
+                'The entry "%s" cannot be changed here: it belongs to a mailing list and is changed '
+                . 'or removed through /lists.',
+                $address,
+            ),
+            self::MANAGED_BY_MAILING_LIST,
         );
     }
 

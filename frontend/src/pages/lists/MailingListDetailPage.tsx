@@ -15,18 +15,21 @@ import { ifMatch, isVersionConflict } from '../../api/etag';
 import type { components } from '../../api/schema';
 import { useSession } from '../../auth/SessionContext';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
-import { errorAtOrBelow, fieldProps, FormActions, useFieldErrors } from '../../components/form';
+import { fieldProps, FormActions, useFieldErrors, useRequiredCheck, type FieldErrors } from '../../components/form';
 import { useNotify } from '../../components/Notifications';
 import { PageHeader } from '../../components/PageHeader';
 import { ProblemAlert } from '../../components/ProblemAlert';
 import { ErrorState, LoadingState } from '../../components/StateViews';
 import { useTranslation } from '../../i18n';
-import { describeUnknownError } from '../../i18n/problemText';
 
-import { ConfigRunHint, parseMembers, sameMembers, type MailingList } from './listShared';
+import { membersFieldError, parseMembers, sameMembers, type MailingList } from './listShared';
 
 /**
  * A5 — one mailing list: its values, the change form and the delete.
+ *
+ * The address is the identifier (`/lists/{address}`) and read-only here; to
+ * move a list to another address, it is deleted and created anew. Name, tag
+ * and members are editable.
  *
  * The form sends only what changed (`PATCH`, absent means untouched). That
  * matters most for the members: a list whose membership is not touched is
@@ -41,27 +44,27 @@ import { ConfigRunHint, parseMembers, sameMembers, type MailingList } from './li
 
 type MailingListUpdateRequest = components['schemas']['MailingListUpdateRequest'];
 
-function detailKey(listName: string): readonly unknown[] {
-  return ['lists', 'detail', listName];
+function detailKey(address: string): readonly unknown[] {
+  return ['lists', 'detail', address];
 }
 
 export function MailingListDetailPage(): ReactNode {
   const { t } = useTranslation();
-  const { listName = '' } = useParams();
+  const { address = '' } = useParams();
   const client = useApiClient();
   const [reloaded, setReloaded] = useState(false);
 
   const detail = useQuery({
-    queryKey: detailKey(listName),
-    queryFn: ({ signal }) => client.getVersioned('/lists/{listName}', { pathParams: { listName }, signal }),
+    queryKey: detailKey(address),
+    queryFn: ({ signal }) => client.getVersioned('/lists/{address}', { pathParams: { address }, signal }),
   });
 
-  const breadcrumbs = [{ label: t('list.list.title'), to: '/lists' }, { label: listName }];
+  const breadcrumbs = [{ label: t('list.list.title'), to: '/lists' }, { label: address }];
 
   if (detail.isPending) {
     return (
       <>
-        <PageHeader title={listName} breadcrumbs={breadcrumbs} />
+        <PageHeader title={address} breadcrumbs={breadcrumbs} />
         <LoadingState />
       </>
     );
@@ -70,7 +73,7 @@ export function MailingListDetailPage(): ReactNode {
   if (detail.isError) {
     return (
       <>
-        <PageHeader title={listName} breadcrumbs={breadcrumbs} />
+        <PageHeader title={address} breadcrumbs={breadcrumbs} />
         <ErrorState error={detail.error} onRetry={() => void detail.refetch()} />
       </>
     );
@@ -118,29 +121,33 @@ function MailingListDetail({
   const notify = useNotify();
   const { can } = useSession();
 
-  const [address, setAddress] = useState(list.address);
+  const [name, setName] = useState(list.name);
   const [tag, setTag] = useState(list.tag);
   const [members, setMembers] = useState(list.members.join('\n'));
+  // The member text as it was sent: a refused entry's position refers to it.
+  const [sentMembers, setSentMembers] = useState('');
+  const [clientErrors, setClientErrors] = useState<FieldErrors>({});
+  const required = useRequiredCheck();
   const [unchanged, setUnchanged] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const pathParams = { listName: list.name };
+  const pathParams = { address: list.address };
 
   const update = useMutation({
     mutationFn: (body: MailingListUpdateRequest) =>
-      client.requestVersioned('patch', '/lists/{listName}', { pathParams, body, headers: ifMatch(etag) }),
+      client.requestVersioned('patch', '/lists/{address}', { pathParams, body, headers: ifMatch(etag) }),
     onSuccess: async (exchange) => {
-      notify(
-        hasPendingConfigurationRun(exchange)
-          ? t('list.detail.savedPendingRun', { name: list.name })
-          : t('list.detail.saved', { name: list.name }),
-      );
+      const saved = exchange.data;
+
+      // A change is live at once in either mode: the script reads name, tag
+      // and members from `lists` at delivery time (U-143).
+      notify(t('list.detail.saved', { name: saved.name }));
       await queryClient.invalidateQueries({ queryKey: ['lists'] });
     },
   });
 
   const remove = useMutation({
-    mutationFn: () => client.requestVersioned('delete', '/lists/{listName}', { pathParams, headers: ifMatch(etag) }),
+    mutationFn: () => client.requestVersioned('delete', '/lists/{address}', { pathParams, headers: ifMatch(etag) }),
     onSuccess: async (exchange) => {
       setDeleting(false);
       notify(
@@ -148,7 +155,7 @@ function MailingListDetail({
           ? t('list.detail.deletedPendingRun', { name: list.name })
           : t('list.detail.deleted', { name: list.name }),
       );
-      queryClient.removeQueries({ queryKey: detailKey(list.name) });
+      queryClient.removeQueries({ queryKey: detailKey(list.address) });
       await queryClient.invalidateQueries({ queryKey: ['lists', 'list'] });
       void navigate('/lists', { replace: true });
     },
@@ -160,18 +167,29 @@ function MailingListDetail({
     },
   });
 
-  const fieldError = useFieldErrors(update.error);
-  const membersError = update.error === null
-    ? undefined
-    : errorAtOrBelow(describeUnknownError(update.error, translator).fieldErrors, 'body.members');
+  const fieldError = useFieldErrors(update.error, clientErrors);
+  const membersError = membersFieldError(update.error, sentMembers, translator);
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
 
+    // A legacy row may have no name; it stays editable in its other fields,
+    // and the name is demanded only once there was one or it is being changed.
+    const nameRequired = list.name.trim() !== '' || name !== list.name;
+    const missing = nameRequired ? required({ 'body.name': name }) : {};
+
+    setClientErrors(missing);
+
+    if (Object.keys(missing).length > 0) {
+      return;
+    }
+
     const parsedMembers = parseMembers(members);
     const body: MailingListUpdateRequest = {
-      ...(address.trim() === list.address ? {} : { address: address.trim() }),
-      ...(tag.trim() === list.tag ? {} : { tag: tag.trim() }),
+      // Compared trimmed on both sides: whitespace around a legacy value is
+      // not a change and is left as stored.
+      ...(name.trim() === list.name.trim() ? {} : { name: name.trim() }),
+      ...(tag.trim() === list.tag.trim() ? {} : { tag: tag.trim() }),
       ...(sameMembers(parsedMembers, list.members) ? {} : { members: parsedMembers }),
     };
 
@@ -182,6 +200,7 @@ function MailingListDetail({
     }
 
     setUnchanged(false);
+    setSentMembers(members);
     update.mutate(body);
   };
 
@@ -201,8 +220,6 @@ function MailingListDetail({
           ) : undefined
         }
       />
-
-      <ConfigRunHint />
 
       <Stack spacing={3}>
         {reloaded && (
@@ -225,21 +242,21 @@ function MailingListDetail({
             <Stack spacing={2}>
               <TextField
                 label={t('list.field.name')}
-                value={list.name}
-                disabled
-                helperText={t('list.detail.hint.name')}
-              />
-              <TextField
-                label={t('list.field.address')}
-                value={address}
+                required
+                value={name}
                 onChange={(event) => {
                   touched();
-                  setAddress(event.target.value);
+                  setName(event.target.value);
                 }}
                 disabled={!canWrite || update.isPending}
                 autoComplete="off"
-                slotProps={{ htmlInput: { spellCheck: false, autoCapitalize: 'off' } }}
-                {...fieldProps(fieldError, 'body.address')}
+                {...fieldProps(fieldError, 'body.name', t('list.form.hint.name'))}
+              />
+              <TextField
+                label={t('list.field.address')}
+                value={list.address}
+                disabled
+                helperText={t('list.detail.hint.address')}
               />
               <TextField
                 label={t('list.field.tag')}

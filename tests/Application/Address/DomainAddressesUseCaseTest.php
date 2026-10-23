@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mailadmin\Tests\Application\Address;
 
 use Mailadmin\Application\Address\AddressErrorCode;
+use Mailadmin\Application\Address\AddressOperationFailed;
 use Mailadmin\Application\Address\AddressView;
 use Mailadmin\Application\Address\CatchallChange;
 use Mailadmin\Application\Address\DeleteCatchall;
@@ -13,6 +14,7 @@ use Mailadmin\Application\Address\EntryKey;
 use Mailadmin\Application\Address\ListDomainAddresses;
 use Mailadmin\Application\Address\SetCatchall;
 use Mailadmin\Domain\Exception\InvalidAddress;
+use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Model\Virtual\VirtualEntryType;
 use Mailadmin\Domain\Model\Virtual\VirtualRow;
 use Mailadmin\Domain\Policy\ResourceNotVisible;
@@ -164,6 +166,92 @@ final class DomainAddressesUseCaseTest extends AddressUseCaseTestCase
         ));
 
         self::assertSame(AddressErrorCode::NOT_EDITABLE, $failure->errorCode);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function mailingListRows(): iterable
+    {
+        yield 'transport' => ['team.example.test@maillist.invalid', ''];
+        yield 'legacy' => ['team.example.test', 'team.example.test'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('mailingListRows')]
+    public function testAMailingListEntryIsListedAsSuchAndNotRemovedHere(string $dest, string $username): void
+    {
+        $this->mailingLists->given(MailingList::fromStoredValues('Team', 'team', 'team@example.test', ''));
+        $row = $this->virtual->givenRow('team@example.test', $dest, $username);
+
+        $listing = $this->listAddresses()->handle(
+            DomainFixture::superuser(),
+            self::domain(),
+            new ListCriteria(filters: ['type' => VirtualEntryType::MailingList->value]),
+        );
+        self::assertSame(1, $listing->page->total);
+        $view = AddressView::entry($listing->page->items[0], $listing->rows);
+        self::assertSame('mailing_list', $view['type']);
+        self::assertSame('team@example.test', $view['alias']);
+
+        $failure = $this->expectFailure(fn () => $this->deleteEntry()->handle(
+            DomainFixture::superuser(),
+            self::domain(),
+            EntryKey::of($row),
+            false,
+        ));
+
+        self::assertSame(AddressErrorCode::NOT_EDITABLE, $failure->errorCode);
+        self::assertSame(409, $failure->status);
+        self::assertSame(AddressOperationFailed::MANAGED_BY_MAILING_LIST, $failure->reason);
+        self::assertSame([sprintf('team@example.test|%s|%s|1', $dest, $username)], $this->rowsOf('team@example.test'));
+        self::assertSame([], $this->audit->withAction(DeleteDomainAddress::OPERATION));
+    }
+
+    public function testARowWithAMismatchedListDestinationIsUnknownAndASuperuserRemovesIt(): void
+    {
+        $row = $this->virtual->givenRow('mine@example.test', 'extern@elsewhere.test,team.other.test@maillist.invalid', '');
+
+        $listing = $this->listAddresses()->handle(
+            DomainFixture::superuser(),
+            self::domain(),
+            new ListCriteria(filters: ['alias' => 'mine@']),
+        );
+        $view = AddressView::entry($listing->page->items[0], $listing->rows);
+        self::assertSame('unknown', $view['type']);
+        self::assertSame('list_destination_mismatch', $view['unknown_reason']);
+
+        $this->deleteEntry()->handle(DomainFixture::superuser(), self::domain(), EntryKey::of($row), false);
+
+        self::assertSame([], $this->rowsOf('mine@example.test'));
+        self::assertCount(1, $this->audit->withAction(DeleteDomainAddress::OPERATION));
+    }
+
+    public function testATransportRowWhoseListIsGoneIsUnknownAndCanBeRemoved(): void
+    {
+        $row = $this->virtual->givenRow('crew@example.test', 'crew.example.test@maillist.invalid', '');
+
+        $listing = $this->listAddresses()->handle(
+            DomainFixture::superuser(),
+            self::domain(),
+            new ListCriteria(filters: ['alias' => 'crew@']),
+        );
+        $view = AddressView::entry($listing->page->items[0], $listing->rows);
+        self::assertSame('unknown', $view['type']);
+        self::assertSame('list_missing', $view['unknown_reason']);
+
+        $this->deleteEntry()->handle(DomainFixture::superuser(), self::domain(), EntryKey::of($row), false);
+
+        self::assertSame([], $this->rowsOf('crew@example.test'));
+        self::assertCount(1, $this->audit->withAction(DeleteDomainAddress::OPERATION));
+    }
+
+    public function testALegacyShapedRowWithoutAListIsStillAnAliasAndCanBeRemoved(): void
+    {
+        $row = $this->virtual->givenRow('crew@example.test', 'crew.example.test', 'crew.example.test');
+
+        $this->deleteEntry()->handle(DomainFixture::superuser(), self::domain(), EntryKey::of($row), false);
+
+        self::assertSame([], $this->rowsOf('crew@example.test'));
     }
 
     public function testAKeyOfAnotherDomainOrAMalformedOneIsNotFound(): void
@@ -321,6 +409,23 @@ final class DomainAddressesUseCaseTest extends AddressUseCaseTestCase
         );
 
         self::assertSame('anna.example.test', $state->senderAccount());
+    }
+
+    public function testACatchallCannotPointAtTheListTransport(): void
+    {
+        try {
+            $this->setCatchall()->handle(
+                DomainFixture::superuser(),
+                self::domain(),
+                new CatchallChange(['team.other.test@maillist.invalid']),
+                null,
+            );
+            self::fail('A transport destination was accepted.');
+        } catch (InvalidAddress $refused) {
+            self::assertSame('address.invalid_destination', $refused->code());
+        }
+
+        self::assertSame([], $this->rowsOf('@example.test'));
     }
 
     public function testACatchallIntoAnAddressOfItsOwnDomainThatDoesNotExistIsALoop(): void

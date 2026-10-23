@@ -6,8 +6,10 @@ namespace Mailadmin\Application\Domain;
 
 use Mailadmin\Application\Audit\AuditEntry;
 use Mailadmin\Application\Audit\AuditWriter;
+use Mailadmin\Application\MailingList\ListDelivery;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\Exception\DomainError;
+use Mailadmin\Domain\Exception\InvalidAddress;
 use Mailadmin\Domain\Mailstore\Mailstore;
 use Mailadmin\Domain\Mailstore\MailstoreFailure;
 use Mailadmin\Domain\Model\DomainName;
@@ -16,6 +18,7 @@ use Mailadmin\Domain\Model\MailboxIdentity;
 use Mailadmin\Domain\Policy\DomainPolicy;
 use Mailadmin\Domain\Repair\RepairQueue;
 use Mailadmin\Domain\Repair\RepairRequest;
+use Mailadmin\Infrastructure\Persistence\MailingListRepository;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -121,6 +124,15 @@ use Throwable;
  * Refusals before anything moved — an account whose name cannot be derived, an
  * unreachable mail store — are not audited, like A4's `409`s: nothing was
  * attempted, and the application log has them.
+ *
+ * ## Why a domain with mailing lists is not renamed (plan B5b)
+ *
+ * The rename rewrites `virtual.alias` but not `lists.address`, the list key in
+ * the `dest` of the transport row, or the legacy aliases file. Carrying them
+ * along is not atomic, and in the legacy mode not complete without a
+ * configuration run. So a domain with a row in `lists` is refused with
+ * `domain.rename_blocked_by_mailing_list` — first, before any mailbox or row is
+ * touched, and again under the namespace lock that list creation takes too.
  */
 final readonly class RenameDomain
 {
@@ -134,6 +146,8 @@ final readonly class RenameDomain
         private DomainDefaults $defaults,
         private AuditWriter $audit,
         private LoggerInterface $logger,
+        private ListDelivery $delivery,
+        private MailingListRepository $lists,
     ) {
     }
 
@@ -141,11 +155,18 @@ final readonly class RenameDomain
      * @throws \Mailadmin\Domain\Policy\AccessDenied
      * @throws \Mailadmin\Domain\Policy\ResourceNotVisible
      * @throws DomainOperationFailed
+     * @throws InvalidAddress when the target is the list transport domain
      * @throws \Mailadmin\Infrastructure\Persistence\PersistenceError
      */
     public function handle(ActorContext $actor, DomainName $from, DomainName $to): void
     {
         DomainPolicy::requireWrite($actor, $from);
+
+        // Before any mailbox moves: as a managed domain, the transport domain
+        // would stop every list (see CreateDomain).
+        if ($this->delivery->isTransportDomain($to)) {
+            throw InvalidAddress::transportDomainName($to->toString());
+        }
 
         if ($from->toString() === $to->toString()) {
             return;
@@ -153,6 +174,9 @@ final readonly class RenameDomain
 
         $current = $this->store->find($from) ?? throw DomainOperationFailed::notFound($from);
         $before = DomainView::full($current, $this->defaults);
+
+        // Before the plan, the probe and every mailbox.
+        $this->requireNoMailingLists($from);
 
         $plan = $this->plan($from, $to);
 
@@ -178,6 +202,7 @@ final readonly class RenameDomain
                     throw DomainOperationFailed::nameTaken($to);
                 }
 
+                $this->requireNoMailingLists($from);
                 $this->requirePlanCoversEveryAccount($from, $plan);
                 $this->requireNoLeftovers($from, $to);
                 $this->requireUnambiguous($from, $to, $plan);
@@ -301,6 +326,21 @@ final readonly class RenameDomain
             if ($namesake !== null && !$namesake->equals($from) && $this->store->exists($namesake)) {
                 throw DomainOperationFailed::namespaceConflict($to, $step->to->cyrusUsername());
             }
+        }
+    }
+
+    /**
+     * No row in `lists` with an address in `$from` (plan B5b).
+     *
+     * @throws DomainOperationFailed
+     * @throws \Mailadmin\Infrastructure\Persistence\PersistenceError
+     */
+    private function requireNoMailingLists(DomainName $from): void
+    {
+        $addresses = $this->lists->addressesInDomain($from);
+
+        if ($addresses !== []) {
+            throw DomainOperationFailed::renameBlockedByMailingList($from, count($addresses));
         }
     }
 

@@ -285,6 +285,26 @@ final class CreateAccountTest extends AccountUseCaseTestCase
         self::assertSame([], $this->mailstore->operations());
     }
 
+    public function testAUserNameThatIsTheKeyOfAMailingListIsTaken(): void
+    {
+        // U-145: the list `anna.kunde@example.test` has the key
+        // `anna.kunde.example.test`, which is the dotted Cyrus name of
+        // `anna@kunde.example.test`. In alias mode the aliases file sends that
+        // name to the list, ahead of the mailbox. The list's own `virtual` row
+        // is keyed by its address, so only the list key can answer.
+        $this->givenDomain(DomainFixture::domain('kunde.example.test', prefix: 'kunde'));
+        $this->accounts->givenListAddress('Anna.Kunde@example.test');
+
+        $failure = $this->expectFailure(fn () => $this->createAccount()->handle(
+            DomainFixture::superuser(),
+            DomainFixture::name('kunde.example.test'),
+            $this->draft(),
+        ));
+
+        self::assertSame(AccountErrorCode::NAME_TAKEN, $failure->errorCode);
+        self::assertSame([], $this->mailstore->operations());
+    }
+
     public function testADottedUserNameThatIsTheNameOfADomainIsTaken(): void
     {
         // `mail` in `example.test` is `mail.example.test` — the placeholder the

@@ -9,16 +9,15 @@ use Psr\Http\Message\ServerRequestInterface;
 /**
  * Reading the pieces of a request that four handlers all need.
  *
- * ## The path parameter is a name, not an id
+ * ## The path parameter is the list address
  *
- * `lists` has no surrogate key — `name` is the primary key (analysis 4.1) — so
- * `{listName}` carries the name, URL-encoded (U-60). Same reasoning as U-18 for
- * accounts: a numeric id would mean a second notion of identity for a row that
- * an external tool also writes, and keeping two of those in step is work that
- * buys nothing.
+ * `lists.name` is display text and may repeat; the address is what identifies
+ * a list (spec 4.3, "Identität"), so `{address}` carries it, URL-encoded
+ * (`team%40example.test`). A numeric id would mean a second notion of identity
+ * for a row that an external tool also writes.
  *
- * The router has already URL-decoded it. The value is passed on **whole** and is
- * never taken apart.
+ * The router does not URL-decode it, so this does. The value is passed on
+ * **whole** and is never taken apart; the use case parses it.
  *
  * ## `If-Match`
  *
@@ -28,17 +27,17 @@ use Psr\Http\Message\ServerRequestInterface;
  */
 final class MailingListPath
 {
-    public const string PARAMETER = 'listName';
+    public const string PARAMETER = 'address';
 
     private function __construct()
     {
     }
 
-    public static function name(ServerRequestInterface $request): string
+    public static function address(ServerRequestInterface $request): string
     {
         $value = $request->getAttribute(self::PARAMETER);
 
-        return is_string($value) ? $value : '';
+        return is_string($value) ? rawurldecode($value) : '';
     }
 
     public static function ifMatch(ServerRequestInterface $request): ?string

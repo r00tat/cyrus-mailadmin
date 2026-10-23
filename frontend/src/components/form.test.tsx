@@ -84,6 +84,19 @@ describe('form helpers', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('shows the catalogue text of a contract code given as the reason', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = new ApiProblem({ status: 422, code: 'list.tag_outside_latin1', errors: { 'body.name': 'list.tag_outside_latin1' } });
+
+    renderWithRouter(<Example serverError={error} onSubmit={vi.fn()} />);
+
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveAccessibleDescription(
+      'Das Kennzeichen enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
+    );
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('falls back to a generic reason for a validator keyword it does not know', () => {
     const error = new ApiProblem({ status: 422, code: 'request.validation_failed', errors: { 'body.name': 'oneOf' } });
 

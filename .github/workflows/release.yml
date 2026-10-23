@@ -2,9 +2,11 @@
 #
 # A tag v* runs every check, builds the release archive and publishes it as a
 # GitHub release, together with the installer, SHA256SUMS and a build
-# provenance attestation. The tag may come from `git push` or from creating
-# the release itself (`gh release create v1.2.0 --target main`); an existing
-# release gets the files attached. A server installs it with
+# provenance attestation. The list delivery script ships beside it as
+# maillist-<tag>.tar.gz with its own installer, install-maillist (maillist/).
+# The tag may come from `git push` or from creating the release itself
+# (`gh release create v1.2.0 --target main`); an existing release gets the
+# files attached. A server installs it with
 #
 #   curl -fsSLO https://github.com/r00tat/cyrus-mailadmin/releases/latest/download/install
 #   sudo bash install
@@ -72,6 +74,14 @@ jobs:
       - name: Shell scripts
         run: shellcheck bin/install bin/package-release bin/test-env
 
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+
+      - name: List delivery script
+        run: |
+          uv run --project maillist --extra dev pytest maillist/tests -q
+          uv run --project maillist --extra dev ruff check maillist maillist/install
+          uv run --project maillist --extra dev ruff format --check maillist maillist/install
+
   release:
     needs: check
     runs-on: ubuntu-24.04
@@ -129,6 +139,8 @@ jobs:
           subject-path: |
             dist/mailadmin-*.tar.gz
             dist/install
+            dist/maillist-*.tar.gz
+            dist/install-maillist
 
       # A release created by hand (gh release create, or the web page) creates
       # the tag and so starts this run; its title and notes stay, the files are

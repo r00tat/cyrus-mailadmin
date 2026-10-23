@@ -8,6 +8,7 @@ use Mailadmin\Application\Domain\CreateDomain;
 use Mailadmin\Application\Domain\DomainDraft;
 use Mailadmin\Application\Domain\DomainOperationFailed;
 use Mailadmin\Domain\Exception\DomainError;
+use Mailadmin\Domain\Exception\DomainErrorCode;
 use Mailadmin\Http\Handler\ApiHandler;
 use Mailadmin\Http\ParsedBody;
 use Psr\Http\Message\ResponseInterface;
@@ -53,7 +54,13 @@ final readonly class CreateDomainHandler implements ApiHandler
         } catch (DomainError $error) {
             // A value the contract let through and a value object refused —
             // a folder name, a quota. The name was already accepted above.
-            return $this->responder->invalid($request, $error, 'body');
+            // A name refused only here (the list transport domain) belongs
+            // to the name field like any other invalid name.
+            return $this->responder->invalid(
+                $request,
+                $error,
+                $error->code() === DomainErrorCode::DOMAIN_INVALID_NAME ? 'body.name' : 'body',
+            );
         }
 
         return $this->responder->created($request, $summary);

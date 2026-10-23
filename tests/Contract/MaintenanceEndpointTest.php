@@ -10,6 +10,8 @@ use Mailadmin\Application\Account\AccountStore;
 use Mailadmin\Application\Audit\AuditRequestContext;
 use Mailadmin\Application\Audit\AuditWriter;
 use Mailadmin\Application\Domain\DomainStore;
+use Mailadmin\Application\MailingList\ListDelivery;
+use Mailadmin\Application\MailingList\ListDeliveryMode;
 use Mailadmin\Application\Maintenance\FindingCategory;
 use Mailadmin\Application\Maintenance\HealthComponent;
 use Mailadmin\Application\Maintenance\HealthProbes;
@@ -23,6 +25,7 @@ use Mailadmin\Domain\Access\Permission;
 use Mailadmin\Domain\Access\RolePermissions;
 use Mailadmin\Domain\Mailstore\Mailstore;
 use Mailadmin\Domain\Model\AdminRole;
+use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\Virtual\VirtualRow;
 use Mailadmin\Domain\Repair\RepairQueue;
 use Mailadmin\Domain\Repair\RepairRequest;
@@ -38,6 +41,7 @@ use Mailadmin\Infrastructure\Persistence\InMemoryAdminDirectory;
 use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
 use Mailadmin\Infrastructure\Persistence\InMemoryDomainStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryTokenDenylist;
+use Mailadmin\Infrastructure\Persistence\PersistenceError;
 use Mailadmin\Infrastructure\Persistence\RepairQueueRepository;
 use Mailadmin\Infrastructure\Repair\InMemoryMaintenanceInventory;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairLedger;
@@ -68,6 +72,9 @@ final class MaintenanceEndpointTest extends ContractTestCase
     private InMemoryMailstore $mailstore;
     private InMemoryAccountStore $accounts;
     private bool $imapDown = false;
+    /** @var array<class-string, object> */
+    private array $overrides = [];
+    private InMemoryDomainStore $domains;
 
     protected function setUp(): void
     {
@@ -83,8 +90,8 @@ final class MaintenanceEndpointTest extends ContractTestCase
         $this->inventory = (new InMemoryMaintenanceInventory())->givenDomain('example.test');
         $this->mailstore = new InMemoryMailstore();
         $this->accounts = new InMemoryAccountStore();
-        $domains = new InMemoryDomainStore();
-        $domains->given(DomainFixture::domain());
+        $this->domains = new InMemoryDomainStore();
+        $this->domains->given(DomainFixture::domain());
 
         $probes = new HealthProbes(
             new TimedProbe(HealthComponent::Database, static function (): void {
@@ -98,10 +105,7 @@ final class MaintenanceEndpointTest extends ContractTestCase
             }),
         );
 
-        $environment = Bootstrap::prepare(Paths::detect());
-        $environment->cache->ensureUsable(mayCreate: true);
-
-        $this->container = Bootstrap::container($environment, [
+        $this->overrides = [
             AdminDirectory::class => $directory,
             TokenDenylist::class => new InMemoryTokenDenylist(),
             AuditWriter::class => $this->trail,
@@ -111,9 +115,23 @@ final class MaintenanceEndpointTest extends ContractTestCase
             MaintenanceInventory::class => $this->inventory,
             Mailstore::class => $this->mailstore,
             AccountStore::class => $this->accounts,
-            DomainStore::class => $domains,
+            DomainStore::class => $this->domains,
             HealthProbes::class => $probes,
             HealthReportCache::class => new UncachedHealthReports(),
+        ];
+        $this->boot(ListDeliveryMode::Alias);
+    }
+
+    private function boot(ListDeliveryMode $mode): void
+    {
+        $environment = Bootstrap::prepare(Paths::detect());
+        $environment->cache->ensureUsable(mayCreate: true);
+
+        $this->container = Bootstrap::container($environment, $this->overrides + [
+            ListDelivery::class => new ListDelivery(
+                DomainName::fromString(ListDelivery::DEFAULT_TRANSPORT_DOMAIN),
+                $mode,
+            ),
         ]);
     }
 
@@ -280,6 +298,57 @@ final class MaintenanceEndpointTest extends ContractTestCase
         self::assertSame(['database', 'imap', 'managesieve'], array_column($body['checks'], 'component'));
         self::assertSame('request.service_unavailable', $body['checks'][1]['code']);
         self::assertStringNotContainsString('refused', (string) json_encode($body));
+    }
+
+    public function testTheDetailedHealthShowsTheAliasDelivery(): void
+    {
+        $response = $this->call('GET', '/maintenance/health', 'root');
+
+        self::assertSame(200, $response->getStatusCode());
+        $this->assertMatchesContract('get', '/maintenance/health', $response);
+        self::assertSame(
+            ['mode' => 'alias', 'transport_domain' => 'maillist.invalid', 'transport_domain_is_managed' => false],
+            self::bodyOf($response)['list_delivery'],
+        );
+    }
+
+    public function testTheDetailedHealthShowsTheTransportDelivery(): void
+    {
+        $this->boot(ListDeliveryMode::Transport);
+
+        $response = $this->call('GET', '/maintenance/health', 'root');
+
+        self::assertSame(200, $response->getStatusCode());
+        $this->assertMatchesContract('get', '/maintenance/health', $response);
+        self::assertSame(
+            ['mode' => 'transport', 'transport_domain' => 'maillist.invalid', 'transport_domain_is_managed' => false],
+            self::bodyOf($response)['list_delivery'],
+        );
+    }
+
+    public function testATransportDomainThatIsAlsoAManagedDomainIsReported(): void
+    {
+        // Only legacy data or a direct database edit gets here: create and rename refuse it.
+        $this->domains->given(DomainFixture::domain('MailList.Invalid', prefix: 'maillist'));
+        $this->boot(ListDeliveryMode::Transport);
+
+        $response = $this->call('GET', '/maintenance/health', 'root');
+
+        self::assertSame(200, $response->getStatusCode());
+        $this->assertMatchesContract('get', '/maintenance/health', $response);
+        self::assertTrue(self::bodyOf($response)['list_delivery']['transport_domain_is_managed']);
+        self::assertSame('ok', self::bodyOf($response)['status'], 'A configuration warning, not a failed probe.');
+    }
+
+    public function testADatabaseThatCannotBeAskedLeavesTheManagedFlagOpen(): void
+    {
+        $this->domains->failOnExists(PersistenceError::configuration('no database configured'));
+
+        $response = $this->call('GET', '/maintenance/health', 'root');
+
+        self::assertSame(200, $response->getStatusCode(), 'The details answer even when the database does not.');
+        $this->assertMatchesContract('get', '/maintenance/health', $response);
+        self::assertNull(self::bodyOf($response)['list_delivery']['transport_domain_is_managed']);
     }
 
     // ------------------------------------------------------------ access

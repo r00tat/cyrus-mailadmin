@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace Mailadmin\Application\Address;
 
+use Mailadmin\Application\MailingList\ListDelivery;
 use Mailadmin\Domain\Model\DomainName;
+use Mailadmin\Domain\Model\Virtual\MailingListRecognition;
 use Mailadmin\Domain\Model\Virtual\VirtualEntryClassifier;
 use Mailadmin\Domain\Model\Virtual\VirtualRow;
+use Mailadmin\Infrastructure\Persistence\MailingListRepository;
 
 /**
  * Reads rows and classifies them — the one way A3's use cases see `virtual`.
@@ -14,12 +17,19 @@ use Mailadmin\Domain\Model\Virtual\VirtualRow;
  * The classifier needs `accountuser.domain_name` of every account a row names
  * (architecture 3.3: a user name cannot be taken apart), so the store is asked
  * once per set of rows, not once per row.
+ *
+ * It also needs to recognise mailing list rows (A5): the transport domain from
+ * {@see ListDelivery}, and the addresses in `lists` of every domain a row with
+ * the legacy list shape belongs to — again once per domain, and not at all
+ * when no row has that shape.
  */
 final readonly class AddressReader
 {
     public function __construct(
         private AddressStore $store,
         private VirtualEntryClassifier $classifier,
+        private MailingListRepository $lists,
+        private ListDelivery $delivery,
     ) {
     }
 
@@ -94,6 +104,28 @@ final readonly class AddressReader
             $stored[strtolower((string) $username)] = (string) $username;
         }
 
-        return new ClassifiedRows($this->classifier->classifyAll($rows, $domains), $accounts, $stored);
+        return new ClassifiedRows(
+            $this->classifier->classifyAll($rows, $this->recognition($rows), $domains),
+            $accounts,
+            $stored,
+        );
+    }
+
+    /**
+     * @param list<VirtualRow> $rows
+     *
+     * @throws \Mailadmin\Infrastructure\Persistence\PersistenceError
+     */
+    private function recognition(array $rows): MailingListRecognition
+    {
+        $addresses = [];
+
+        foreach (MailingListRecognition::domainsToLookUp($rows, $this->delivery->transportDomain) as $domain) {
+            foreach ($this->lists->addressesInDomain($domain) as $address) {
+                $addresses[] = $address;
+            }
+        }
+
+        return new MailingListRecognition($this->delivery->transportDomain, $addresses);
     }
 }

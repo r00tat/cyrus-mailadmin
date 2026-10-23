@@ -128,6 +128,7 @@ components:
         - domain.namespace_conflict
         - domain.not_empty
         - domain.prefix_taken
+        - domain.rename_blocked_by_mailing_list
         - domain.rename_incomplete
         - domain.rename_not_confirmed
         - domain.still_has_addresses
@@ -158,11 +159,17 @@ components:
         # `list.invalid_*` are raised for new or changed values only. A row that
         # is already in the table is shown and flagged, never rejected (U-22) —
         # `unusable_members` and `address_usable` in the representation.
-        - list.already_exists
+        - list.address_has_extension
+        - list.address_taken
         - list.invalid_address
         - list.invalid_member
         - list.invalid_name
         - list.invalid_tag
+        - list.member_not_deliverable
+        - list.member_outside_latin1
+        - list.name_outside_latin1
+        - list.tag_outside_latin1
+        - list.unknown_domain
         # --- addresses, aliases, catchall, forwards, vacation notice (A3) ---
         # `address.invalid*` sit in the domain-model block and belong to this
         # prefix; every `address.` name here sorts after `invalid_local_part`,
@@ -237,6 +244,11 @@ components:
             Field to reason, present on validation failures. The key is a
             dot-separated path (`body.quota`, `query.per_page`,
             `header.If-Match`), the value a short reason keyword.
+
+            A refusal that is no validation failure may narrow its `code`
+            down the same way: `address.not_editable` for a mailing list's
+            row of the address table carries
+            `entry: managed_by_mailing_list`.
 
             **Values are never echoed back.** The reason names the constraint
             that failed (`enum`, `maximum`, `required`), not the input — a
