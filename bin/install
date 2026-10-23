@@ -452,6 +452,11 @@ MAILADMIN_MANAGESIEVE_PORT='4190'
 
 # Naming scheme for NEW accounts only: dotted | fqun.
 MAILADMIN_NAMING_SCHEME='dotted'
+
+# Mailing lists: pseudo-domain of the pipe transport, and the delivery path
+# (alias | transport). Switch to transport once the Postfix side is set up.
+MAILADMIN_LIST_TRANSPORT_DOMAIN='maillist.invalid'
+MAILADMIN_LIST_DELIVERY='alias'
 EOF
 
     if [ "$dry_run" -eq 1 ]; then
