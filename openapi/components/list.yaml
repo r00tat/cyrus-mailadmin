@@ -12,9 +12,9 @@
 #     display text, so the path carries the URL-encoded address and `address`
 #     is absent from the update request: moving a list is a delete and a create
 #     (spec 4.3, "Identität").
-#   * **On the legacy alias path a write does not take effect at once.** The
-#     aliases file is rendered by the configuration management (E-4), and the
-#     answer says so through `MailingListEffect` (U-59).
+#   * **On the legacy alias path the aliases file lags behind.** It is rendered
+#     by the configuration management (E-4); a create or delete says so through
+#     `MailingListEffect` (U-59, U-143). Delivery itself does not wait.
 #
 components:
   schemas:
@@ -303,21 +303,23 @@ components:
   headers:
     MailingListEffect:
       description: |
-        Present on every answer that changed something **while list mail still
-        runs over the legacy alias file** (`MAILADMIN_LIST_DELIVERY=alias`). The
-        one value is `pending-configuration-run`.
+        Present on the answer to a create or a delete **while the legacy aliases
+        file is still rendered** (`MAILADMIN_LIST_DELIVERY=alias`). The one value
+        is `pending-configuration-run`.
 
-        On that path the aliases file is rendered from `lists` by the
-        configuration management (E-4), so until the next configuration run a new
-        list does not deliver and a deleted one still does. On the transport path
-        (`MAILADMIN_LIST_DELIVERY=transport`) the `virtual` entry routes the
-        address to the pipe transport, a change is live once saved, and the
-        header is absent. A stable keyword rather than a sentence — the frontend
-        translates it (E-16).
+        Delivery does not wait: a new list's `virtual` entry already routes the
+        address to the pipe transport, and a deleted list's entry is removed, so
+        mail to it stops at once. What waits is the aliases file the
+        configuration management renders from `lists` (E-4): until the next
+        configuration run it lacks the new list's line, or still holds the
+        deleted one. A change of name, tag or members waits for nothing and
+        carries no header; on the transport path
+        (`MAILADMIN_LIST_DELIVERY=transport`) no answer carries it (U-143). A
+        stable keyword rather than a sentence — the frontend translates it
+        (E-16).
 
-        A header rather than a body field because `DELETE` answers `204`, and the
-        write with the most surprising delay is the one that would otherwise have
-        no place to say so (U-59).
+        A header rather than a body field because `DELETE` answers `204` and
+        has no body (U-59).
       schema:
         type: string
         enum:

@@ -139,11 +139,9 @@ function MailingListDetail({
     onSuccess: async (exchange) => {
       const saved = exchange.data;
 
-      notify(
-        hasPendingConfigurationRun(exchange)
-          ? t('list.detail.savedPendingRun', { name: saved.name })
-          : t('list.detail.saved', { name: saved.name }),
-      );
+      // A change is live at once in either mode: the script reads name, tag
+      // and members from `lists` at delivery time (U-143).
+      notify(t('list.detail.saved', { name: saved.name }));
       await queryClient.invalidateQueries({ queryKey: ['lists'] });
     },
   });

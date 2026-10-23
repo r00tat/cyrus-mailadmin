@@ -181,7 +181,7 @@ final class MailingListEndpointTest extends ContractTestCase
         self::assertSame(
             MailingListResponder::EFFECT_PENDING,
             $response->getHeaderLine(MailingListResponder::EFFECT_HEADER),
-            'A write has to say that it is not in effect until the configuration runs.',
+            'A new list delivers at once, but the aliases file only follows with the next configuration run.',
         );
         self::assertSame('carla@example.test', $this->lists->storedMembers('new-list@example.test'));
     }
@@ -489,10 +489,9 @@ final class MailingListEndpointTest extends ContractTestCase
 
         self::assertSame('crew', self::bodyOf($response)['tag']);
         self::assertSame(self::LEGACY_MEMBERS, $this->lists->storedMembers('legacy@example.test'));
-        self::assertSame(
-            MailingListResponder::EFFECT_PENDING,
-            $response->getHeaderLine(MailingListResponder::EFFECT_HEADER),
-        );
+        // The script reads name, tag and members from `lists` at delivery
+        // time, and the aliases file holds none of them: nothing waits.
+        self::assertFalse($response->hasHeader(MailingListResponder::EFFECT_HEADER));
     }
 
     public function testAStaleIfMatchIsRefusedAndAFreshOneIsNot(): void
@@ -535,14 +534,15 @@ final class MailingListEndpointTest extends ContractTestCase
         self::assertSame(
             MailingListResponder::EFFECT_PENDING,
             $response->getHeaderLine(MailingListResponder::EFFECT_HEADER),
-            'The delete is the response with no body — and the one whose delay is least expected.',
+            'Mail stops at once, but the aliases file keeps the entry until the next configuration run.',
         );
     }
 
-    public function testOnTheAliasPathEveryWriteAnnouncesThePendingConfigurationRun(): void
+    public function testOnTheAliasPathCreateAndDeleteAnnounceThePendingConfigurationRun(): void
     {
+        // A change touches neither `virtual` nor the aliases file (U-143).
         self::assertSame(
-            [MailingListResponder::EFFECT_PENDING, MailingListResponder::EFFECT_PENDING, MailingListResponder::EFFECT_PENDING],
+            [MailingListResponder::EFFECT_PENDING, '', MailingListResponder::EFFECT_PENDING],
             $this->effectsOfCreateChangeAndDelete(),
         );
     }

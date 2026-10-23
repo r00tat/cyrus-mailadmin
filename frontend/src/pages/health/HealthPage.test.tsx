@@ -84,7 +84,7 @@ describe('the health view', () => {
 
     const section = await screen.findByRole('region', { name: 'Listenzustellung' });
 
-    expect(within(section).getByText('Aliasdatei (wartet auf den Konfigurationslauf)')).toBeInTheDocument();
+    expect(within(section).getByText('Aliasdatei (Altweg noch aktiv)')).toBeInTheDocument();
   });
 
   it('warns when the transport domain is also a managed domain', async () => {

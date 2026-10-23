@@ -13,10 +13,11 @@ use Psr\Http\Message\ServerRequestInterface;
 /**
  * `DELETE /lists/{address}`.
  *
- * `204` and no body — and the `X-Mailadmin-Effect` header, which is the reason
- * the notice about the configuration run is a header at all: this is the
- * response with no body to put it in, and it is the response whose delay is
- * least expected. The address keeps working until the next configuration run.
+ * `204` and no body — and, on the legacy alias path, the `X-Mailadmin-Effect`
+ * header, which is the reason the notice about the configuration run is a
+ * header at all: this is the response with no body to put it in. Mail to the
+ * address stops at once, because its `virtual` entry is gone; the aliases file
+ * keeps the list's line until the next configuration run (U-143).
  */
 final readonly class DeleteMailingListHandler implements ApiHandler
 {

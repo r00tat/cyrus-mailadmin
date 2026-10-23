@@ -7,9 +7,10 @@ import { describeUnknownError } from '../../i18n/problemText';
 /**
  * Pieces the mailing list views share (A5).
  *
- * None of them states that a change waits for the next configuration run. That
- * holds only in alias delivery mode, and the server says it per answer in
- * `X-Mailadmin-Effect`; the confirmations follow that header
+ * None of them states that something waits for the next configuration run. In
+ * alias delivery mode the server says so per answer in `X-Mailadmin-Effect`, on
+ * create and delete only: the list delivers, or stops, at once, and only the
+ * aliases file lags behind (U-143). The confirmations follow that header
  * (`hasPendingConfigurationRun`), so the transport mode never shows it.
  */
 

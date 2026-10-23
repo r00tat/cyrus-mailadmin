@@ -151,7 +151,7 @@ export const deMaintenance = {
   'maintenance.health.noCode': '—',
   'maintenance.health.listDelivery.title': 'Listenzustellung',
   'maintenance.health.listDelivery.mode': 'Zustellweg',
-  'maintenance.health.listDelivery.mode.alias': 'Aliasdatei (wartet auf den Konfigurationslauf)',
+  'maintenance.health.listDelivery.mode.alias': 'Aliasdatei (Altweg noch aktiv)',
   'maintenance.health.listDelivery.mode.transport': 'Pipe-Transport',
   'maintenance.health.listDelivery.transportDomain': 'Transportdomain',
   'maintenance.health.listDelivery.managed':

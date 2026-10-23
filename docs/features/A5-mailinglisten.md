@@ -89,8 +89,11 @@ Geteilte Dateien, die A5 angefasst hat — jeweils nur der eigene Block:
 
 - **Anlegen: `lists` zuerst, dann `virtual`. Löschen: `virtual` zuerst, dann `lists`.** Beides
   unter der Namensraumsperre, mit Kompensation und Reparaturwarteschlange (U-138).
-- Änderungen wirken im Transportmodus sofort. Nur im Altmodus (`MAILADMIN_LIST_DELIVERY=alias`)
-  wirken sie erst nach dem nächsten Konfigurationslauf, und nur dann sagt die Antwort das (U-143).
+- Anlegen, Ändern und Löschen wirken in beiden Modi sofort auf die Zustellung: Eine neue Liste
+  bekommt schon im Altmodus die Transportform in `virtual`, eine gelöschte verliert ihren
+  `virtual`-Eintrag, und Name, Tag und Mitglieder liest `maillist.py` bei jeder Zustellung aus
+  `lists`. Im Altmodus (`MAILADMIN_LIST_DELIVERY=alias`) hinkt nur die Aliasdatei hinterher; das
+  sagen die Antworten auf Anlegen und Löschen (U-143).
 
 > **Überholt:** Die ursprüngliche Vorgabe nannte die Spalten `name`, `tag`, `address`, `members`
 > mit `name` als Primärschlüssel, und Änderungen wirkten immer erst nach dem Konfigurationslauf.
@@ -135,8 +138,10 @@ solange niemand sie ändert. Unbrauchbare Adressen und Mitglieder sind markiert,
 Domain erscheinen Listeneinträge mit eigenem Typ, einem Verweis auf die Liste und ohne Aktionen.
 
 Der Hinweis auf den Konfigurationslauf folgt **nur** der Antwort: Trägt sie
-`X-Mailadmin-Effect: pending-configuration-run` (nur im Altmodus), nennt die Erfolgsmeldung den
-Konfigurationslauf, sonst nicht (U-132, U-143). Der frühere ständige Hinweis auf jeder Listenseite,
+`X-Mailadmin-Effect: pending-configuration-run` (nur im Altmodus, nur beim Anlegen und Löschen),
+sagt die Erfolgsmeldung, dass die Liste sofort zustellt bzw. keine Mail mehr annimmt und nur die
+Aliasdatei erst beim nächsten Konfigurationslauf nachzieht; sonst erwähnt sie ihn nicht (U-132,
+U-143). Der frühere ständige Hinweis auf jeder Listenseite,
 im Anlegedialog und in der Löschbestätigung ist entfallen.
 
 ## Endpunkte
@@ -196,7 +201,8 @@ mit Verweis auf die neue Entscheidung.
    kein Empfänger ist, wird übersprungen.
 5. **Hinweis auf den Konfigurationslauf** → **U-59**, eingeschränkt durch **U-143**: der Kopf
    `X-Mailadmin-Effect: pending-configuration-run` erscheint nur noch bei
-   `MAILADMIN_LIST_DELIVERY=alias`. Im Transportmodus wirkt jede Änderung sofort.
+   `MAILADMIN_LIST_DELIVERY=alias` und nur beim Anlegen und Löschen. Er sagt, dass die Aliasdatei
+   nachzieht, nicht dass die Zustellung wartet; die wirkt in beiden Modi sofort.
 
 Neu hinzugekommen:
 
@@ -221,7 +227,7 @@ Neu hinzugekommen:
 | Listen lassen sich anlegen, ändern und löschen, ohne dass bestehende Einträge beschädigt werden | **erfüllt** — Unit-, Anwendungs-, Vertrags- und Integrationstest; Anlegen und Löschen schreiben `lists` und `virtual` |
 | Das Format von `members` entspricht exakt dem, was der Leser erwartet | **erfüllt** — Golden-Dateien, geprüft gegen `MemberList` und `maillist.py`; unverändert gespeicherte Listen sind byteweise identisch |
 | Eine in mailadmin angelegte Liste empfängt Mail | **erfüllt** — Ende-zu-Ende-Test in der Testumgebung: Postfix übergibt dem Transport den richtigen Listenschlüssel; nach dem Löschen kommt nichts mehr an |
-| Der Hinweis auf den nötigen Konfigurationslauf erscheint, wenn einer nötig ist | **erfüllt** — `X-Mailadmin-Effect` auf `201`, `200` und `204`, nur im Altmodus; Vertragstests für beide Modi |
+| Der Hinweis auf den nötigen Konfigurationslauf erscheint, wenn einer nötig ist | **erfüllt** — `X-Mailadmin-Effect` auf `201` und `204`, nur im Altmodus; `200` trägt ihn nicht, weil eine Änderung auf nichts wartet; Vertragstests für beide Modi |
 | Oberfläche: Liste, Anlegen, Ändern, Löschen mit `If-Match` | **erfüllt** — nur geänderte Felder, `412` mit Neuladen; jsdom-Tests in `frontend/src/pages/lists/lists.test.tsx` |
 | Domainmaster verwalten die Listen ihrer Domains | **erfüllt** — Anwendungs- und Vertragstests: eigene Domain `200`/`204`, fremde `404`, Anlegen fremd `403` |
 | Änderungen sind protokolliert | **erfüllt** — `mailadmin_audit`: `list.create`, `list.update`, `list.delete`, beim Anlegen und Löschen mit dem `virtual`-Eintrag als Kindeintrag; das Umstellungskommando schreibt `list.delivery_migrate`/`list.delivery_revert` |

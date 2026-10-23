@@ -27,11 +27,14 @@ use Psr\Http\Message\StreamFactoryInterface;
  * ## The effect header
  *
  * On the legacy alias path ({@see ListDelivery::changesNeedConfigurationRun()}),
- * every state-changing answer carries `X-Mailadmin-Effect: pending-configuration-run`
- * (U-59). There the aliases file is rendered by the configuration management
- * (E-4), so between the `204` and the next configuration run the change is
- * invisible to the mail system, and an administrator who is not told that looks
- * for the fault in the wrong place.
+ * a create and a delete carry `X-Mailadmin-Effect: pending-configuration-run`
+ * (U-59, U-143). Delivery itself does not wait: a new list's `virtual` entry
+ * already routes to the pipe transport, and a deleted list's entry is gone, so
+ * mail stops at once. What waits is the aliases file the configuration
+ * management renders from `lists` (E-4): it gains the new list's line, or
+ * keeps the deleted one, until the next run. A change waits for nothing —
+ * the script reads name, tag and members from `lists` at delivery time, and
+ * the aliases file holds none of them — so {@see changed()} carries no header.
  *
  * On the transport path the header is absent: the `virtual` entry routes the
  * address to the pipe transport, and a change is live once it is saved. Saying
@@ -109,7 +112,7 @@ final readonly class MailingListResponder
 
     public function changed(MailingList $list): ResponseInterface
     {
-        return $this->withEffect($this->single($list));
+        return $this->single($list);
     }
 
     public function deleted(): ResponseInterface

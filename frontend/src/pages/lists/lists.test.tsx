@@ -111,7 +111,7 @@ describe('the mailing list list', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Anlegen' }));
 
     expect(await screen.findByRole('heading', { level: 1, name: 'new' })).toBeInTheDocument();
-    expect(screen.getByText('Liste new angelegt. Sie stellt nach dem nächsten Konfigurationslauf zu.')).toBeInTheDocument();
+    expect(screen.getByText('Liste new angelegt. Sie stellt sofort zu; die Aliasdatei des Mailservers wird erst beim nächsten Konfigurationslauf ergänzt.')).toBeInTheDocument();
 
     const [post] = double.callsTo('/api/v1/lists').filter((call) => call.method === 'POST');
 
@@ -324,7 +324,9 @@ describe('one mailing list', () => {
 
     expect(patch!.body).toEqual({ tag: 'extern' });
     expect(patch!.headers.get('If-Match')).toBe('"l1"');
-    expect(await screen.findByText(/Die Änderung wirkt nach dem nächsten Konfigurationslauf/)).toBeInTheDocument();
+    // Even with the header, a change is in effect at once: the script reads the list at delivery time.
+    expect(await screen.findByText('Liste Team intern gespeichert.')).toBeInTheDocument();
+    expect(screen.queryByText(/Konfigurationslauf/)).toBeNull();
   });
 
   it('sends the whole member list when it changed', async () => {
@@ -382,7 +384,7 @@ describe('one mailing list', () => {
     const [remove] = double.callsTo('/api/v1/lists/team%40example.test').filter((call) => call.method === 'DELETE');
 
     expect(remove!.headers.get('If-Match')).toBe('"l1"');
-    expect(await screen.findByText('Liste Team intern gelöscht. Sie stellt bis zum nächsten Konfigurationslauf weiter zu.')).toBeInTheDocument();
+    expect(await screen.findByText('Liste Team intern gelöscht. Mail an ihre Adresse wird ab sofort nicht mehr angenommen; aus der Aliasdatei des Mailservers verschwindet sie erst beim nächsten Konfigurationslauf.')).toBeInTheDocument();
   });
 
   it('confirms a delete without the configuration run when the answer has no effect header', async () => {

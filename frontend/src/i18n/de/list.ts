@@ -38,7 +38,8 @@ export const deList = {
   'list.create.title': 'Mailingliste anlegen',
   'list.create.submit': 'Anlegen',
   'list.create.saved': 'Liste {{name}} angelegt.',
-  'list.create.savedPendingRun': 'Liste {{name}} angelegt. Sie stellt nach dem nächsten Konfigurationslauf zu.',
+  'list.create.savedPendingRun':
+    'Liste {{name}} angelegt. Sie stellt sofort zu; die Aliasdatei des Mailservers wird erst beim nächsten Konfigurationslauf ergänzt.',
 
   'list.detail.action.delete': 'Löschen',
   'list.detail.hint.address': 'Die Adresse lässt sich nicht ändern. Zum Ändern der Adresse die Liste löschen und neu anlegen.',
@@ -50,9 +51,9 @@ export const deList = {
     '{{count}} Einträge sind keine Mailadressen, an die der Verteiler zustellt: {{members}}. Sie bleiben erhalten, solange die Mitglieder nicht geändert werden; neue Einträge dieser Art nimmt der Server nicht an.',
   'list.detail.unchanged': 'Es gibt nichts zu speichern.',
   'list.detail.saved': 'Liste {{name}} gespeichert.',
-  'list.detail.savedPendingRun': 'Liste {{name}} gespeichert. Die Änderung wirkt nach dem nächsten Konfigurationslauf.',
   'list.detail.deleted': 'Liste {{name}} gelöscht.',
-  'list.detail.deletedPendingRun': 'Liste {{name}} gelöscht. Sie stellt bis zum nächsten Konfigurationslauf weiter zu.',
+  'list.detail.deletedPendingRun':
+    'Liste {{name}} gelöscht. Mail an ihre Adresse wird ab sofort nicht mehr angenommen; aus der Aliasdatei des Mailservers verschwindet sie erst beim nächsten Konfigurationslauf.',
   'list.detail.reloaded': 'Die Liste wurde neu geladen. Prüfe den Stand und ändere erneut.',
 
   'list.delete.title': 'Liste {{name}} löschen?',

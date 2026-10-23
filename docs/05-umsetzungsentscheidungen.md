@@ -5155,7 +5155,17 @@ Konfigurationslauf?
 **Entscheidung:**
 
 - **`MAILADMIN_LIST_DELIVERY=alias|transport`** (Standard `alias`) sagt, ob der Aliasweg noch
-  aktiv ist. Nur bei `alias` tragen schreibende Antworten den Kopf aus U-59. Die Oberfläche zeigt
+  aktiv ist. Nur bei `alias` tragen schreibende Antworten den Kopf aus U-59, und
+  (Nachtrag aus dem Abschlussreview) nur die auf **Anlegen und Löschen**. Geprüft am Code: Auch im
+  Altmodus schreibt `CreateMailingList` die Transportform `dest = <schluessel>@<Pseudodomain>`,
+  `username = ''`; eine neue Liste stellt also sofort zu, sobald Schritt 2 der Umstellung (Transport
+  im Salt-State) erledigt ist, und nur ihre Zeile in der Aliasdatei folgt mit dem nächsten
+  Konfigurationslauf. Beim Löschen verschwindet der `virtual`-Eintrag sofort, Mail an die Adresse
+  wird nicht mehr angenommen; nur die Zeile in der Aliasdatei bleibt bis zum nächsten Lauf. Eine
+  Änderung von Name, Tag oder Mitgliedern wartet auf nichts — `maillist.py` liest sie bei jeder
+  Zustellung aus `lists`, die Aliasdatei enthält sie nicht —, und ihre Antwort trägt den Kopf nicht
+  mehr. Die Erfolgsmeldungen sagen das je Vorgang so; die frühere Fassung („stellt nach dem nächsten
+  Konfigurationslauf zu“, „stellt bis dahin weiter zu“, „wirkt nach dem nächsten Lauf“) war falsch. Die Oberfläche zeigt
   den Hinweis nur noch, wenn die Antwort den Kopf trägt; der ständige Hinweis auf jeder Listenseite,
   im Anlegedialog und in der Löschbestätigung ist entfallen. Im Transportmodus wirkt eine Änderung
   sofort.

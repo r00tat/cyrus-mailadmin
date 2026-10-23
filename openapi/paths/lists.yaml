@@ -24,10 +24,12 @@ tags:
 
       Two consequences a client has to carry:
 
-        * while list mail still runs over the legacy alias file, every write
-          answers with `X-Mailadmin-Effect: pending-configuration-run`, because
-          the change is in the database and not yet in the mail system. On the
-          transport path the header is absent and a change is live at once;
+        * while the legacy alias file is still rendered, creating and deleting
+          a list answer with `X-Mailadmin-Effect: pending-configuration-run`:
+          the list delivers, or stops, at once, but the aliases file only
+          follows with the next configuration run. A change to name, tag or
+          members is live at once and carries no header; on the transport path
+          no answer carries it;
         * rows that were written before this application existed may contain
           values it would not accept. They are shown and flagged
           (`unusable_members`, `address_usable`), never filtered out and never
@@ -93,9 +95,10 @@ paths:
         A domain master may create lists in their own domains only. Any other
         domain is `403` — not `404`, because no existing object is being hidden.
 
-        Whether the address delivers at once depends on the delivery path: on
-        the legacy alias path it starts working at the next configuration run,
-        and the answer carries `X-Mailadmin-Effect` to say so.
+        The address delivers at once on either delivery path: its `virtual`
+        entry routes to the pipe transport. On the legacy alias path the
+        aliases file gains the list's line only with the next configuration
+        run, and the answer carries `X-Mailadmin-Effect` to say so.
 
         Every member has to be a mail address. That is a security rule, not
         validation: the column is rendered into an aliases file, where `|command`
@@ -208,6 +211,9 @@ paths:
         identifies the list, so moving a list is a delete and a create. A body
         that names `address` — or any other field the schema does not list —
         is `422`. Only `lists` is written; the entry in `virtual` stays as it is.
+        The change is live at once on either delivery path — the delivery
+        script reads the list at delivery time — so the answer never carries
+        `X-Mailadmin-Effect`.
 
         A domain master changes the lists of their own domains; any other list
         is `404`.
@@ -231,8 +237,6 @@ paths:
               $ref: '#/components/headers/XRequestId'
             ETag:
               $ref: '#/components/headers/ETag'
-            X-Mailadmin-Effect:
-              $ref: '#/components/headers/MailingListEffect'
           content:
             application/json:
               schema:
@@ -260,7 +264,8 @@ paths:
         `virtual` entry the list is already unreachable. Nothing is removed from
         the mail store, because nothing was ever created there.
 
-        On the legacy alias path the address keeps delivering until the
+        Mail to the address stops at once on either delivery path. On the
+        legacy alias path the aliases file keeps the list's line until the
         configuration management next runs; the answer then carries
         `X-Mailadmin-Effect` although it has no body.
 
