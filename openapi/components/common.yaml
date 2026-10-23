@@ -165,6 +165,7 @@ components:
         - list.invalid_member
         - list.invalid_name
         - list.invalid_tag
+        - list.name_outside_latin1
         - list.unknown_domain
         # --- addresses, aliases, catchall, forwards, vacation notice (A3) ---
         # `address.invalid*` sit in the domain-model block and belong to this

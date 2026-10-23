@@ -310,6 +310,64 @@ final class MailingListEndpointTest extends ContractTestCase
         }
     }
 
+    public function testTheNameIsDisplayTextOnCreateAndOnUpdate(): void
+    {
+        $token = $this->tokenFor('root');
+
+        $created = $this->send('POST', '/api/v1/lists', [
+            'name' => 'Team Nord: Grüße',
+            'address' => 'nord@example.test',
+        ], $token);
+
+        self::assertSame(201, $created->getStatusCode());
+        $this->assertMatchesContract('post', '/lists', $created);
+        self::assertSame('Team Nord: Grüße', self::bodyOf($created)['name']);
+
+        $changed = $this->send('PATCH', '/api/v1/lists/nord%40example.test', ['name' => 'Team Süd und Nord'], $token);
+
+        self::assertSame(200, $changed->getStatusCode());
+        $this->assertMatchesContract('patch', '/lists/{address}', $changed);
+        self::assertSame('Team Süd und Nord', self::bodyOf($changed)['name']);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function unstorableNames(): iterable
+    {
+        yield 'a control character' => ["two\nlines", 'request.validation_failed'];
+        yield '256 characters' => [str_repeat('a', 256), 'request.validation_failed'];
+        yield 'outside latin1' => ['Team 🎉', 'list.name_outside_latin1'];
+    }
+
+    #[DataProvider('unstorableNames')]
+    public function testANameThatCannotBeStoredIsRefusedOnCreate(string $name, string $code): void
+    {
+        $response = $this->send('POST', '/api/v1/lists', [
+            'name' => $name,
+            'address' => 'refused@example.test',
+        ], $this->tokenFor('root'));
+
+        self::assertSame(422, $response->getStatusCode());
+        $this->assertMatchesContract('post', '/lists', $response);
+        self::assertSame($code, self::bodyOf($response)['code']);
+        self::assertArrayHasKey('body.name', self::bodyOf($response)['errors']);
+    }
+
+    #[DataProvider('unstorableNames')]
+    public function testANameThatCannotBeStoredIsRefusedOnUpdate(string $name, string $code): void
+    {
+        $writes = $this->lists->writeCount();
+
+        $response = $this->send('PATCH', '/api/v1/lists/team%40example.test', ['name' => $name], $this->tokenFor('root'));
+
+        self::assertSame(422, $response->getStatusCode());
+        $this->assertMatchesContract('patch', '/lists/{address}', $response);
+        self::assertSame($code, self::bodyOf($response)['code']);
+        self::assertArrayHasKey('body.name', self::bodyOf($response)['errors']);
+        self::assertSame($writes, $this->lists->writeCount());
+    }
+
     public function testAPipeEntryIsRefusedOverTheWire(): void
     {
         // The end-to-end form of the package's one security rule: this column is

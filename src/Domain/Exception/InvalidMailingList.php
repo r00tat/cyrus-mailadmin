@@ -31,7 +31,7 @@ final class InvalidMailingList extends DomainError
     {
         return new self(
             DomainErrorCode::LIST_INVALID_NAME,
-            sprintf('A mailing list name must not exceed %d bytes, got %d.', $limit, $length),
+            sprintf('A mailing list name must not exceed %d characters, got %d.', $limit, $length),
             ['length' => $length, 'limit' => $limit],
         );
     }
@@ -45,16 +45,18 @@ final class InvalidMailingList extends DomainError
         );
     }
 
-    public static function unconventionalName(string $name): self
+    /**
+     * `lists` is latin1. A character it cannot hold would make MariaDB refuse
+     * the write or store `?` — see {@see \Mailadmin\Domain\MailingList\MailingListName}.
+     * The excerpt is left out: it is exactly the text that may not render.
+     */
+    public static function nameOutsideLatin1(string $name): self
     {
         return new self(
-            DomainErrorCode::LIST_INVALID_NAME,
-            sprintf(
-                'Mailing list name "%s" uses characters that are not allowed for new lists. '
-                . 'Allowed: letters, digits and . - _ +, starting and ending with a letter or digit.',
-                self::excerpt($name),
-            ),
-            ['name' => self::excerpt($name)],
+            DomainErrorCode::LIST_NAME_OUTSIDE_LATIN1,
+            'A mailing list name may only use printable latin1 characters (ISO 8859-1); '
+            . 'the column cannot store the others.',
+            ['length' => strlen($name)],
         );
     }
 

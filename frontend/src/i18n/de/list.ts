@@ -35,7 +35,7 @@ export const deList = {
   'list.create.title': 'Mailingliste anlegen',
   'list.create.submit': 'Anlegen',
   'list.create.hint.name':
-    'Buchstaben, Ziffern und . - _ +, am Anfang und Ende ein Buchstabe oder eine Ziffer. Der Name lässt sich später nicht ändern.',
+    'Freier Anzeigename mit bis zu 255 Zeichen. Leerzeichen und Umlaute sind möglich, Emojis und Steuerzeichen nicht.',
   'list.create.saved': 'Liste {{name}} angelegt.',
   'list.create.savedPendingRun': 'Liste {{name}} angelegt. Sie stellt nach dem nächsten Konfigurationslauf zu.',
 

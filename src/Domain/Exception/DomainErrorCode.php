@@ -62,12 +62,19 @@ final class DomainErrorCode
     public const string ADMIN_INVALID_SCOPE = 'admin.invalid_scope';
 
     // ------------------------------------------------------------------
-    // A5 — mailing lists. All four are raised for **new or changed** values
+    // A5 — mailing lists. All of them are raised for **new or changed** values
     // only; a row that is already in `lists` is shown, never rejected (U-22).
     // ------------------------------------------------------------------
 
-    /** A mailing list name that is empty, too long or shaped unusably. */
+    /** A mailing list name that is empty, longer than 255 characters or carries a control character. */
     public const string LIST_INVALID_NAME = 'list.invalid_name';
+
+    /**
+     * A mailing list name with a character the latin1 column cannot store —
+     * an emoji, `€`, a C1 control. Its own code because the fix is different:
+     * the name is fine as a label, the table is not.
+     */
+    public const string LIST_NAME_OUTSIDE_LATIN1 = 'list.name_outside_latin1';
 
     /** A mailing list tag that is too long or carries a control character. */
     public const string LIST_INVALID_TAG = 'list.invalid_tag';

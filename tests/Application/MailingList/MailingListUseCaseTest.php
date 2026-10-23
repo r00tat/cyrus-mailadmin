@@ -166,7 +166,7 @@ final class MailingListUseCaseTest extends TestCase
         self::assertSame('renamed-list', $this->repository->find(EmailAddress::parse(self::LEGACY))?->name->toString());
     }
 
-    public function testANewDisplayNameGoesThroughTheStrictDoor(): void
+    public function testANewDisplayNameWithAControlCharacterIsRefused(): void
     {
         $this->givenLegacyList();
 

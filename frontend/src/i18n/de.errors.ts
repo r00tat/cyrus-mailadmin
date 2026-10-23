@@ -133,6 +133,7 @@ export const deErrors = {
   'errors.list.invalid_member': 'Mindestens eine Mitgliedsadresse ist unzulässig.',
   'errors.list.invalid_name': 'Der Listenname ist unzulässig.',
   'errors.list.invalid_tag': 'Die Listenkennung ist unzulässig.',
+  'errors.list.name_outside_latin1': 'Der Listenname enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
   'errors.list.unknown_domain': 'Die Domain der Listenadresse wird hier nicht verwaltet.',
 
   // Reparaturwarteschlange (A6)

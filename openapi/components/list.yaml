@@ -44,7 +44,7 @@ components:
           description: |
             The display name of the list. Free to change; it may repeat across
             lists and does not identify one — the address does.
-          example: team-example
+          example: Team Nord
         tag:
           type: string
           maxLength: 255
@@ -124,18 +124,7 @@ components:
         - address
       properties:
         name:
-          type: string
-          minLength: 1
-          maxLength: 255
-          pattern: '^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$'
-          description: |
-            Letters, digits and `. - _ +`, beginning and ending with a letter or
-            a digit.
-
-            Stricter than what the table can hold, on purpose: a plain label is
-            what the other tools reading `lists` expect. Existing rows are not
-            held to this — they are shown as they are (U-22).
-          example: team-example
+          $ref: '#/components/schemas/MailingListDisplayName'
         tag:
           type: string
           maxLength: 255
@@ -180,11 +169,7 @@ components:
       additionalProperties: false
       properties:
         name:
-          type: string
-          minLength: 1
-          maxLength: 255
-          pattern: '^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$'
-          description: The new display name. The same rule as on creation.
+          $ref: '#/components/schemas/MailingListDisplayName'
         tag:
           type: string
           maxLength: 255
@@ -194,6 +179,24 @@ components:
             type: string
             minLength: 3
             maxLength: 255
+
+    MailingListDisplayName:
+      type: string
+      minLength: 1
+      maxLength: 255
+      pattern: '^[^\x00-\x1F\x7F]*$'
+      description: |
+        Display text: spaces, colons and umlauts are fine, and two lists may
+        share a name. Surrounding whitespace is trimmed, and nothing but
+        whitespace is `list.invalid_name`.
+
+        Refused are control characters (below U+0020, and U+007F) and more
+        than 255 characters. `lists` is a latin1 table, so a character outside
+        printable ISO 8859-1 — an emoji, `€` — is refused as well, with
+        `list.name_outside_latin1`: the column could not store it as written.
+        Existing rows are not held to any of this — they are shown as they are
+        (U-22).
+      example: Team Nord
 
     MailingListSort:
       type: string

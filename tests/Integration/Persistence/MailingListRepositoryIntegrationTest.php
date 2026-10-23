@@ -6,6 +6,7 @@ namespace Mailadmin\Tests\Integration\Persistence;
 
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
+use Mailadmin\Domain\MailingList\MailingListName;
 use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\CriteriaError;
@@ -127,6 +128,22 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
         self::assertNotNull($found);
         self::assertSame('Team-Example', $found->name->toString());
         self::assertSame('anna@example.test', $this->rawMembers('team@example.test'));
+    }
+
+    public function testADisplayNameWithSpacesColonsAndUmlautsSurvivesTheLatin1Column(): void
+    {
+        // The connection speaks utf8mb4, the column is latin1: MariaDB converts
+        // on the way in and out. Every character MailingListName accepts has to
+        // come back unchanged — the 255-umlaut name checks the limit is in
+        // characters, which is what the column counts.
+        $names = ['Grüße an alle: Team Süd', str_repeat('ä', MailingListName::MAX_LENGTH)];
+
+        foreach ($names as $index => $name) {
+            $address = sprintf('latin%d@example.test', $index);
+            $this->repository->add(MailingList::create($name, '', $address, []));
+
+            self::assertSame($name, $this->repository->find(EmailAddress::parse($address))?->name->toString());
+        }
     }
 
     public function testTwoListsMayShareADisplayName(): void
