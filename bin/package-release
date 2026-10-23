@@ -89,6 +89,7 @@ cp bin/install "$out/install"
 # The list delivery script: its own archive, built the same reproducible way.
 ml_name="maillist-$tag"
 mkdir -p "$stage/$ml_name"
+chmod 0755 "$stage/$ml_name"
 for file in "${MAILLIST_FILES[@]}"; do
     cp "maillist/$file" "$stage/$ml_name/$file"
     chmod 0644 "$stage/$ml_name/$file"

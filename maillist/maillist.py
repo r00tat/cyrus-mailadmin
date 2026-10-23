@@ -628,6 +628,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "list_key",
         nargs="?",
+        # ${user} is the local part without the address extension; ${mailbox} would keep it in the key.
         help="list key: the list address with '@' replaced by '.' (Postfix passes ${user})",
     )
     parser.add_argument(

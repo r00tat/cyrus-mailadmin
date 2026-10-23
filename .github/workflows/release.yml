@@ -3,9 +3,10 @@
 # A tag v* runs every check, builds the release archive and publishes it as a
 # GitHub release, together with the installer, SHA256SUMS and a build
 # provenance attestation. The list delivery script ships beside it as
-# maillist-<tag>.tar.gz with its own installer, install-maillist (maillist/). The tag may come from `git push` or from creating
-# the release itself (`gh release create v1.2.0 --target main`); an existing
-# release gets the files attached. A server installs it with
+# maillist-<tag>.tar.gz with its own installer, install-maillist (maillist/).
+# The tag may come from `git push` or from creating the release itself
+# (`gh release create v1.2.0 --target main`); an existing release gets the
+# files attached. A server installs it with
 #
 #   curl -fsSLO https://github.com/r00tat/cyrus-mailadmin/releases/latest/download/install
 #   sudo bash install

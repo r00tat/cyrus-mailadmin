@@ -4,7 +4,7 @@
 
 `maillist.py` stellt Mailinglisten-Mails zu. Postfix ruft es über einen `pipe(8)`-Transport auf. Das
 Skript läuft auf dem System, auf dem Postfix läuft, nicht auf dem Webserver von mailadmin.
-Hintergrund und Umstellungsplan: Spezifikation zum Pipe-Transport. Das Skript selbst:
+Hintergrund und Umstellungsplan: Spezifikation `docs/superpowers/specs/2026-10-22-mailinglisten-pipe-transport-design.md`. Das Skript selbst:
 [maillist/README.md](../../maillist/README.md).
 
 ## 1. Voraussetzungen
@@ -114,9 +114,19 @@ maillist.invalid    maillist:
 postmap /etc/postfix/transport
 ```
 
-`transport_maps` muss auf diese Datei zeigen. Die Pseudodomain darf weder in `mydestination` noch in
+In `main.cf` muss `transport_maps = hash:/etc/postfix/transport` auf diese Datei zeigen. Die Pseudodomain darf weder in `mydestination` noch in
 `virtual_alias_domains` stehen. `MAILADMIN_LIST_TRANSPORT_DOMAIN` in mailadmin muss dieselbe Domain
 tragen.
+
+### Adresserweiterungen
+
+Der Transport übergibt `${user}`, den Local Part ohne Adresserweiterung. Mit `recipient_delimiter = +`
+(dem üblichen Wert von Postfix) und `propagate_unmatched_extensions`, das `virtual` enthält (der
+Standard), erreicht Mail an `team+x@domain` die Liste als `<schluessel>`. Das funktioniert also.
+Eine Listenadresse darf deshalb selbst kein `+` enthalten; mailadmin lehnt solche Adressen ab. Wer einen
+anderen `recipient_delimiter` benutzt, darf auch dieses Zeichen in Listenadressen nicht verwenden.
+`${mailbox}` wird bewusst nicht benutzt, weil die weitergereichte Erweiterung sonst Teil des
+Schlüssels würde.
 
 ### Direkte Adressierung der Pseudodomain sperren
 
@@ -160,13 +170,13 @@ Name, Host und Datenbank sind Beispiele; sie stehen in `[database]` der Konfigur
 Die Schritte gehören zur Umstellung in der Spezifikation. Hier stehen die, die das Skript betreffen.
 
 1. **Skript ausrollen** (Schritt 1). Installieren wie oben. Ohne Argument verhält es sich wie bisher,
-   mit `delivered_to_fallback = yes` (der Standard). Das Skript liest seine Zugangsdaten aus der
+   mit `delivered_to_fallback = yes` im Abschnitt `[list]` (der Standard). Das Skript liest seine Zugangsdaten aus der
    Konfigurationsdatei; das früher im Quelltext stehende Passwort ist zu rotieren.
 2. **Transport einrichten** (Schritt 2). `master.cf`, `transport`, Recipient-Limit und die Sperre aus
    Abschnitt 3. Die alte Aliasdatei bleibt, beide Wege sind aktiv.
 3. **Rückfallebene abschalten** (Schritt 5). Sobald alle Listen über den Transport laufen und
-   `MAILADMIN_LIST_DELIVERY=transport` gesetzt ist, setze `delivered_to_fallback = no` in der
-   Konfiguration. Ein Aufruf ohne Argument endet dann mit `64`.
+   `MAILADMIN_LIST_DELIVERY=transport` gesetzt ist, setze `delivered_to_fallback = no` im Abschnitt `[list]`
+   der Konfiguration. Ein Aufruf ohne Argument endet dann mit `64`.
 
 Prüfe nach jedem Schritt mit `python3 /opt/mailadmin-maillist/current/maillist.py --check` (als
 Listenbenutzer, mit gesetztem `MAILLIST_CONFIG`) und mit einer Testmail an eine Liste.
