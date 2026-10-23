@@ -23,11 +23,17 @@ declare(strict_types=1);
  * `no virtual entry` | `skipped: <reason>` | `failed: <reason>`), then the
  * totals.
  *
+ * A forward run refuses (exit 1) while the transport domain is a managed
+ * domain: Postfix would deliver list mail locally. `--revert` still runs.
+ *
  * Exit codes: 0 when every list ended without failure, 1 on a configuration
- * or database error or when a list failed, 64 on a wrong invocation.
+ * or database error, a managed transport domain, or when a list failed, 64 on
+ * a wrong invocation.
  */
 
 use Mailadmin\Application\MailingList\MigrateListDelivery;
+use Mailadmin\Application\MailingList\TransportDomainIsManaged;
+use Mailadmin\Config\ConfigurationError;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Infrastructure\Persistence\PersistenceError;
 use Psr\Container\ContainerInterface;
@@ -50,20 +56,21 @@ if ($unknown !== []) {
 $dryRun = in_array('--dry-run', $arguments, true);
 $revert = in_array('--revert', $arguments, true);
 
-/** @var ContainerInterface $container */
-$container = require __DIR__ . '/bootstrap.php';
-
 $line = static function (string $text = ''): void {
     fwrite(STDOUT, $text . PHP_EOL);
 };
 
 try {
+    /** @var ContainerInterface $container */
+    $container = require __DIR__ . '/bootstrap.php';
+
     $result = $container->get(MigrateListDelivery::class)->handle(
         ActorContext::system('migrate-list-delivery'),
         $revert,
         $dryRun,
     );
-} catch (PersistenceError $error) {
+} catch (ConfigurationError|TransportDomainIsManaged|PersistenceError $error) {
+    // A plain message, no stack trace: these are the operator's to fix.
     fwrite(STDERR, $error->getMessage() . PHP_EOL);
 
     exit(1);

@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace Mailadmin\Tests\Application\MailingList;
 
 use Mailadmin\Application\Audit\AuditActor;
+use Mailadmin\Application\Audit\AuditEntry;
+use Mailadmin\Application\Audit\AuditEntryId;
 use Mailadmin\Application\Audit\AuditWriter;
 use Mailadmin\Application\MailingList\ListDeliveryMigration;
 use Mailadmin\Application\MailingList\ListDeliveryOutcome;
 use Mailadmin\Application\MailingList\ListDeliveryResult;
 use Mailadmin\Application\MailingList\MigrateListDelivery;
+use Mailadmin\Application\MailingList\TransportDomainIsManaged;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Model\DomainName;
@@ -19,6 +22,8 @@ use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
 use Mailadmin\Infrastructure\Persistence\InMemoryDomainStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository;
 use Mailadmin\Infrastructure\Persistence\InMemoryVirtualStore;
+use Mailadmin\Infrastructure\Persistence\PersistenceError;
+use Mailadmin\Tests\Support\DomainFixture;
 use Mailadmin\Tests\Support\ListDeliveryFixture;
 use Mailadmin\Tests\Support\MemoryLogger;
 use Mailadmin\Tests\Support\RefusingAuditWriter;
@@ -208,6 +213,113 @@ final class MigrateListDeliveryTest extends TestCase
         self::assertTrue($result->hasFailures());
     }
 
+    public function testTwoIdenticalLegacyRowsAreBothMigratedInOneRun(): void
+    {
+        $this->givenLegacyList('team@example.test');
+        $this->virtual->givenRow('team@example.test', 'team.example.test', 'team.example.test');
+
+        $result = $this->migrate()->handle($this->system);
+
+        self::assertSame(
+            [
+                ['team@example.test', 'team.example.test@maillist.invalid', '', 1],
+                ['team@example.test', 'team.example.test@maillist.invalid', '', 1],
+            ],
+            $this->rows(),
+        );
+        self::assertSame(2, $this->outcomeOf($result, 'team@example.test')->rows);
+    }
+
+    public function testARunAfterAPartialFailureFinishesTheRemainingRows(): void
+    {
+        $this->givenLegacyList('team@example.test');
+        $this->virtual->givenRow('team@example.test', 'team.example.test', 'team.example.test');
+
+        // Row 1 is migrated, the audit entry of row 2 fails and row 2 is set back.
+        $failed = $this->migrate($this->refusingEntry(2))->handle($this->system);
+
+        self::assertSame(ListDeliveryResult::Failed, $this->outcomeOf($failed, 'team@example.test')->result);
+        self::assertSame(
+            [
+                ['team@example.test', 'team.example.test', 'team.example.test', 1],
+                ['team@example.test', 'team.example.test@maillist.invalid', '', 1],
+            ],
+            $this->rows(),
+        );
+
+        $resumed = $this->migrate()->handle($this->system);
+
+        self::assertSame(ListDeliveryResult::Migrated, $this->outcomeOf($resumed, 'team@example.test')->result);
+        self::assertSame(1, $this->outcomeOf($resumed, 'team@example.test')->rows);
+        self::assertSame(
+            [
+                ['team@example.test', 'team.example.test@maillist.invalid', '', 1],
+                ['team@example.test', 'team.example.test@maillist.invalid', '', 1],
+            ],
+            $this->rows(),
+        );
+    }
+
+    public function testRevertFinishesAMixtureOfBothFormsToo(): void
+    {
+        $this->givenLegacyList('team@example.test');
+        $this->virtual->givenRow('team@example.test', 'team.example.test@maillist.invalid', '');
+
+        $result = $this->migrate()->handle($this->system, revert: true);
+
+        self::assertSame(ListDeliveryResult::Reverted, $this->outcomeOf($result, 'team@example.test')->result);
+        self::assertSame(
+            [
+                ['team@example.test', 'team.example.test', 'team.example.test', 1],
+                ['team@example.test', 'team.example.test', 'team.example.test', 1],
+            ],
+            $this->rows(),
+        );
+    }
+
+    public function testAListRowNextToARowOfAnotherTypeIsSkipped(): void
+    {
+        $this->givenLegacyList('team@example.test');
+        $this->virtual->givenRow('team@example.test', 'anna.example.test', 'anna.example.test');
+        $before = $this->rows();
+
+        $result = $this->migrate()->handle($this->system);
+
+        self::assertSame($before, $this->rows());
+        self::assertSame(
+            'skipped: virtual entries of another type present',
+            $this->outcomeOf($result, 'team@example.test')->label(),
+        );
+    }
+
+    public function testAForwardRunRefusesWhenTheTransportDomainIsAManagedDomain(): void
+    {
+        $this->givenLegacyList('team@example.test');
+        $this->domains->given(DomainFixture::domain('MailList.Invalid', prefix: 'maillist'));
+        $before = $this->rows();
+
+        try {
+            $this->migrate()->handle($this->system, dryRun: true);
+            self::fail('A forward run went ahead with a managed transport domain.');
+        } catch (TransportDomainIsManaged $error) {
+            self::assertStringContainsString('maillist.invalid', $error->getMessage());
+        }
+
+        self::assertSame($before, $this->rows());
+        self::assertTrue($this->trail->isEmpty());
+    }
+
+    public function testRevertStillRunsWhenTheTransportDomainIsAManagedDomain(): void
+    {
+        $this->lists->given(MailingList::fromStoredValues('Team', 'team', 'team@example.test', 'anna@example.test'));
+        $this->virtual->givenRow('team@example.test', 'team.example.test@maillist.invalid', '');
+        $this->domains->given(DomainFixture::domain('maillist.invalid', prefix: 'maillist'));
+
+        $result = $this->migrate()->handle($this->system, revert: true);
+
+        self::assertSame(ListDeliveryResult::Reverted, $this->outcomeOf($result, 'team@example.test')->result);
+    }
+
     public function testADomainMasterMayNotRunIt(): void
     {
         $this->expectException(AccessDenied::class);
@@ -233,6 +345,27 @@ final class MigrateListDeliveryTest extends TestCase
             $audit ?? $this->trail,
             $this->logger,
         );
+    }
+
+    /** An audit writer that refuses its `$n`th entry and accepts the others. */
+    private function refusingEntry(int $n): AuditWriter
+    {
+        return new class ($this->trail, $n) implements AuditWriter {
+            private int $seen = 0;
+
+            public function __construct(private readonly InMemoryAuditTrail $trail, private readonly int $refuse)
+            {
+            }
+
+            public function record(AuditEntry $entry): AuditEntryId
+            {
+                if (++$this->seen === $this->refuse) {
+                    throw PersistenceError::transactionMisuse('the audit table refused the entry');
+                }
+
+                return $this->trail->record($entry);
+            }
+        };
     }
 
     private function givenLegacyList(string $address): void

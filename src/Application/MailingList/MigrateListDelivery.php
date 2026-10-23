@@ -44,8 +44,13 @@ use Throwable;
  *  - A list address with a recipient delimiter (`+`) is not moved forward. The
  *    transport hands the pipe script `${user}`, the local part without its
  *    extension, so the list would never be found ({@see CreateMailingList}).
- *  - A list that has a legacy and a transport row at once is not touched in
- *    either direction: moving one would leave two identical rows.
+ *  - A list with a `virtual` row of another type next to its list rows is not
+ *    touched. Legacy and transport rows side by side are fine — an
+ *    interrupted run leaves exactly that — and the remaining ones are moved;
+ *    identical transport rows are harmless.
+ *  - A forward run refuses outright while the transport domain is a managed
+ *    domain ({@see TransportDomainIsManaged}): Postfix would deliver the list
+ *    mail locally. A revert still runs.
  *  - On revert, a list key longer than `virtual.username` holds: the legacy
  *    form would be cut off and route nowhere.
  *
@@ -82,13 +87,20 @@ final readonly class MigrateListDelivery
     }
 
     /**
-     * @throws AccessDenied     unless the actor is a superuser (or the system)
-     * @throws PersistenceError when the lists cannot be read
+     * @throws AccessDenied             unless the actor is a superuser (or the system)
+     * @throws TransportDomainIsManaged on a forward run while the transport domain is a row in `domain`
+     * @throws PersistenceError         when the lists cannot be read
      */
     public function handle(ActorContext $actor, bool $revert = false, bool $dryRun = false): ListDeliveryMigration
     {
         Guard::permission($actor, Permission::MaintenanceWrite);
         Guard::permission($actor, Permission::ListWrite);
+
+        // Forward only: a revert takes the lists off the transport, which is
+        // exactly what a managed transport domain calls for.
+        if (!$revert && $this->domains->exists($this->delivery->transportDomain)) {
+            throw TransportDomainIsManaged::domain($this->delivery->transportDomain);
+        }
 
         $outcomes = [];
 
@@ -171,12 +183,15 @@ final readonly class MigrateListDelivery
 
         $legacy = [];
         $transport = [];
+        $others = 0;
 
         foreach ($rows as $row) {
             if ($recognition->isTransportListRow($row, DestinationList::fromLegacyString($row->dest))) {
                 $transport[] = $row;
             } elseif ($recognition->isLegacyListRow($row)) {
                 $legacy[] = $row;
+            } else {
+                ++$others;
             }
         }
 
@@ -184,8 +199,12 @@ final readonly class MigrateListDelivery
             return new ListDeliveryOutcome($stored, ListDeliveryResult::Skipped, 'virtual entry is not a list entry');
         }
 
-        if ($legacy !== [] && $transport !== []) {
-            return new ListDeliveryOutcome($stored, ListDeliveryResult::Skipped, 'legacy and transport entries both present');
+        // A row of another type under the list address is inconsistent data
+        // this command does not judge. Legacy and transport rows side by side
+        // are not: that is what an interrupted run leaves, and the next run
+        // finishes the remaining rows.
+        if ($others > 0) {
+            return new ListDeliveryOutcome($stored, ListDeliveryResult::Skipped, 'virtual entries of another type present');
         }
 
         $pending = $revert ? $transport : $legacy;

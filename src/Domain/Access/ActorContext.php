@@ -37,7 +37,7 @@ final readonly class ActorContext
      *
      * It holds a superuser's permissions, because whoever can run a command
      * on the server can change the database anyway. Its name has angle
-     * brackets, so no `adminuser` row can ever be confused with it, and the
+     * brackets, which no administrator created in mailadmin can have (`AdminNewUsername`), and the
      * audit trail records it without a role ({@see isSystem()}).
      *
      * @throws InvalidActorContext when the label is empty

@@ -219,17 +219,22 @@ Das Kommando gibt eine Zeile pro Liste aus und am Ende die Summen:
 | `migrated` | Der Alteintrag zeigt jetzt auf den Transport. |
 | `reverted` | Der Transport-Eintrag hat wieder die Altform (nur mit `--revert`). |
 | `unchanged` | Der Eintrag hat schon die gewünschte Form. |
-| `no virtual entry` | Die Liste steht in `lists`, hat aber keinen `virtual`-Eintrag. Das Kommando legt keinen an; ohne Eintrag erreicht die Liste keine Mail. Lege ihn bei Bedarf an, indem du die Liste in mailadmin löschst und neu anlegst. |
-| `skipped: address contains '+'` | Die Listenadresse enthält das Trennzeichen für Adresserweiterungen. Über den Transport käme sie nicht an (Abschnitt 3), deshalb bleibt sie auf dem Aliasweg. Benenne die Liste vor Schritt 5 um (löschen und unter neuer Adresse anlegen). |
+| `no virtual entry` | Die Liste steht in `lists`, hat aber keinen `virtual`-Eintrag. Das Kommando legt keinen an; ohne Eintrag erreicht die Liste keine Mail. Soll die Liste Mail bekommen, lösche sie in mailadmin und lege sie neu an. **Vorsicht:** Das Löschen entfernt auch die Mitglieder. Sichere sie vorher (Detailseite der Liste oder `SELECT members FROM lists WHERE address = …`) und trage sie beim Neuanlegen wieder ein. |
+| `skipped: address contains '+'` | Die Listenadresse enthält das Trennzeichen für Adresserweiterungen. Über den Transport käme sie nicht an (Abschnitt 3), deshalb bleibt sie auf dem Aliasweg. Lege die Liste vor Schritt 5 unter einer Adresse ohne `+` neu an und lösche die alte. Lege dabei zuerst die neue Liste mit denselben Mitgliedern an (aus der Detailseite der alten Liste übernehmen), erst danach löschst du die alte. Sonst gehen die Mitglieder verloren. |
 | `skipped: virtual entry is not a list entry` | Unter der Listenadresse steht ein `virtual`-Eintrag, der weder Alt- noch Transportform hat, etwa ein gewöhnlicher Alias. Er bleibt unverändert. Kläre den Fall von Hand. |
-| `skipped: legacy and transport entries both present` | Die Liste hat beide Formen zugleich. Das Kommando ändert keine davon. |
+| `skipped: virtual entries of another type present` | Neben dem Listeneintrag steht unter derselben Adresse ein Eintrag anderen Typs. Das Kommando ändert dann keinen davon. Kläre den Fall von Hand. |
 | `skipped: list key longer than …` | Nur bei `--revert`: Der Schlüssel passt nicht in `virtual.username` (50 Zeichen). Die Altform würde abgeschnitten. |
 | `failed: …` | Der Eintrag konnte nicht geschrieben werden. Das Kommando endet mit `1`, die Ursache steht im Log von mailadmin. Ein erneuter Lauf setzt dort fort. |
 
 Eigenschaften:
 
 - **Idempotent.** Ein zweiter Lauf ändert nichts. Nach einem Abbruch kann das Kommando einfach erneut
-  laufen.
+  laufen. Stehen danach Alt- und Transportform einer Liste nebeneinander (etwa bei doppelten
+  Alteinträgen), stellt der nächste Lauf die übrigen Einträge um.
+- **Schutz vor einer verwalteten Pseudodomain.** Ist die Pseudodomain zugleich als Domain in mailadmin
+  angelegt, stellt Postfix Mail an sie lokal zu, und keine Liste erreicht mehr den Transport. Die
+  Umstellung bricht dann vor der ersten Änderung mit Exit-Code `1` und einer Meldung ab. Das gilt auch für
+  den Trockenlauf. `--revert` läuft trotzdem.
 - **Nur `virtual`.** `lists` bleibt unverändert. Erkannt wird ein Listeneintrag nach denselben Regeln wie
   in der Adressverwaltung: Die Altform zählt nur, wenn es zur Adresse eine Zeile in `lists` gibt. Die
   gleich aussehende Adresszeile eines Kontos im Punkt-Schema bleibt deshalb unberührt.
@@ -237,10 +242,11 @@ Eigenschaften:
   die Adressverwaltung nimmt. Postfix sieht einen Eintrag nie halb geändert oder fehlend.
 - **Revisionsprotokoll.** Jede geänderte Zeile bekommt einen Eintrag `list.delivery_migrate` bzw.
   `list.delivery_revert` mit dem Zustand vorher und nachher. Als Akteur steht dort
-  `<system:migrate-list-delivery>` ohne Rolle. Kein Administrator kann so heißen.
+  `<system:migrate-list-delivery>` ohne Rolle. Kein in mailadmin angelegter Administrator kann so heißen.
 
 Exit-Codes: `0` alles erledigt (auch mit `skipped` und `no virtual entry`), `1` Konfigurations- oder
-Datenbankfehler oder mindestens ein `failed`, `64` falscher Aufruf.
+Datenbankfehler, eine verwaltete Pseudodomain (nur vorwärts) oder mindestens ein `failed`, `64` falscher
+Aufruf.
 
 ### Zurück
 
