@@ -24,8 +24,10 @@ tags:
 
       Two consequences a client has to carry:
 
-        * every write answers with `X-Mailadmin-Effect: pending-configuration-run`,
-          because the change is in the database and not yet in the mail system;
+        * while list mail still runs over the legacy alias file, every write
+          answers with `X-Mailadmin-Effect: pending-configuration-run`, because
+          the change is in the database and not yet in the mail system. On the
+          transport path the header is absent and a change is live at once;
         * rows that were written before this application existed may contain
           values it would not accept. They are shown and flagged
           (`unusable_members`, `address_usable`), never filtered out and never

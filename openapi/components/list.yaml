@@ -285,14 +285,17 @@ components:
   headers:
     MailingListEffect:
       description: |
-        Present on every answer that changed something. The one value is
-        `pending-configuration-run`.
+        Present on every answer that changed something **while list mail still
+        runs over the legacy alias file** (`MAILADMIN_LIST_DELIVERY=alias`). The
+        one value is `pending-configuration-run`.
 
-        Saving a mailing list writes the database and nothing else: the aliases
-        file is rendered from `lists` by the configuration management (E-4), so
-        until the next configuration run a new list does not deliver and a
-        deleted one still does. A stable keyword rather than a sentence — the
-        frontend translates it (E-16).
+        On that path the aliases file is rendered from `lists` by the
+        configuration management (E-4), so until the next configuration run a new
+        list does not deliver and a deleted one still does. On the transport path
+        (`MAILADMIN_LIST_DELIVERY=transport`) the `virtual` entry routes the
+        address to the pipe transport, a change is live once saved, and the
+        header is absent. A stable keyword rather than a sentence — the frontend
+        translates it (E-16).
 
         A header rather than a body field because `DELETE` answers `204`, and the
         write with the most surprising delay is the one that would otherwise have

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mailadmin\Http\Handler\MailingLists;
 
+use Mailadmin\Application\MailingList\ListDelivery;
 use Mailadmin\Application\MailingList\MailingListFailure;
 use Mailadmin\Application\MailingList\MailingListView;
 use Mailadmin\Domain\Access\ActorContext;
@@ -25,12 +26,16 @@ use Psr\Http\Message\StreamFactoryInterface;
  *
  * ## The effect header
  *
- * Every state-changing answer carries `X-Mailadmin-Effect: pending-configuration-run`
- * (U-59). Saving a list changes the database and nothing else — the aliases file
- * is rendered by the configuration management (E-4) — so between the `204` and
- * the next configuration run the change is invisible to the mail system. An
- * administrator who is not told that looks for the fault in the wrong place, and
- * the package's definition of done asks for the notice after **every** change.
+ * On the legacy alias path ({@see ListDelivery::changesNeedConfigurationRun()}),
+ * every state-changing answer carries `X-Mailadmin-Effect: pending-configuration-run`
+ * (U-59). There the aliases file is rendered by the configuration management
+ * (E-4), so between the `204` and the next configuration run the change is
+ * invisible to the mail system, and an administrator who is not told that looks
+ * for the fault in the wrong place.
+ *
+ * On the transport path the header is absent: the `virtual` entry routes the
+ * address to the pipe transport, and a change is live once it is saved. Saying
+ * otherwise would send the administrator waiting for a run that changes nothing.
  *
  * A header rather than a field in the body, because `DELETE` answers `204` and
  * has no body: a body field would have covered two of the three writes and left
@@ -49,6 +54,7 @@ final readonly class MailingListResponder
         private ResponseFactoryInterface $responses,
         private StreamFactoryInterface $streams,
         private ProblemResponseFactory $problems,
+        private ListDelivery $delivery,
     ) {
     }
 
@@ -94,24 +100,25 @@ final readonly class MailingListResponder
     {
         $location = rtrim($request->getUri()->getPath(), '/') . '/' . rawurlencode($list->address);
 
-        return $this->json(201, MailingListView::representation($list))
-            ->withHeader('Location', $location)
-            ->withHeader('ETag', MailingListView::etag($list))
-            ->withHeader(self::EFFECT_HEADER, self::EFFECT_PENDING);
+        return $this->withEffect(
+            $this->json(201, MailingListView::representation($list))
+                ->withHeader('Location', $location)
+                ->withHeader('ETag', MailingListView::etag($list)),
+        );
     }
 
     public function changed(MailingList $list): ResponseInterface
     {
-        return $this->single($list)
-            ->withHeader(self::EFFECT_HEADER, self::EFFECT_PENDING);
+        return $this->withEffect($this->single($list));
     }
 
     public function deleted(): ResponseInterface
     {
-        return $this->responses
-            ->createResponse(204)
-            ->withHeader('Cache-Control', 'no-store')
-            ->withHeader(self::EFFECT_HEADER, self::EFFECT_PENDING);
+        return $this->withEffect(
+            $this->responses
+                ->createResponse(204)
+                ->withHeader('Cache-Control', 'no-store'),
+        );
     }
 
     public function failure(ServerRequestInterface $request, MailingListFailure $failure): ResponseInterface
@@ -147,6 +154,14 @@ final readonly class MailingListResponder
             requestId: self::requestId($request),
             errors: ['query' => $error->errorCode()],
         ));
+    }
+
+    /** Announces the pending configuration run, but only where one is pending. */
+    private function withEffect(ResponseInterface $response): ResponseInterface
+    {
+        return $this->delivery->changesNeedConfigurationRun()
+            ? $response->withHeader(self::EFFECT_HEADER, self::EFFECT_PENDING)
+            : $response;
     }
 
     /**

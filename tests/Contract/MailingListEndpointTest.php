@@ -9,9 +9,12 @@ use League\OpenAPIValidation\PSR7\ValidatorBuilder;
 use Mailadmin\Application\Address\AddressStore;
 use Mailadmin\Application\Audit\AuditWriter;
 use Mailadmin\Application\Domain\DomainStore;
+use Mailadmin\Application\MailingList\ListDelivery;
+use Mailadmin\Application\MailingList\ListDeliveryMode;
 use Mailadmin\Domain\Access\AdminDirectory;
 use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Model\AdminRole;
+use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Password\Password;
 use Mailadmin\Domain\Password\PasswordSubject;
 use Mailadmin\Domain\Repair\RepairQueue;
@@ -68,6 +71,15 @@ final class MailingListEndpointTest extends ContractTestCase
 
     protected function setUp(): void
     {
+        $this->boot(ListDeliveryMode::Alias);
+    }
+
+    /**
+     * The container with the delivery path pinned, so that the effect header
+     * does not depend on whatever `MAILADMIN_LIST_DELIVERY` the test run sees.
+     */
+    private function boot(ListDeliveryMode $mode): void
+    {
         self::routeTable();
 
         $hasher = new PasswordHasher(PasswordHashingOptions::of(
@@ -112,6 +124,10 @@ final class MailingListEndpointTest extends ContractTestCase
             AddressStore::class => new InMemoryVirtualStore(),
             AuditWriter::class => new InMemoryAuditTrail(),
             RepairQueue::class => new InMemoryRepairQueue(),
+            ListDelivery::class => new ListDelivery(
+                DomainName::fromString(ListDelivery::DEFAULT_TRANSPORT_DOMAIN),
+                $mode,
+            ),
         ]);
     }
 
@@ -370,6 +386,48 @@ final class MailingListEndpointTest extends ContractTestCase
             MailingListResponder::EFFECT_PENDING,
             $response->getHeaderLine(MailingListResponder::EFFECT_HEADER),
             'The delete is the response with no body — and the one whose delay is least expected.',
+        );
+    }
+
+    public function testOnTheAliasPathEveryWriteAnnouncesThePendingConfigurationRun(): void
+    {
+        self::assertSame(
+            [MailingListResponder::EFFECT_PENDING, MailingListResponder::EFFECT_PENDING, MailingListResponder::EFFECT_PENDING],
+            $this->effectsOfCreateChangeAndDelete(),
+        );
+    }
+
+    public function testOnTheTransportPathNoWriteAnnouncesAConfigurationRun(): void
+    {
+        // The change is live once `virtual` is written: Postfix routes it to the
+        // pipe transport, and the aliases file plays no part any more.
+        $this->boot(ListDeliveryMode::Transport);
+
+        self::assertSame(['', '', ''], $this->effectsOfCreateChangeAndDelete());
+    }
+
+    /**
+     * @return list<string> the effect header of the create, the change and the delete, in that order
+     */
+    private function effectsOfCreateChangeAndDelete(): array
+    {
+        $token = $this->tokenFor('root');
+
+        $created = $this->send('POST', '/api/v1/lists', ['name' => 'fx', 'address' => 'fx@example.test'], $token);
+        self::assertSame(201, $created->getStatusCode());
+        $this->assertMatchesContract('post', '/lists', $created);
+
+        $changed = $this->send('PATCH', '/api/v1/lists/fx%40example.test', ['tag' => 'crew'], $token);
+        self::assertSame(200, $changed->getStatusCode());
+        $this->assertMatchesContract('patch', '/lists/{address}', $changed);
+
+        $deleted = $this->send('DELETE', '/api/v1/lists/fx%40example.test', token: $token);
+        self::assertSame(204, $deleted->getStatusCode());
+        $this->assertMatchesContract('delete', '/lists/{address}', $deleted);
+
+        return array_map(
+            static fn (ResponseInterface $response): string => $response->getHeaderLine(MailingListResponder::EFFECT_HEADER),
+            [$created, $changed, $deleted],
         );
     }
 
