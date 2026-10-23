@@ -21,6 +21,7 @@ use Mailadmin\Tests\Support\DomainFixture;
 use Mailadmin\Tests\Support\FrozenClock;
 use Mailadmin\Tests\Support\ListDeliveryFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
@@ -150,6 +151,44 @@ final class MailingListDeliveryTest extends TestCase
 
         // Nothing was sent after the refusal, so there is nothing to wait for.
         self::assertNull(self::keyFor($token), 'Mail addressed to the transport domain reached the pipe transport.');
+    }
+
+    /**
+     * Addresses in a local domain whose local part routes on to the
+     * pseudo-domain: the percent hack (`allow_percent_hack`), a quoted local
+     * part holding an `@` (`resolve_dequoted_address`) and a bang path
+     * (`swap_bangpath`). All three are Postfix defaults.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function recipientsRoutedToTheTransportDomain(): iterable
+    {
+        $key = self::LIST_KEY;
+        $domain = ListDelivery::DEFAULT_TRANSPORT_DOMAIN;
+
+        yield 'percent hack' => [sprintf('%s%%%s@leer.test', $key, $domain)];
+        yield 'quoted local part' => [sprintf('"%s@%s"@leer.test', $key, $domain)];
+        yield 'bang path' => [sprintf('%s!%s@leer.test', $domain, $key)];
+    }
+
+    /**
+     * Postfix rewrites these forms to `<list key>@maillist.invalid` before it
+     * routes them. `check_recipient_access` looks up the rewritten address, not
+     * the one in RCPT TO, so `maillist_block` refuses them like the direct
+     * form. The list exists, so an accepted message would reach the stub.
+     */
+    #[DataProvider('recipientsRoutedToTheTransportDomain')]
+    public function testRoutedMailToTheTransportDomainIsRefused(string $recipient): void
+    {
+        $this->createList();
+
+        $token = self::token();
+        [$code, $text] = self::submitWithResponse($recipient, $token);
+
+        self::assertSame(554, $code, 'Postfix did not refuse a recipient that routes to the transport domain: ' . $text);
+        self::assertStringStartsWith('5.7.1 ', $text);
+        self::assertStringContainsString('Access denied', $text, 'The refusal did not come from maillist_block.');
+        self::assertNull(self::keyFor($token), 'A recipient routed to the transport domain reached the pipe transport.');
     }
 
     private function createList(): void
