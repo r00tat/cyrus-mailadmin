@@ -14,9 +14,14 @@ use Mailadmin\Domain\Model\EmailAddress;
  *
  * A row is a list row when
  *
- *  1. its `dest` ends in `@<transport domain>` — the form A5 writes, or
+ *  1. it has exactly the form A5 writes: an empty `username` and a single
+ *     destination, `<list key of alias>@<transport domain>`, or
  *  2. it has the legacy form `dest = username = REPLACE(alias, '@', '.')`
  *     **and** `lists` has a row whose address is the `alias`.
+ *
+ * A row with a destination on the transport domain that is not exactly that
+ * is **not** a list row ({@see mentionsTransport()}); the classifier reports
+ * it as unknown rather than guessing which list it belongs to.
  *
  * The second needs `lists` because the legacy form is, field for field, also
  * what an account's own address row in the `dotted` scheme looks like.
@@ -49,14 +54,65 @@ final readonly class MailingListRecognition
     }
 
     /**
-     * Rule 1: the row delivers to the list transport.
+     * `REPLACE(address, '@', '.')` — the key the pipe script looks a list up
+     * by. {@see \Mailadmin\Application\MailingList\ListDelivery::listKey()}
+     * delegates here.
      */
-    public function deliversToTransport(VirtualRow $row): bool
+    public static function listKey(EmailAddress $address): string
     {
-        return str_ends_with(
-            strtolower(trim($row->dest)),
-            '@' . strtolower($this->transportDomain->toString()),
-        );
+        return str_replace('@', '.', $address->toString());
+    }
+
+    /**
+     * Is any destination on the transport domain?
+     */
+    public function mentionsTransport(DestinationList $destinations): bool
+    {
+        foreach ($destinations->all() as $destination) {
+            if ($this->isTransportDestination($destination)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Rule 1, strictly: no `username`, one destination, and that destination
+     * is the list key of `alias` on the transport domain.
+     */
+    public function isTransportListRow(VirtualRow $row, DestinationList $destinations): bool
+    {
+        if (trim($row->username) !== '' || $destinations->count() !== 1) {
+            return false;
+        }
+
+        $alias = trim($row->alias);
+
+        if (!EmailAddress::looksLikeAddress($alias)) {
+            return false;
+        }
+
+        try {
+            $expected = self::listKey(EmailAddress::parseStored($alias)) . '@' . $this->transportDomain->toString();
+        } catch (DomainError) {
+            return false;
+        }
+
+        return strtolower(trim((string) $destinations->first())) === strtolower($expected);
+    }
+
+    /**
+     * Is this a destination on the transport domain — something only a list's
+     * own row may name? Compared without regard to case.
+     */
+    public function isTransportDestination(string $destination): bool
+    {
+        $value = strtolower(trim($destination));
+        $at = strrpos($value, '@');
+
+        return $at !== false
+            && substr($value, $at + 1) === strtolower($this->transportDomain->toString());
     }
 
     /**

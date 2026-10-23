@@ -36,13 +36,18 @@ components:
 
     AddressUnknownReason:
       type: string
-      description: Why a row fits no pattern. A stable key; the frontend translates (E-16).
+      description: |
+        Why a row fits no pattern. A stable key; the frontend translates
+        (E-16). `list_destination_mismatch`: a destination is on the list
+        transport domain, but the row is not exactly a list's own (one
+        destination, `<list key>@<transport domain>`, empty `username`).
       enum:
         - no_alias
         - no_destination
         - alias_is_not_an_address
         - catchall_without_domain
         - unusable_value
+        - list_destination_mismatch
 
     AddressDestination:
       type: string
@@ -143,6 +148,7 @@ components:
             - alias_is_not_an_address
             - catchall_without_domain
             - unusable_value
+            - list_destination_mismatch
 
     AddressEntryCollection:
       type: object

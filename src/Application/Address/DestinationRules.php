@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mailadmin\Application\Address;
 
+use Mailadmin\Application\MailingList\ListDelivery;
 use Mailadmin\Domain\Exception\DomainError;
 use Mailadmin\Domain\Exception\InvalidAddress;
 use Mailadmin\Domain\Model\EmailAddress;
@@ -28,14 +29,22 @@ use Mailadmin\Domain\Model\Virtual\DestinationList;
  * At most {@see MAX} entries; a duplicate is refused rather than silently
  * dropped, and so is a destination that would send the mail back to where it
  * came from.
+ *
+ * **Nothing on the list transport domain** ({@see ListDelivery}). Only a
+ * list's own row, written through `/lists`, delivers there. Postfix checks
+ * nothing after virtual rewriting, so an alias, forward or catchall naming
+ * `<key>@<transport domain>` would feed any list — another domain's included —
+ * and strand the row as something the address management cannot remove.
  */
 final readonly class DestinationRules
 {
     /** The contract's `maxItems` — the limit of open point 1. */
     public const int MAX = 50;
 
-    public function __construct(private AddressStore $store)
-    {
+    public function __construct(
+        private AddressStore $store,
+        private ListDelivery $delivery,
+    ) {
     }
 
     /**
@@ -66,6 +75,12 @@ final readonly class DestinationRules
 
         // Shape first: no empty value, no comma, no whitespace.
         $list = DestinationList::of(...$values);
+
+        foreach ($list->all() as $destination) {
+            if ($this->isOnTransport($destination)) {
+                throw InvalidAddress::unusableDestination($destination);
+            }
+        }
 
         $accounts = $this->accounts($list->all());
         $seen = [];
@@ -105,6 +120,14 @@ final readonly class DestinationRules
         }
 
         return $found;
+    }
+
+    private function isOnTransport(string $destination): bool
+    {
+        $at = strrpos($destination, '@');
+
+        return $at !== false
+            && strcasecmp(substr($destination, $at + 1), $this->delivery->transportDomain->toString()) === 0;
     }
 
     /**

@@ -172,7 +172,7 @@ abstract class AddressUseCaseTestCase extends TestCase
 
     protected function destinations(): DestinationRules
     {
-        return new DestinationRules($this->virtual);
+        return new DestinationRules($this->virtual, \Mailadmin\Tests\Support\ListDeliveryFixture::delivery());
     }
 
     protected function loops(): LoopGuard

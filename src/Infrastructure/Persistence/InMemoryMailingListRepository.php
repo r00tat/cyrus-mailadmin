@@ -111,9 +111,9 @@ final class InMemoryMailingListRepository implements MailingListRepository
         $addresses = [];
 
         foreach ($this->lists as $list) {
-            $address = strtolower($list->address);
+            $address = strtolower(trim($list->address));
 
-            if (str_ends_with($address, $suffix)) {
+            if (strlen($address) > strlen($suffix) && str_ends_with($address, $suffix)) {
                 $addresses[] = $address;
             }
         }

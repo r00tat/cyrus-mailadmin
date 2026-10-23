@@ -91,14 +91,56 @@ final class VirtualEntryClassifierTest extends TestCase
         self::assertInstanceOf(Forward::class, $this->classifier->classify($row, $this->lists));
     }
 
-    public function testATransportDestinationUnderAKeyThatIsNoAddressIsUnknown(): void
+    /**
+     * @return iterable<string, array{VirtualRow}>
+     */
+    public static function transportMismatches(): iterable
     {
-        $row = new VirtualRow('team.example.test', 'team.example.test@maillist.invalid', '');
+        yield 'transport first, then another target' => [
+            new VirtualRow('team@example.test', 'team.example.test@maillist.invalid,extern@elsewhere.test', ''),
+        ];
 
-        $entry = $this->classifier->classify($row, $this->lists);
+        yield 'another target, then transport' => [
+            new VirtualRow('team@example.test', 'extern@elsewhere.test,team.example.test@maillist.invalid', ''),
+        ];
+
+        yield 'key of another list' => [
+            new VirtualRow('mine@example.test', 'team.example.test@maillist.invalid', ''),
+        ];
+
+        yield 'transport with a sender' => [
+            new VirtualRow('team@example.test', 'team.example.test@maillist.invalid', 'anna.example.test'),
+        ];
+
+        yield 'key that is no address' => [
+            new VirtualRow('team.example.test', 'team.example.test@maillist.invalid', ''),
+        ];
+
+        yield 'catchall into a list' => [
+            new VirtualRow('@example.test', 'team.example.test@maillist.invalid', ''),
+        ];
+
+        yield 'forward of an account into a list' => [
+            new VirtualRow('anna.example.test', 'team.example.test@MAILLIST.invalid', ''),
+        ];
+    }
+
+    #[DataProvider('transportMismatches')]
+    public function testATransportDestinationThatIsNotExactlyTheListsOwnIsUnknown(VirtualRow $row): void
+    {
+        $entry = $this->classifier->classify($row, $this->lists, DomainName::fromString('example.test'));
 
         self::assertInstanceOf(UnknownVirtualEntry::class, $entry);
-        self::assertSame(UnknownReason::AliasIsNotAnAddress, $entry->reason);
+        self::assertSame(UnknownReason::ListDestinationMismatch, $entry->reason);
+        self::assertTrue($entry->row()->equals($row));
+    }
+
+    public function testTheListKeyIsTheAddressWithItsAtSignReplaced(): void
+    {
+        self::assertSame(
+            'team.example.test',
+            MailingListRecognition::listKey(\Mailadmin\Domain\Model\EmailAddress::parseStored('team@example.test')),
+        );
     }
 
     public function testTheRecognitionNamesTheDomainsWhoseListsALegacyRowNeeds(): void

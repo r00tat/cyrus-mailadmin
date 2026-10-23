@@ -9,6 +9,7 @@ use Mailadmin\Config\ConfigurationError;
 use Mailadmin\Domain\Exception\InvalidAddress;
 use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\EmailAddress;
+use Mailadmin\Domain\Model\Virtual\MailingListRecognition;
 
 /**
  * Where list mail is delivered: the pseudo-domain of the Postfix pipe
@@ -63,7 +64,7 @@ final readonly class ListDelivery
     /** REPLACE(address, '@', '.') — the key maillist.py looks the list up by. */
     public static function listKey(EmailAddress $address): string
     {
-        return str_replace('@', '.', $address->toString());
+        return MailingListRecognition::listKey($address);
     }
 
     /** listKey(address) . '@' . transportDomain */

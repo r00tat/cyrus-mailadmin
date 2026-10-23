@@ -238,6 +238,11 @@ components:
             dot-separated path (`body.quota`, `query.per_page`,
             `header.If-Match`), the value a short reason keyword.
 
+            A refusal that is no validation failure may narrow its `code`
+            down the same way: `address.not_editable` for a mailing list's
+            row of the address table carries
+            `entry: managed_by_mailing_list`.
+
             **Values are never echoed back.** The reason names the constraint
             that failed (`enum`, `maximum`, `required`), not the input — a
             request body may carry a password.

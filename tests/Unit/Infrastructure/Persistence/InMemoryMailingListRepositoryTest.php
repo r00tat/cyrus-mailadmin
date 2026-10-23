@@ -85,7 +85,7 @@ final class InMemoryMailingListRepositoryTest extends TestCase
     {
         $this->repository->given(
             MailingList::fromStoredValues('one', '', 'Team@Example.Test', ''),
-            MailingList::fromStoredValues('two', '', 'crew@example.test', ''),
+            MailingList::fromStoredValues('two', '', ' crew@example.test ', ''),
             MailingList::fromStoredValues('sub', '', 'news@sub.example.test', ''),
             MailingList::fromStoredValues('suffix', '', 'x@notexample.test', ''),
             MailingList::fromStoredValues('other', '', 'team@other.test', ''),

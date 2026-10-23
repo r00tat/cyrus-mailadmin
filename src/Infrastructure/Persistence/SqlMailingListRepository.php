@@ -129,7 +129,8 @@ final class SqlMailingListRepository extends Repository implements MailingListRe
      * Matched with `RIGHT()` rather than `LIKE`, as `DomainRepository` does for
      * `virtual.alias`: a `_` or `%` in the domain cannot turn into a wildcard.
      * The column's collation ignores case; `LOWER()` makes the result
-     * lower-case whatever was stored.
+     * lower-case whatever was stored, and `TRIM()` matches what the classifier
+     * compares against (a trimmed `alias`).
      */
     public function addressesInDomain(DomainName $domain): array
     {
@@ -138,8 +139,8 @@ final class SqlMailingListRepository extends Repository implements MailingListRe
 
         // One placeholder per occurrence: native prepares refuse a name used twice.
         $rows = $this->connection->select(
-            'SELECT DISTINCT LOWER(`address`) AS `address` FROM `lists` '
-            . 'WHERE CHAR_LENGTH(`address`) > :min AND LOWER(RIGHT(`address`, :tail)) = :suffix',
+            'SELECT DISTINCT LOWER(TRIM(`address`)) AS `address` FROM `lists` '
+            . 'WHERE CHAR_LENGTH(TRIM(`address`)) > :min AND LOWER(RIGHT(TRIM(`address`), :tail)) = :suffix',
             ['min' => $length, 'tail' => $length, 'suffix' => $suffix],
         );
 

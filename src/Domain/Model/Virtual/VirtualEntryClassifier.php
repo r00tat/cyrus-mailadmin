@@ -21,8 +21,10 @@ use Mailadmin\Domain\Model\MailboxIdentity;
  * ```text
  * alias empty            → unknown (no_alias)
  * dest empty             → unknown (no_destination)
+ * dest on the list transport → mailing list when exactly a list's own row,
+ *                          otherwise unknown (list_destination_mismatch)
  * alias starts with "@"  → catchall
- * list row (see below)   → mailing list (unknown when alias is no address)
+ * legacy list row        → mailing list (needs a `lists` row, see below)
  * username empty         → forward
  * alias is an address    → mailbox address if it is the account's own address,
  *                          otherwise alias
@@ -40,8 +42,9 @@ use Mailadmin\Domain\Model\MailboxIdentity;
  * has an empty `username` and would otherwise read as a forward; one in the
  * legacy form looks like an account's address row. {@see MailingListRecognition}
  * carries the transport domain and the addresses in `lists`, which the caller
- * loads — the classifier itself reads nothing. The list rule therefore comes
- * before "username empty" and before the address/alias decision.
+ * loads — the classifier itself reads nothing. The transport rule comes first
+ * of all, so that no catchall, forward or alias can deliver to a list; the
+ * legacy rule comes before "username empty" and the address/alias decision.
  */
 final readonly class VirtualEntryClassifier
 {
@@ -65,11 +68,19 @@ final readonly class VirtualEntryClassifier
             return new UnknownVirtualEntry(UnknownReason::NoDestination, $row);
         }
 
+        if ($lists->mentionsTransport($destinations)) {
+            // Only a list's own row may deliver to the list transport. Anything
+            // else naming it would feed a list nobody routed it to.
+            return $lists->isTransportListRow($row, $destinations)
+                ? $this->mailingList($alias, $destinations, $row)
+                : new UnknownVirtualEntry(UnknownReason::ListDestinationMismatch, $row);
+        }
+
         if (str_starts_with($alias, '@')) {
             return $this->catchAll($alias, $destinations, $row);
         }
 
-        if ($lists->deliversToTransport($row) || $lists->isLegacyListRow($row)) {
+        if ($lists->isLegacyListRow($row)) {
             return $this->mailingList($alias, $destinations, $row);
         }
 

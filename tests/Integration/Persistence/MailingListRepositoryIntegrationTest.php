@@ -185,7 +185,7 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
     public function testAddressesInDomainReturnsTheListsOfExactlyThatDomainLowerCased(): void
     {
         $this->insertRaw('one', '', 'Team@Example.Test', '');
-        $this->insertRaw('two', '', 'crew@example.test', '');
+        $this->insertRaw('two', '', ' crew@example.test ', '');
         $this->insertRaw('sub', '', 'news@sub.example.test', '');
         $this->insertRaw('suffix', '', 'x@notexample.test', '');
         $this->insertRaw('wild', '', 'y@exampleXtest', '');

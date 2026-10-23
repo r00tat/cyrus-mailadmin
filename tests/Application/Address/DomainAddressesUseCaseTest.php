@@ -207,6 +207,25 @@ final class DomainAddressesUseCaseTest extends AddressUseCaseTestCase
         self::assertSame([], $this->audit->withAction(DeleteDomainAddress::OPERATION));
     }
 
+    public function testARowWithAMismatchedListDestinationIsUnknownAndASuperuserRemovesIt(): void
+    {
+        $row = $this->virtual->givenRow('mine@example.test', 'extern@elsewhere.test,team.other.test@maillist.invalid', '');
+
+        $listing = $this->listAddresses()->handle(
+            DomainFixture::superuser(),
+            self::domain(),
+            new ListCriteria(filters: ['alias' => 'mine@']),
+        );
+        $view = AddressView::entry($listing->page->items[0], $listing->rows);
+        self::assertSame('unknown', $view['type']);
+        self::assertSame('list_destination_mismatch', $view['unknown_reason']);
+
+        $this->deleteEntry()->handle(DomainFixture::superuser(), self::domain(), EntryKey::of($row), false);
+
+        self::assertSame([], $this->rowsOf('mine@example.test'));
+        self::assertCount(1, $this->audit->withAction(DeleteDomainAddress::OPERATION));
+    }
+
     public function testALegacyShapedRowWithoutAListIsStillAnAliasAndCanBeRemoved(): void
     {
         $row = $this->virtual->givenRow('crew@example.test', 'crew.example.test', 'crew.example.test');
@@ -371,6 +390,23 @@ final class DomainAddressesUseCaseTest extends AddressUseCaseTestCase
         );
 
         self::assertSame('anna.example.test', $state->senderAccount());
+    }
+
+    public function testACatchallCannotPointAtTheListTransport(): void
+    {
+        try {
+            $this->setCatchall()->handle(
+                DomainFixture::superuser(),
+                self::domain(),
+                new CatchallChange(['team.other.test@maillist.invalid']),
+                null,
+            );
+            self::fail('A transport destination was accepted.');
+        } catch (InvalidAddress $refused) {
+            self::assertSame('address.invalid_destination', $refused->code());
+        }
+
+        self::assertSame([], $this->rowsOf('@example.test'));
     }
 
     public function testACatchallIntoAnAddressOfItsOwnDomainThatDoesNotExistIsALoop(): void

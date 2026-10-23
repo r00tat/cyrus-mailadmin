@@ -233,6 +233,71 @@ final class AliasUseCaseTest extends AddressUseCaseTestCase
         self::assertSame(404, $failure->status);
     }
 
+    public function testAnAliasCannotPointAtTheListTransport(): void
+    {
+        // A domain master must not inject mail into another domain's list by
+        // naming its transport key: after virtual rewriting nothing checks it.
+        $failure = null;
+
+        try {
+            $this->createAlias()->handle(
+                DomainFixture::domainMaster('anna', 'example.test'),
+                self::domain(),
+                new AliasDraft('sneak', ['team.other.test@MailList.Invalid']),
+            );
+        } catch (InvalidAddress $refused) {
+            $failure = $refused;
+        }
+
+        self::assertNotNull($failure);
+        self::assertSame('address.invalid_destination', $failure->code());
+        self::assertSame([], $this->rowsOf('sneak@example.test'));
+    }
+
+    public function testAnUpdateCannotPointAnAliasAtTheListTransport(): void
+    {
+        $this->virtual->givenRow('info@example.test', 'anna.example.test', 'anna.example.test');
+
+        try {
+            $this->updateAlias()->handle(
+                DomainFixture::superuser(),
+                'info@example.test',
+                new AliasChange(destinations: ['anna.example.test', 'team.other.test@maillist.invalid']),
+                null,
+            );
+            self::fail('A transport destination was accepted.');
+        } catch (InvalidAddress $refused) {
+            self::assertSame('address.invalid_destination', $refused->code());
+        }
+
+        self::assertSame(['info@example.test|anna.example.test|anna.example.test|1'], $this->rowsOf('info@example.test'));
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function mailingListRows(): iterable
+    {
+        yield 'transport' => ['team.example.test@maillist.invalid', ''];
+        yield 'legacy' => ['team.example.test', 'team.example.test'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('mailingListRows')]
+    public function testAListAddressIsTakenForANewAlias(string $dest, string $username): void
+    {
+        $this->mailingLists->given(MailingList::fromStoredValues('Team', 'team', 'team@example.test', ''));
+        $this->virtual->givenRow('team@example.test', $dest, $username);
+
+        $failure = $this->expectFailure(fn () => $this->createAlias()->handle(
+            DomainFixture::superuser(),
+            self::domain(),
+            new AliasDraft('team', ['anna.example.test']),
+        ));
+
+        self::assertSame(AddressErrorCode::TAKEN, $failure->errorCode);
+        self::assertSame([sprintf('team@example.test|%s|%s|1', $dest, $username)], $this->rowsOf('team@example.test'));
+    }
+
     public function testAMailingListIsNoAlias(): void
     {
         // The legacy list row looks like an alias onto a Cyrus user named like

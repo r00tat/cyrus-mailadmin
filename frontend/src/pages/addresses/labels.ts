@@ -39,6 +39,7 @@ export const UNKNOWN_REASON_KEYS: Readonly<Record<AddressUnknownReason, Translat
   alias_is_not_an_address: 'address.list.unknownReason.aliasIsNotAnAddress',
   catchall_without_domain: 'address.list.unknownReason.catchallWithoutDomain',
   unusable_value: 'address.list.unknownReason.unusableValue',
+  list_destination_mismatch: 'address.list.unknownReason.listDestinationMismatch',
 };
 
 /** The detail route of an alias; the address is URL-encoded (`info%40example.test`). */
