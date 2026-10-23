@@ -20,17 +20,26 @@ Hintergrund und Umstellungsplan: Spezifikation `docs/superpowers/specs/2026-10-2
 Aus dem Release:
 
 ```bash
-curl -fsSLO https://github.com/r00tat/cyrus-mailadmin/releases/latest/download/install-maillist
-sudo python3 install-maillist --release latest
+dir=$(mktemp -d)
+curl -fsSL -o "$dir/install-maillist" https://github.com/r00tat/cyrus-mailadmin/releases/latest/download/install-maillist
+sudo python3 -I "$dir/install-maillist" --release latest
 ```
+
+Lade den Installer in ein frisches Verzeichnis und starte ihn mit `python3 -I`. Ohne `-I` steht das
+Verzeichnis des Skripts vorne in `sys.path`; ein dort abgelegtes Modul (etwa in einem gemeinsam
+genutzten Download-Verzeichnis) würde als Root importiert. Fehlt `-I`, gibt der Installer eine Warnung
+aus, arbeitet aber weiter. Seine eigenen Python-Aufrufe (Abhängigkeitsprüfung, `--check`) startet er
+immer mit `-I` und im Verzeichnis `/`.
 
 Der erste Lauf legt den Listenbenutzer (`maillist`, ein Systembenutzer ohne Login) und die
 Konfigurationsdatei aus der Vorlage an und endet mit Exit-Code 2. Trage die Zugangsdaten und die
 Pflichtschlüssel ein und rufe denselben Befehl erneut auf. Dann legt der Installer die Logdatei an,
 installiert das Release, prüft es als Listenbenutzer mit `maillist.py --check` und schaltet erst danach
-um. Alternativ aus dem Checkout: `sudo maillist/install`.
+um. Alternativ aus dem Checkout: `sudo python3 -I maillist/install`.
 
-Der Installer lädt das Archiv nur von GitHub über https und prüft es gegen `SHA256SUMS`.
+Der Installer lädt das Archiv nur von GitHub über https und prüft es gegen `SHA256SUMS`. Die
+Prüfsummen kommen aus demselben Release wie das Archiv; sie schützen gegen beschädigte Downloads, nicht
+gegen ein manipuliertes Release. Vertrauensanker ist GitHub, also das Repository und dessen Zugänge.
 
 ### Layout
 
@@ -154,6 +163,13 @@ maillist.invalid    REJECT
 und danach `postmap hash:/etc/postfix/maillist_block`. Die Prüfung gilt für die RCPT-TO-Adresse vor
 der `virtual`-Auflösung. Über `virtual` umgeschriebene Listenmails laufen deshalb weiter durch.
 
+Umwege über eine lokale Domain erfasst die Sperre ebenfalls: `schluessel%maillist.invalid@domain`
+(`allow_percent_hack`), `"schluessel@maillist.invalid"@domain` (`resolve_dequoted_address`) und
+`maillist.invalid!schluessel@domain` (`swap_bangpath`). Postfix schreibt diese Formen vor der Prüfung auf
+`schluessel@maillist.invalid` um, und `check_recipient_access` sucht nach der umgeschriebenen Adresse.
+Die Testumgebung prüft das mit den Postfix-Standardwerten der drei Parameter
+(`MailingListDeliveryTest`). Eine Änderung an ihnen ist deshalb nicht nötig.
+
 **`master.cf` prüfen.** Jeder `smtpd`-Dienst in `master.cf` (`smtp`, `submission`, `smtps`), der
 `-o smtpd_recipient_restrictions=…` setzt, ersetzt den Wert aus `main.cf` vollständig. Trage die
 Prüfung dort ebenfalls an erster Stelle ein, sonst ist die Pseudodomain über diesen Dienst direkt
@@ -164,7 +180,7 @@ erreichbar. In der Testumgebung von mailadmin setzt der submission-Dienst nur
 
 Aktualisieren: denselben Befehl erneut ausführen. Das neue Release liegt neben dem alten, wird als
 Listenbenutzer geprüft und erst danach per atomarem Symlink-Tausch aktiv. Eine laufende Zustellung
-sieht immer ein vollständiges Release. Zurück: `sudo python3 install-maillist --rollback`. Den Stand
+sieht immer ein vollständiges Release. Zurück: `sudo python3 -I "$dir/install-maillist" --rollback`. Den Stand
 zeigt `--status`.
 
 ## 5. Datenbankbenutzer
@@ -188,9 +204,19 @@ Die Schritte gehören zur Umstellung in der Spezifikation. Hier stehen die, die 
 2. **Transport einrichten** (Schritt 2). `master.cf`, `transport`, Recipient-Limit und die Sperre aus
    Abschnitt 3. Die alte Aliasdatei bleibt, beide Wege sind aktiv.
 3. **Listeneinträge umstellen** (Schritt 4). Das erledigt mailadmin, siehe Abschnitt 7.
-4. **Rückfallebene abschalten** (Schritt 5). Sobald alle Listen über den Transport laufen und
-   `MAILADMIN_LIST_DELIVERY=transport` gesetzt ist, setze `delivered_to_fallback = no` im Abschnitt `[list]`
-   der Konfiguration. Ein Aufruf ohne Argument endet dann mit `64`.
+4. **Aliasweg abschalten** (Schritt 5). Sobald alle Listen über den Transport laufen und
+   `MAILADMIN_LIST_DELIVERY=transport` gesetzt ist, sind zwei Dinge zu tun, und beide sind nötig:
+   - **Salt schreibt keine Listeneinträge mehr in die Aliasdatei**, und die vorhandenen Einträge
+     verschwinden daraus (danach `newaliases`). Solange die Aliasdatei einen Listenschlüssel kennt,
+     erreicht Mail an `<schluessel>@<beliebige lokale Domain>` die Liste über `local(8)` und den Alias.
+     Dieser Weg führt nicht über die Pseudodomain, die Sperre aus Abschnitt 3 greift dort nicht, und der
+     Zugriffsschutz von mailadmin wird umgangen. Das gilt während der ganzen Umstellung, solange die
+     Einträge in der Aliasdatei stehen.
+   - **`delivered_to_fallback = no`** im Abschnitt `[list]` der Konfiguration. Ein Aufruf ohne Argument
+     endet dann mit `64`. Diese Einstellung allein reicht nicht: Postfix nimmt die Adressen weiter an
+     und ruft das Skript über die Aliasdatei auf. Es lehnt den Aufruf zwar ab, aber der Schutz hängt dann
+     an der Form der Aliaszeile. Trägt sie je einen Listenschlüssel als Argument, ist der Weg wieder
+     offen. Erst das Entfernen der Einträge macht die Adressen für Postfix unbekannt.
 
 Prüfe nach jedem Schritt mit `python3 /opt/mailadmin-maillist/current/maillist.py --check` (als
 Listenbenutzer, mit gesetztem `MAILLIST_CONFIG`) und mit einer Testmail an eine Liste.
