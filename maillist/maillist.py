@@ -18,6 +18,7 @@ import re
 import smtplib
 import ssl
 import sys
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
 from email import policy
@@ -84,6 +85,26 @@ class Settings:
 
 class ConfigError(Exception):
     """The configuration file is missing, unreadable or incomplete."""
+
+
+class ListDataError(Exception):
+    """A row in the lists table has an unusable shape. Maps to EX_SOFTWARE, never to "list not found"."""
+
+
+class AmbiguousListError(Exception):
+    """More than one list matches the key. The message must not go to a guessed list."""
+
+    def __init__(self, count: int) -> None:
+        super().__init__(f"{count} lists match the key")
+        self.count = count
+
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def sanitize_text(value: str, limit: int = 200) -> str:
+    """Replace control characters (CR/LF included) with a space and cap the length."""
+    return _CONTROL_CHARS.sub(" ", value)[:limit]
 
 
 @dataclass(frozen=True)
@@ -161,6 +182,8 @@ def configure_logging(settings: Settings) -> None:
     Postfix copies the script's stdout and stderr into bounce messages, so logging never falls back to
     stderr: an unwritable file means syslog, and without syslog nothing is logged.
     """
+    # A failing log handler must never print a traceback to stderr: Postfix would put it into a bounce.
+    logging.raiseExceptions = False
     handler: logging.Handler
     fallback_reason: str | None = None
     try:
@@ -189,40 +212,49 @@ def get_list_info(cnx: DBConnection, msg_id: str, delivered_to: str) -> ListInfo
 
     Returns:
         ListInfo object or None if not found
+
+    Raises:
+        AmbiguousListError: more than one list matches the key.
+        ListDataError: the row has unusable column types.
+        mysql.connector.Error: propagates; the caller logs it once.
     """
-    try:
-        query = "SELECT tag, address, members FROM lists WHERE REPLACE(address, '@', '.') = %s"
-        logger.debug(f"{msg_id} - Query: {query} with param: {delivered_to}")
-        with closing(cnx.cursor()) as cursor:
-            cursor.execute(query, (delivered_to,))
-            result = cursor.fetchone()
-        if not result:
-            return None
+    query = "SELECT tag, address, members FROM lists WHERE REPLACE(address, '@', '.') = %s"
+    logger.debug(f"{msg_id} - Query: {query} with param: {delivered_to}")
+    with closing(cnx.cursor()) as cursor:
+        cursor.execute(query, (delivered_to,))
+        rows = cursor.fetchall()
+    if not rows:
+        return None
+    if len(rows) > 1:
+        raise AmbiguousListError(len(rows))
 
-        raw_tag, raw_address, raw_members = result
+    raw_tag, raw_address, raw_members = rows[0]
 
-        tag: str | None
-        if raw_tag is None:
-            tag = None
-        elif isinstance(raw_tag, str):
-            tag = raw_tag
-        else:
-            tag = str(raw_tag)
+    tag: str | None
+    if raw_tag is None:
+        tag = None
+    elif isinstance(raw_tag, str):
+        tag = raw_tag
+    else:
+        tag = str(raw_tag)
 
-        if not isinstance(raw_address, str) or not isinstance(raw_members, str):
-            logger.error(
-                f"{msg_id} - Invalid list row types for {delivered_to}: "
-                f"address={type(raw_address).__name__}, members={type(raw_members).__name__}"
-            )
-            return None
+    if not isinstance(raw_address, str) or not isinstance(raw_members, str):
+        raise ListDataError(
+            f"invalid list row types: address={type(raw_address).__name__}, members={type(raw_members).__name__}"
+        )
 
-        return ListInfo(tag=tag, address=raw_address, members=raw_members)
-    except mysql.connector.Error as e:
-        logger.error(f"{msg_id} - Database error: {e}")
-        raise
+    return ListInfo(tag=tag, address=raw_address, members=raw_members)
 
 
 _BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
+
+def _is_plain_address(address: str) -> bool:
+    """ASCII local@domain with a dotted domain. Anything else cannot be sent without SMTPUTF8."""
+    if not address.isascii():
+        return False
+    local, at, domain = address.rpartition("@")
+    return bool(at and local and "." in domain and not domain.startswith(".") and not domain.endswith("."))
 
 
 def normalize_recipients(members: str, msg_id: str) -> list[str]:
@@ -241,7 +273,7 @@ def normalize_recipients(members: str, msg_id: str) -> list[str]:
         # getaddresses honours quotes, so a comma inside "Doe, John" is not a separator.
         for _name, address in getaddresses([line.replace(";", ",")]):
             address = address.strip()
-            if not address or "@" not in address:
+            if not _is_plain_address(address):
                 logger.warning(f"{msg_id} - Skipping invalid recipient entry in line {line_no}")
                 logger.debug(f"{msg_id} - Invalid recipient entry in line {line_no}: {line!r}")
                 continue
@@ -272,6 +304,8 @@ def _describe_smtp_failure(exc: Exception) -> tuple[str, bool, str]:
         code = max(codes) if codes else 0
         detail = next((msg for _code, msg in exc.recipients.values()), b"")
         return f"{code} {detail.decode(errors='replace')}".strip(), bool(codes) and min(codes) >= 500, f"SMTP {code}"
+    if isinstance(exc, ValueError):  # includes UnicodeEncodeError: the address cannot be sent as is
+        return f"{type(exc).__name__}: {exc}", True, type(exc).__name__
     if isinstance(exc, smtplib.SMTPResponseException):
         detail = exc.smtp_error.decode(errors="replace") if isinstance(exc.smtp_error, bytes) else str(exc.smtp_error)
         return f"{exc.smtp_code} {detail}".strip(), exc.smtp_code >= 500, f"SMTP {exc.smtp_code}"
@@ -287,13 +321,11 @@ def send_to_list(
     one by one. Individual failures are recorded, not raised, so the caller can tell a total failure
     (retry later) from a partial one (retrying would deliver twice). Addresses are only logged at DEBUG.
     """
-    if not recipients:
-        logger.warning(f"{msg_id} - No valid recipients found after normalization")
-        return DeliveryResult(accepted=[], failed={})
-
     accepted: list[str] = []
     pending: list[str]
     try:
+        # A timeout after the final "." of DATA can leave the relay with the mail queued while we see an
+        # error; a retry then delivers twice. That is inherent to SMTP and accepted.
         logger.info(f"{msg_id} - Sending mail in batch to {len(recipients)} recipients")
         refused = smtp.sendmail(from_addr, recipients, message)
         pending = list(refused.keys())
@@ -302,7 +334,7 @@ def send_to_list(
             logger.warning(f"{msg_id} - Batch send refused {len(pending)} recipients; retrying individually")
             for address, (code, _detail) in refused.items():
                 logger.debug(f"{msg_id} - Batch refused {address}: SMTP {code}")
-    except smtplib.SMTPException as e:
+    except (smtplib.SMTPException, ValueError) as e:
         _text, _permanent, label = _describe_smtp_failure(e)
         logger.warning(f"{msg_id} - Batch send failed ({label}); retrying recipients individually")
         pending = list(recipients)
@@ -313,7 +345,7 @@ def send_to_list(
         try:
             smtp.sendmail(from_addr, address, message)
             accepted.append(address)
-        except (smtplib.SMTPException, OSError) as e:
+        except (smtplib.SMTPException, OSError, ValueError) as e:
             text, permanent, label = _describe_smtp_failure(e)
             failed[address] = text
             transient = transient or not permanent
@@ -348,7 +380,11 @@ def ensure_sender_header(msg: EmailMessage, list_address: str) -> None:
 
 
 def parse_incoming_message() -> EmailMessage:
-    """Parse stdin as bytes and return an SMTP-policy email message."""
+    """Parse stdin as bytes and return an SMTP-policy email message.
+
+    Known limitation, same as upstream: raw 8-bit headers are re-encoded by policy.SMTP when the
+    message is serialised again.
+    """
     # Message-handling policy for auth compatibility:
     # - Parse input from raw bytes to avoid lossy Unicode conversion.
     # - Keep body unchanged unless list-specific header changes are required.
@@ -357,9 +393,15 @@ def parse_incoming_message() -> EmailMessage:
     return BytesParser(policy=policy.SMTP).parsebytes(incoming_bytes)
 
 
-def should_drop_for_loop(incoming: EmailMessage, loop_marker: str) -> bool:
-    """Return True when known loop patterns are detected."""
-    return incoming.get("X-maillist") == loop_marker and incoming.get("X-Original-To") == incoming.get("To")
+def should_drop_for_loop(incoming: EmailMessage, loop_marker: str, list_address: str) -> bool:
+    """Return True when this list already processed the message (marker and its own List-Id).
+
+    Postfix runs the transport with flags=Rq, so X-Original-To is absent; the marker alone is not enough
+    either, because a list nested in another list legitimately receives marked mail.
+    """
+    if incoming.get("X-maillist") != loop_marker:
+        return False
+    return str(incoming.get("List-Id", "")).strip().lower() == f"<{list_address}>".lower()
 
 
 def _local_part(address_header: str) -> str:
@@ -404,8 +446,10 @@ def apply_list_headers(
     incoming: EmailMessage, tag: str | None, address: str, outbound_sender: str, lists: ListSettings
 ) -> None:
     """Apply list-specific headers to the outgoing message."""
-    if tag:
-        set_or_replace_header(incoming, "Subject", f"[{tag}] {incoming.get('Subject', '')}")
+    tag = sanitize_text(tag).strip() if tag else None
+    subject = str(incoming.get("Subject", ""))
+    if tag and f"[{tag}]" not in subject:
+        set_or_replace_header(incoming, "Subject", f"[{tag}] {subject}")
 
     set_or_replace_header(incoming, "X-maillist", lists.loop_marker)
     set_or_replace_header(incoming, "List-Id", f"<{address}>")
@@ -446,7 +490,7 @@ def send_via_local_postfix(
     """
     if not recipients:
         logger.warning(f"{msg_id} - No valid recipients found after normalization")
-        return EX_OK
+        return EX_NOUSER
 
     result: DeliveryResult | None = None
     try:
@@ -462,48 +506,80 @@ def send_via_local_postfix(
         if not result.accepted and result.transient:
             logger.error(f"{msg_id} - No recipient accepted and failures are temporary; message will be retried")
             return EX_TEMPFAIL
+        # Deliberate: when every recipient was refused permanently the result is still EX_OK plus an admin
+        # report. A bounce to the sender would only leak the member list's state to them.
         logger.error(f"{msg_id} - {len(result.failed)} of {len(recipients)} recipients failed; notifying admins")
         notify_delivery_issue(settings, msg_id, outbound_sender, recipients, result.failed)
     return EX_OK
 
 
-def _send_report(settings: Settings, report: EmailMessage, msg_id: str) -> None:
+def _send_report(settings: Settings, build: Callable[[], EmailMessage], msg_id: str) -> None:
+    """Build and send an admin report. Never raises: a broken report must not change the exit code."""
     try:
+        report = build()
         with open_smtp(settings) as smtp:
             smtp.send_message(report)
-    except (smtplib.SMTPException, OSError) as notify_error:
+    except Exception as notify_error:
         logger.error(f"{msg_id} - Failed to send error report ({type(notify_error).__name__})")
+
+
+def _new_report(settings: Settings, subject: str) -> EmailMessage:
+    report = EmailMessage()
+    report["From"] = settings.lists.error_report_from
+    report["To"] = settings.lists.error_report_to
+    report["Subject"] = sanitize_text(subject)
+    return report
 
 
 def notify_delivery_issue(
     settings: Settings, msg_id: str, outbound_sender: str, recipients: list[str], failed: dict[str, str]
 ) -> None:
     """Tell the admins which recipients could not be served (a report, not a log: it may name them)."""
-    report = EmailMessage()
-    report["From"] = settings.lists.error_report_from
-    report["To"] = settings.lists.error_report_to
-    report["Subject"] = f"[maillist] delivery error for {msg_id}"
-    failures = "\n".join(f"  {address}: {reason}" for address, reason in failed.items())
-    report.set_content(
-        "The maillist relay could not deliver to some recipients.\n\n"
-        f"Message-Id: {msg_id}\n"
-        f"Envelope sender: {outbound_sender}\n"
-        f"Recipient count: {len(recipients)}\n"
-        f"Failed recipients ({len(failed)}):\n{failures}\n"
-    )
-    _send_report(settings, report, msg_id)
+
+    def build() -> EmailMessage:
+        mid = sanitize_text(msg_id)
+        report = _new_report(settings, f"[maillist] delivery error for {mid}")
+        failures = "\n".join(f"  {address}: {sanitize_text(reason, 500)}" for address, reason in failed.items())
+        report.set_content(
+            "The maillist relay could not deliver to some recipients.\n\n"
+            f"Message-Id: {mid}\n"
+            f"Envelope sender: {sanitize_text(outbound_sender)}\n"
+            f"Recipient count: {len(recipients)}\n"
+            f"Failed recipients ({len(failed)}):\n{failures}\n"
+        )
+        return report
+
+    _send_report(settings, build, msg_id)
 
 
 def notify_unexpected_error(settings: Settings, msg_id: str, error: Exception) -> None:
     """Best-effort report of an unexpected failure to the configured report mailbox."""
-    report = EmailMessage()
-    report["From"] = settings.lists.error_report_from
-    report["To"] = settings.lists.error_report_to
-    report["Subject"] = f"[maillist] unexpected error for {msg_id}"
-    report.set_content(
-        f"The maillist script failed with an unexpected error.\n\nMessage-Id: {msg_id}\nError: {error!r}\n"
-    )
-    _send_report(settings, report, msg_id)
+
+    def build() -> EmailMessage:
+        mid = sanitize_text(msg_id)
+        report = _new_report(settings, f"[maillist] unexpected error for {mid}")
+        report.set_content(
+            f"The maillist script failed with an unexpected error.\n\nMessage-Id: {mid}\nError: {error!r}\n"
+        )
+        return report
+
+    _send_report(settings, build, msg_id)
+
+
+def notify_ambiguous_list(settings: Settings, msg_id: str, count: int) -> None:
+    """Tell the admins that a list key matched several lists, so the message was held back."""
+
+    def build() -> EmailMessage:
+        mid = sanitize_text(msg_id)
+        report = _new_report(settings, f"[maillist] ambiguous list key for {mid}")
+        report.set_content(
+            f"The list key matched {count} lists, so the message was not delivered and stays queued.\n"
+            "Fix the duplicate list addresses; Postfix will retry.\n\n"
+            f"Message-Id: {mid}\n"
+        )
+        return report
+
+    _send_report(settings, build, msg_id)
 
 
 def resolve_list_key(argument: str | None, incoming: EmailMessage, fallback: bool) -> str | None:
@@ -554,19 +630,27 @@ def deliver(settings: Settings, args: argparse.Namespace, incoming: EmailMessage
         host=db.host,
         port=db.port,
         database=db.name,
-        raise_on_warnings=True,
         connection_timeout=10,
     )
-    with closing(cnx):
-        list_info = get_list_info(cnx, msg_id, list_key)
+    try:
+        with closing(cnx):
+            list_info = get_list_info(cnx, msg_id, list_key)
+    except AmbiguousListError as exc:
+        logger.error(f"{msg_id} - The list key matches {exc.count} lists; refusing to guess, message stays queued")
+        notify_ambiguous_list(settings, msg_id, exc.count)
+        return EX_TEMPFAIL
 
     if not list_info:
         logger.warning(f"{msg_id} - No mailing list found for {list_key}")
         return EX_NOUSER
 
-    logger.info(f"{msg_id} - Found Maillist: {list_info.address} with {len(list_info.members.splitlines())} members")
+    if should_drop_for_loop(incoming, settings.lists.loop_marker, list_info.address):
+        logger.error(f"{msg_id} - Mail loop detected, dropping")
+        return EX_OK
+
     outbound_sender = list_sender_address(list_info.address)
     recipients = normalize_recipients(list_info.members, msg_id)
+    logger.info(f"{msg_id} - Found Maillist: {list_info.address} with {len(recipients)} members")
 
     apply_list_headers(incoming, list_info.tag, list_info.address, outbound_sender, settings.lists)
 
@@ -601,7 +685,6 @@ def run_check(config_path: str) -> int:
             host=db.host,
             port=db.port,
             database=db.name,
-            raise_on_warnings=True,
             connection_timeout=10,
         )
         with closing(cnx), closing(cnx.cursor()) as cursor:
@@ -616,6 +699,13 @@ def run_check(config_path: str) -> int:
         return EX_SOFTWARE
     print(f"database ok ({count} lists)")
     return EX_OK
+
+
+def _report_software_error(settings: Settings, msg_id: str, exc: Exception) -> None:
+    try:
+        notify_unexpected_error(settings, msg_id, exc)
+    except Exception:
+        logger.exception(f"{msg_id} - Could not report the unexpected error")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -637,12 +727,9 @@ def main(argv: list[str] | None = None) -> int:
     msg_id = "UNKNOWN"
     try:
         incoming = parse_incoming_message()
-        msg_id = incoming.get("Message-Id", "UNKNOWN")
+        # Decoded headers can carry CR/LF; sanitise once so logs and reports can use the value safely.
+        msg_id = sanitize_text(str(incoming.get("Message-Id") or "UNKNOWN"))
         logger.info(f"{msg_id} - starting maillist processing")
-
-        if should_drop_for_loop(incoming, settings.lists.loop_marker):
-            logger.error(f"{msg_id} - Mail loop detected, dropping")
-            return EX_OK
 
         if should_drop_for_bounce(incoming):
             logger.error(f"{msg_id} - Possible bounce / undeliverable mail")
@@ -658,12 +745,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             logger.error(f"{msg_id} - Database error: {err}")
         return EX_TEMPFAIL
+    except ListDataError as exc:
+        logger.error(f"{msg_id} - Unusable list row: {exc}")
+        _report_software_error(settings, msg_id, exc)
+        return EX_SOFTWARE
     except Exception as exc:
         logger.exception(f"{msg_id} - Unexpected error")
-        try:
-            notify_unexpected_error(settings, msg_id, exc)
-        except Exception:
-            logger.exception(f"{msg_id} - Could not report the unexpected error")
+        _report_software_error(settings, msg_id, exc)
         return EX_SOFTWARE
 
 

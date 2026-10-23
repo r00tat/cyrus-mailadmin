@@ -60,6 +60,9 @@ class FakeCursor:
     def fetchone(self):
         return self.rows[0] if self.rows else None
 
+    def fetchall(self):
+        return list(self.rows)
+
     def close(self):
         pass
 

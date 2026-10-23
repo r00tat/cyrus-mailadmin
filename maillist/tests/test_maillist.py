@@ -158,20 +158,42 @@ def test_normalize_recipients_deduplicates_and_skips_invalid() -> None:
     assert recipients == ["alice@example.com", "bob@example.com"]
 
 
-def test_should_drop_for_loop_matches_existing_markers(settings) -> None:
+def test_loop_detected_by_marker_and_own_list_id(settings) -> None:
     msg = EmailMessage()
     msg["X-maillist"] = settings.lists.loop_marker
-    msg["X-Original-To"] = "list@example.com"
-    msg["To"] = "list@example.com"
-    assert maillist.should_drop_for_loop(msg, settings.lists.loop_marker) is True
+    msg["List-Id"] = "<list@example.org>"
+    assert maillist.should_drop_for_loop(msg, settings.lists.loop_marker, "list@example.org") is True
 
 
-def test_should_not_drop_for_loop_with_foreign_marker(settings) -> None:
+def test_loop_detection_needs_no_to_or_original_to(settings) -> None:
+    # pipe(8) with flags=Rq: no X-Original-To, and a forged mail may have no To at all.
+    msg = EmailMessage()
+    msg["X-maillist"] = settings.lists.loop_marker
+    msg["List-Id"] = "<LIST@example.org>"
+    assert "To" not in msg and "X-Original-To" not in msg
+    assert maillist.should_drop_for_loop(msg, settings.lists.loop_marker, "list@example.org") is True
+
+
+def test_marker_with_other_list_id_is_not_a_loop(settings) -> None:
+    msg = EmailMessage()
+    msg["X-maillist"] = settings.lists.loop_marker
+    msg["List-Id"] = "<outer@example.org>"
+    assert maillist.should_drop_for_loop(msg, settings.lists.loop_marker, "list@example.org") is False
+
+
+def test_foreign_marker_is_not_a_loop(settings) -> None:
     msg = EmailMessage()
     msg["X-maillist"] = "someone-else"
-    msg["X-Original-To"] = "list@example.com"
-    msg["To"] = "list@example.com"
-    assert maillist.should_drop_for_loop(msg, settings.lists.loop_marker) is False
+    msg["List-Id"] = "<list@example.org>"
+    assert maillist.should_drop_for_loop(msg, settings.lists.loop_marker, "list@example.org") is False
+
+
+def test_old_x_original_to_rule_is_gone(settings) -> None:
+    msg = EmailMessage()
+    msg["X-maillist"] = settings.lists.loop_marker
+    msg["X-Original-To"] = "list@example.org"
+    msg["To"] = "list@example.org"
+    assert maillist.should_drop_for_loop(msg, settings.lists.loop_marker, "list@example.org") is False
 
 
 def test_should_drop_for_bounce_from_mailer_daemon() -> None:
@@ -332,13 +354,6 @@ def test_send_to_list_marks_temporary_failure_as_transient() -> None:
     assert result.transient is True
 
 
-def test_send_to_list_without_recipients_sends_nothing() -> None:
-    smtp = FakeSMTP()
-    result = maillist.send_to_list(smtp, "list@example.org", [], b"raw", "MSG")
-    assert smtp.calls == []
-    assert result == maillist.DeliveryResult(accepted=[], failed={})
-
-
 def test_smtp_connection_refused_is_tempfail(run_main) -> None:
     class Refusing(RecordingSMTP):
         def __init__(self, *_args, **_kwargs):
@@ -430,13 +445,19 @@ def test_partial_delivery_with_temporary_failure_is_not_retried(run_main) -> Non
     assert len([m for s in smtps for m in s.messages]) == 1
 
 
-def test_no_valid_recipients_is_ok_without_connecting(run_main, caplog) -> None:
+def test_no_usable_recipients_is_nouser_without_connecting(run_main, caplog) -> None:
     rows = (("TAG", "list@example.org", "garbage-without-at"),)
     with caplog.at_level("WARNING", logger="maillist"):
         code, _, smtps = run_main(["list.example.org"], rows=rows)
-    assert code == maillist.EX_OK
+    assert code == maillist.EX_NOUSER
     assert smtps == []
     assert any("No valid recipients" in r.getMessage() for r in caplog.records)
+
+
+def test_empty_member_list_is_nouser(run_main) -> None:
+    code, _, smtps = run_main(["list.example.org"], rows=(("TAG", "list@example.org", ""),))
+    assert code == maillist.EX_NOUSER
+    assert smtps == []
 
 
 def test_send_via_local_postfix_reports_failures_and_returns_ok(monkeypatch, settings) -> None:
@@ -759,12 +780,24 @@ def test_unexpected_error_still_returns_software_when_report_fails(run_main, mon
 
 
 def test_loop_is_dropped_with_ok(run_main) -> None:
-    raw = RAW_MAIL.replace(
-        b"Subject:", b"X-maillist: mailadmin-maillist\r\nX-Original-To: list@example.org\r\nSubject:"
-    )
+    raw = RAW_MAIL.replace(b"Subject:", b"X-maillist: mailadmin-maillist\r\nList-Id: <list@example.org>\r\nSubject:")
     code, connection, smtps = run_main(["list.example.org"], raw=raw)
     assert code == maillist.EX_OK
-    assert connection.calls == []
+    assert len(connection.calls) == 1  # looked up, then dropped
+    assert smtps == []
+
+
+def test_nested_list_with_marker_but_other_list_id_is_delivered(run_main) -> None:
+    raw = RAW_MAIL.replace(b"Subject:", b"X-maillist: mailadmin-maillist\r\nList-Id: <outer@example.org>\r\nSubject:")
+    code, _, smtps = run_main(["list.example.org"], raw=raw)
+    assert code == maillist.EX_OK
+    assert [s for s in smtps if s.sent]
+
+
+def test_postfix_pipe_invocation_with_double_dash(run_main) -> None:
+    code, connection, _ = run_main(["--", "list.example.org"])
+    assert code == maillist.EX_OK
+    assert connection.calls[0][1] == ("list.example.org",)
 
 
 def test_bounce_is_dropped_with_ok(run_main) -> None:
@@ -931,3 +964,170 @@ def test_example_config_documents_every_supported_key() -> None:
         ("log", "file"),
         ("log", "level"),
     }
+
+
+# --- review round: hardening ----------------------------------------------------
+
+
+def test_non_ascii_and_dotless_domain_addresses_are_skipped(caplog) -> None:
+    members = "j\u00f6rg@example.org\nuser@localhost\nok@example.org\n@example.org\nuser@"
+    with caplog.at_level("DEBUG", logger="maillist"):
+        recipients = maillist.normalize_recipients(members, "MSG")
+    assert recipients == ["ok@example.org"]
+    loud = " ".join(r.getMessage() for r in caplog.records if r.levelno > logging.DEBUG)
+    quiet = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG)
+    assert "example.org" not in loud and "localhost" not in loud
+    assert "j\u00f6rg@example.org" in quiet
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 4
+
+
+def test_unencodable_recipient_is_a_permanent_failure_not_a_crash(run_main) -> None:
+    class Strict(ScriptedSMTP):
+        def sendmail(self, from_addr, to_addrs, message):
+            if isinstance(to_addrs, list):
+                raise UnicodeEncodeError("ascii", "x", 0, 1, "ordinal not in range")
+            if to_addrs == BAD:
+                raise UnicodeEncodeError("ascii", "x", 0, 1, "ordinal not in range")
+            return super().sendmail(from_addr, to_addrs, message)
+
+    code, _, smtps = run_main(["list.example.org"], rows=MEMBERS_OK_BAD, smtp=Strict)
+    assert code == maillist.EX_OK
+    reports = [m for s in smtps for m in s.messages]
+    assert len(reports) == 1 and BAD in reports[0].get_content()
+
+
+def test_value_error_in_batch_falls_back_to_individual_sends() -> None:
+    smtp = FakeSMTP()
+
+    def batch_fails(from_addr, to_addrs, message):
+        smtp.calls.append((from_addr, to_addrs, message))
+        if isinstance(to_addrs, list):
+            raise ValueError("bad header")
+        return {}
+
+    smtp.sendmail = batch_fails
+    result = maillist.send_to_list(smtp, "list@example.org", [OK, BAD], b"raw", "MSG")
+    assert result.accepted == [OK, BAD]
+
+
+def test_message_id_with_encoded_crlf_never_breaks_the_report(run_main, monkeypatch) -> None:
+    raw = RAW_MAIL.replace(b"Message-Id: <m1@example.net>", b"Message-Id: =?utf-8?q?<a=0D=0ABcc:_evil@example.net>?=")
+    smtp = scripted(
+        batch_result={BAD: (550, b"no")},
+        single_errors={BAD: smtplib.SMTPRecipientsRefused({BAD: (550, b"no")})},
+    )
+    code, _, smtps = run_main(["list.example.org"], rows=MEMBERS_OK_BAD, raw=raw, smtp=smtp)
+    assert code == maillist.EX_OK
+    reports = [m for s in smtps for m in s.messages]
+    assert len(reports) == 1
+    assert "\r" not in reports[0]["Subject"] and "\n" not in reports[0]["Subject"]
+    assert reports[0]["Bcc"] is None
+
+
+def test_sanitize_text_replaces_control_characters_and_caps_length() -> None:
+    assert maillist.sanitize_text("a\r\nb\x00c\x7fd") == "a  b c d"
+    assert len(maillist.sanitize_text("x" * 500)) == 200
+
+
+def test_notify_functions_never_raise_on_bad_input(monkeypatch, settings) -> None:
+    monkeypatch.setattr(maillist.smtplib, "SMTP", RecordingSMTP)
+    maillist.notify_delivery_issue(settings, "a\r\nb", "list@example.org", [BAD], {BAD: "x\r\ny"})
+    maillist.notify_unexpected_error(settings, "a\r\nb", RuntimeError("x"))
+
+    def explode(*_a, **_k):
+        raise ValueError("cannot build")
+
+    monkeypatch.setattr(maillist, "EmailMessage", explode)
+    maillist.notify_delivery_issue(settings, "MSG", "list@example.org", [BAD], {BAD: "x"})
+    maillist.notify_unexpected_error(settings, "MSG", RuntimeError("x"))
+
+
+def test_ambiguous_list_key_is_tempfail_with_admin_report(run_main, caplog) -> None:
+    rows = (
+        ("A", "list@example.org", "a@example.net"),
+        ("B", "list.example@org", "b@example.net"),
+    )
+    with caplog.at_level("DEBUG", logger="maillist"):
+        code, _, smtps = run_main(["list.example.org"], rows=rows)
+    assert code == maillist.EX_TEMPFAIL
+    assert [s for s in smtps if s.sent] == []
+    reports = [m for s in smtps for m in s.messages]
+    assert len(reports) == 1 and reports[0]["To"] == "admins@example.org"
+    loud = " ".join(r.getMessage() for r in caplog.records if r.levelno > logging.DEBUG)
+    assert "a@example.net" not in loud and "b@example.net" not in loud
+    assert any(r.levelname == "ERROR" for r in caplog.records)
+
+
+def test_bad_row_type_is_software_error_not_not_found(run_main) -> None:
+    code, _, smtps = run_main(["list.example.org"], rows=(("TAG", "list@example.org", None),))
+    assert code == maillist.EX_SOFTWARE
+    assert [s for s in smtps if s.sent] == []
+
+
+def test_database_error_is_logged_once(run_main, caplog) -> None:
+    class BrokenCursor:
+        def execute(self, *_args):
+            raise maillist.mysql.connector.errors.OperationalError("gone away")
+
+        def close(self):
+            pass
+
+    class BrokenConnection:
+        def cursor(self):
+            return BrokenCursor()
+
+        def close(self):
+            pass
+
+    with caplog.at_level("ERROR", logger="maillist"):
+        run_main(["list.example.org"], connect=lambda **_: BrokenConnection())
+    assert len([r for r in caplog.records if "gone away" in r.getMessage()]) == 1
+
+
+def test_subject_tag_is_not_prepended_twice(settings) -> None:
+    msg = EmailMessage()
+    msg["From"] = "Author <author@example.net>"
+    msg["Subject"] = "Re: [TAG] Hello"
+    maillist.apply_list_headers(msg, "TAG", "list@example.org", "list@example.org", settings.lists)
+    assert msg["Subject"] == "Re: [TAG] Hello"
+
+
+def test_subject_tag_with_control_characters_is_sanitised(settings) -> None:
+    msg = EmailMessage()
+    msg["From"] = "Author <author@example.net>"
+    msg["Subject"] = "Hello"
+    maillist.apply_list_headers(msg, "T\r\nBcc: x@example.net", "list@example.org", "list@example.org", settings.lists)
+    assert "\n" not in msg["Subject"] and "\r" not in msg["Subject"]
+    assert msg["Bcc"] is None
+
+
+def test_connect_does_not_raise_on_warnings(run_main, capsys) -> None:
+    seen: dict = {}
+
+    def connect(**kwargs):
+        from tests.conftest import FakeConnection
+
+        seen.update(kwargs)
+        return FakeConnection([("TAG", "list@example.org", "a@example.org")])
+
+    run_main(["list.example.org"], connect=connect)
+    assert "raise_on_warnings" not in seen
+    seen.clear()
+    run_main(["--check"], connect=lambda **kw: (seen.update(kw), _count_connection(1))[1])
+    assert "raise_on_warnings" not in seen
+
+
+def test_configure_logging_silences_logging_errors(settings, monkeypatch) -> None:
+    monkeypatch.setattr(logging, "raiseExceptions", True)
+    maillist.configure_logging(settings)
+    try:
+        assert logging.raiseExceptions is False
+    finally:
+        maillist.logger.handlers.clear()
+
+
+def test_member_count_logged_is_the_normalised_count(run_main, caplog) -> None:
+    rows = (("TAG", "list@example.org", "a@example.org\ninvalid\na@example.org"),)
+    with caplog.at_level("INFO", logger="maillist"):
+        run_main(["list.example.org"], rows=rows)
+    assert any("with 1 members" in r.getMessage() for r in caplog.records)
