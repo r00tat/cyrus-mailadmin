@@ -359,6 +359,36 @@ final class MemberListTest extends TestCase
         }
     }
 
+    /**
+     * Entity-like text the two parsers read differently: `html.unescape()`
+     * decodes `&#64` and `&lt` without a semicolon, PHP does not. A new member
+     * carries no `&` at all, so that no entry can look like one address here
+     * and go to another one there.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function membersWithAnAmpersand(): iterable
+    {
+        yield 'numeric entity without semicolon' => ['x&#64evil.de <ok@example.de>'];
+        yield 'named entity without semicolon in the display name' => ['x &lt y <a@example.de>'];
+        yield 'plain ampersand in the display name' => ['Tom & Jerry <tj@example.de>'];
+    }
+
+    #[DataProvider('membersWithAnAmpersand')]
+    public function testANewMemberWithAnAmpersandIsRefusedWithItsPosition(string $member): void
+    {
+        $this->testANewMemberTheScriptCannotDeliverToIsRefusedWithItsPosition($member);
+    }
+
+    public function testAStoredMemberWithAnAmpersandIsKeptWhileUnchanged(): void
+    {
+        $stored = MemberList::fromStoredValue('Tom & Jerry <tj@example.de>
+anna@example.test');
+
+        self::assertSame($stored, $stored->withMembers($stored->members()));
+        self::assertSame(['tj@example.de', 'anna@example.test'], $stored->deliverableAddresses());
+    }
+
     #[DataProvider('membersTheScriptCannotDeliverTo')]
     public function testAStoredMemberTheScriptCannotDeliverToIsKeptReportedAndNotCounted(string $member): void
     {
@@ -380,7 +410,7 @@ final class MemberListTest extends TestCase
         yield 'bare address' => ['a.b-c_d+e@sub.example-x.de', 'a.b-c_d+e@sub.example-x.de'];
         yield 'display name' => ['Jürgen Groß <juergen@example.test>', 'juergen@example.test'];
         yield 'quoted display name' => ['"Groß: Jürgen" <juergen@example.test>', 'juergen@example.test'];
-        yield 'display name with dots and ampersand' => ['J. R. & Co <jr@example.test>', 'jr@example.test'];
+        yield 'display name with dots' => ['J. R. R. Tolkien <jr@example.test>', 'jr@example.test'];
         yield 'angle brackets only' => ['<anna@example.test>', 'anna@example.test'];
     }
 

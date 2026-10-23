@@ -4894,6 +4894,12 @@ samt ihren Sicherheitsmängeln.
    eingetragen hatte. Das Skript trennt eine Zeile jetzt selbst an `,` und `;` außerhalb von
    Anführungszeichen und spitzen Klammern und überspringt einen Eintrag mit `:` außerhalb davon,
    mit derselben Warnung wie jeden anderen unbrauchbaren Eintrag.
+6. **Kein `&` in neuen Mitgliedern, und das Skript dekodiert nur vollständige Entities.**
+   `html.unescape()` las auch `&#64` und `&lt` ohne Semikolon, `html_entity_decode()` in PHP nicht:
+   Derselbe Text hätte in mailadmin eine Adresse gezeigt und im Skript an eine andere zugestellt.
+   Ein neuer Eintrag mit `&` ist deshalb `list.member_not_deliverable`; gespeicherte bleiben
+   geduldet. `maillist.py` dekodiert nur noch `&name;`, `&#nn;` und `&#xhh;` mit Semikolon, benannte
+   Entities nur bei exaktem Treffer in der HTML5-Tabelle. Golden-Fall `entity-without-semicolon`.
 
 **Warum, für die Zustellbarkeit:** Vorher prüfte mailadmin neue Mitglieder mit der toleranten
 Adressprüfung, das Skript aber mit der strengen. `müller@example.de`, `user@localhost` oder

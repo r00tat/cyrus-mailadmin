@@ -248,8 +248,11 @@ final readonly class MemberList
             }
 
             // An address, but one the delivery script would skip or send to
-            // somebody else (U-137). By position, like the latin1 rule.
-            if (!self::isDeliverableMember($member)) {
+            // somebody else (U-137). By position, like the latin1 rule. No `&`
+            // in a new entry: `html.unescape()` in the script decodes `&#64`
+            // and `&lt` without a semicolon, `html_entity_decode()` does not,
+            // so the two would read different addresses out of the same text.
+            if (str_contains($member, '&') || !self::isDeliverableMember($member)) {
                 throw InvalidMailingList::memberNotDeliverable($index);
             }
         }

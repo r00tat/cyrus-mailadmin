@@ -42,3 +42,13 @@ def test_invalid_entry_log_does_not_contain_the_entry(caplog) -> None:
     assert "secret-entry-no-at" not in above_debug
     assert "secret-entry-no-at" in debug
     assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_entities_without_semicolon_are_left_alone() -> None:
+    # html.unescape() would read `&#64` as "@"; mailadmin's PHP side does not, so neither does the script.
+    assert maillist.normalize_recipients("evil&#64example.org\nok&#64;example.org", "MSG") == ["ok@example.org"]
+
+
+def test_an_unknown_named_entity_is_left_alone() -> None:
+    # html.unescape("&notit;") decodes the prefix "&not"; PHP leaves the whole entity untouched.
+    assert maillist._decode_entities("&notit; &amp; &#x40; &#64;") == "&notit; & @ @"

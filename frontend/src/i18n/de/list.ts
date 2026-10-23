@@ -31,7 +31,7 @@ export const deList = {
   'list.form.hint.tag': 'Freitext. mailadmin wertet das Kennzeichen nicht aus.',
   'list.form.hint.members': 'Eine Mailadresse pro Zeile.',
   'list.form.error.memberNotDeliverable':
-    'Zeile {{line}}: An dieses Mitglied kann der Verteiler nicht zustellen. Erlaubt sind Adressen ohne Umlaute mit einer Domain mit Punkt, wahlweise hinter einem Namen in der Form „Name <adresse>“; Anführungszeichen, Klammern, Doppelpunkte und Backslashes gehen nicht.',
+    'Zeile {{line}}: An dieses Mitglied kann der Verteiler nicht zustellen. Erlaubt sind Adressen ohne Umlaute mit einer Domain mit Punkt, wahlweise hinter einem Namen in der Form „Name <adresse>“; Anführungszeichen, Klammern, Doppelpunkte, Backslashes und „&“ gehen nicht.',
   'list.form.error.memberOutsideLatin1':
     'Zeile {{line}}: Dieses Mitglied enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
 

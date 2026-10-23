@@ -11,6 +11,7 @@ maintained as part of mailadmin.
 import argparse
 import configparser
 import html
+import html.entities
 import logging
 import logging.handlers
 import os
@@ -249,6 +250,25 @@ def get_list_info(cnx: DBConnection, msg_id: str, delivered_to: str) -> ListInfo
 
 _BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
+_ENTITY = re.compile(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);")
+
+
+def _decode_entities(text: str) -> str:
+    """Decode HTML entities the way mailadmin's PHP side does: only complete ones, ending in `;`.
+
+    html.unescape() also reads `&#64` or `&lt` without a semicolon and decodes the known prefix of an
+    unknown name (`&notit;` becomes "¬it;"). mailadmin would then show one address and the script deliver
+    to another, so anything but a complete entity is left as it is.
+    """
+
+    def decode(match: re.Match[str]) -> str:
+        entity = match.group(0)
+        if entity.startswith("&#"):
+            return html.unescape(entity)
+        return html.entities.html5.get(entity[1:], entity)
+
+    return _ENTITY.sub(decode, text)
+
 
 _ADDRESS_FORBIDDEN = re.compile(r'[\s<>"(),;:\\\[\]]')
 
@@ -308,7 +328,7 @@ def normalize_recipients(members: str, msg_id: str) -> list[str]:
     Entries are separated by line breaks, commas, semicolons and <br> tags; HTML entities written by the
     legacy application are decoded first. Addresses are personal data and are only logged at DEBUG.
     """
-    text = _BR.sub("\n", html.unescape(members))
+    text = _BR.sub("\n", _decode_entities(members))
     recipients: list[str] = []
     seen: set[str] = set()
     skipped_lines: list[int] = []
