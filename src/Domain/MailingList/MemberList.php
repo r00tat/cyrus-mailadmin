@@ -36,12 +36,15 @@ use Mailadmin\Domain\Model\EmailAddress;
  *
  * ## What is refused
  *
- * Only members that are being **added**. Two reasons: the column used to feed
- * an aliases file, where `|command` and `/path/to/file` are not addresses but
- * instructions (U-57, see {@see InvalidMailingList::memberNotAnAddress()}), and
- * a `,` or `;` in the display name would be read back as a separator and split
- * the member in two. Members that are already
- * stored are reported by {@see unusableMembers()} and never rejected (U-22).
+ * Only members that are being **added**, and only those that are not a mail
+ * address (U-57, see {@see InvalidMailingList::memberNotAnAddress()}) or would
+ * not read back as exactly themselves — a `,`, `;` or `<br>` in a display name
+ * is a separator on the way in and would split the member in two, and an entity
+ * would be decoded into something else. Members that are already stored are
+ * reported by {@see unusableMembers()} and never rejected (U-22).
+ *
+ * The column is read solely by the delivery script `maillist.py`; the aliases
+ * file only ever held the pipe line to it, never the members.
  */
 final readonly class MemberList
 {
@@ -132,9 +135,9 @@ final readonly class MemberList
     /**
      * Members that are not mail addresses — shown, not removed (U-22).
      *
-     * An aliases file may legitimately contain a local user name, a file path or
-     * a pipe. Whichever of those the existing rows hold, an administrator has to
-     * be able to see them; what they may not do is add one.
+     * Whatever odd entries the existing rows hold (a local user name, a file
+     * path, a pipe), an administrator has to be able to see them; what they may
+     * not do is add one.
      *
      * @return list<string>
      */
@@ -151,8 +154,8 @@ final readonly class MemberList
      *
      * The address part of `Name <address>`, entries that are not addresses left
      * out, duplicates (compared case-insensitively, first spelling wins) left
-     * out. This is what `normalize_recipients()` in `maillist.py` computes, and
-     * the golden files in `tests/Fixtures/MemberFormat` keep the two in step.
+     * out. Gives the same result as `normalize_recipients()` in `maillist.py` for
+     * every case in `tests/Fixtures/MemberFormat`, which keep the two in step.
      *
      * @return list<string>
      */
@@ -212,14 +215,14 @@ final readonly class MemberList
 
         foreach ($clean as $member) {
             // Already in the list: left alone, whatever it is. Being added: has
-            // to be an address, and must survive being read back — a `,` or `;`
-            // anywhere in it (a display name such as "Doe, John") is a separator
-            // on the way in.
+            // to be an address, and has to read back as exactly itself — a `,`,
+            // `;` or `<br>` (a display name such as "Doe, John") is a separator
+            // on the way in, and an entity would be decoded into other text.
             if ($this->contains($member)) {
                 continue;
             }
 
-            if (!self::isUsableMember($member) || preg_match('/[,;]/', $member) === 1) {
+            if (!self::isUsableMember($member) || self::parse($member) !== [$member]) {
                 throw InvalidMailingList::memberNotAnAddress($member);
             }
         }
@@ -240,6 +243,9 @@ final readonly class MemberList
     {
         // Decode first, then split: the old application stored `&lt;` and `&gt;`
         // around addresses, and `&lt;br&gt;` has to separate like `<br>` does.
+        // Decoded entities become UTF-8 while the column is latin1, so a
+        // character outside latin1 would not survive a write-back; production
+        // holds no entities at all.
         $decoded = html_entity_decode($raw, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $parts = preg_split(self::PARSE_PATTERN, $decoded);
 
@@ -247,10 +253,9 @@ final readonly class MemberList
     }
 
     /**
-     * Trim every entry and drop the empty ones. Duplicates are **kept**: two
-     * identical entries in an aliases file are two deliveries, and silently
-     * removing one would change behaviour the administrator did not ask to
-     * change.
+     * Trim every entry and drop the empty ones. Duplicates are **kept**: stored
+     * data is never silently edited here, and the delivery script removes
+     * duplicates itself ({@see deliverableAddresses()}).
      *
      * @param array<array-key, string> $values
      *

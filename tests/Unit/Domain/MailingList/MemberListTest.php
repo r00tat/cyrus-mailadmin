@@ -166,25 +166,18 @@ final class MemberListTest extends TestCase
     {
         yield 'comma' => ['"Doe, John" <j@x.test>'];
         yield 'semicolon' => ['Doe; John <j@x.test>'];
+        yield 'break in the name' => ['Name<br>Foo <j@x.test>'];
+        yield 'entity that would be decoded' => ['Tom &amp; Jerry <t@x.test>'];
     }
 
     #[DataProvider('displayNamesWithSeparators')]
-    public function testANewMemberWhoseDisplayNameContainsASeparatorIsRefused(string $member): void
+    public function testANewMemberThatWouldNotReadBackAsItselfIsRefused(string $member): void
     {
-        // A comma is a separator on the way in, so it would be read back as two
-        // members, the first of which is not an address.
+        // Anything the parser would split or decode is not read back as the same
+        // member, so it would silently turn into something else on the next load.
         $this->expectException(InvalidMailingList::class);
 
         MemberList::none()->withMembers([$member]);
-    }
-
-    public function testAStoredMemberWithASeparatorInItsNameIsNotRejected(): void
-    {
-        // Cannot happen through a parse (the comma would have split it), but the
-        // rule is about entries being added, never about existing ones (U-22).
-        $list = MemberList::fromStoredValue('a@x.test');
-
-        self::assertSame(['a@x.test', 'b@x.test'], $list->withMembers(['a@x.test', 'b@x.test'])->members());
     }
 
     public function testDeliverableAddressesTakeTheAddressPartDropInvalidOnesAndDuplicates(): void

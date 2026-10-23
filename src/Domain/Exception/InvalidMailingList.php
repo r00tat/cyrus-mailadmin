@@ -98,13 +98,12 @@ final class InvalidMailingList extends DomainError
     }
 
     /**
-     * A member that is being **added** is not a mail address.
+     * A member that is being **added** is not a member this list can store.
      *
-     * This is the one rule in this class that is not about tidiness. `lists` is
-     * read by the configuration management, which renders it into an aliases
-     * file, and an aliases file gives `|command` and `/path/to/file` meanings
-     * that a mail address does not have. A member field that accepted arbitrary
-     * text would let anyone who may edit a list have the MTA run a command.
+     * It is either not a mail address, or it would not read back as exactly
+     * itself (a separator or an entity in the display name). The column is read
+     * by the delivery script, which treats every entry as a recipient, so
+     * arbitrary text must not get in.
      *
      * Members that are **already stored** are never checked against this: the
      * table predates this application, and refusing to save a list because a row
@@ -117,9 +116,9 @@ final class InvalidMailingList extends DomainError
         return new self(
             DomainErrorCode::LIST_INVALID_MEMBER,
             sprintf(
-                'Member "%s" is not a mail address. A new member has to be one: the configuration '
-                . 'management renders this column into an aliases file, where other shapes are '
-                . 'commands and file names.',
+                'Member "%s" is not a member this list can store. A new member has to be a mail '
+                . 'address whose display name contains no separator (comma, semicolon, line break) '
+                . 'and no HTML entity.',
                 self::excerpt($member),
             ),
             ['member' => self::excerpt($member)],
