@@ -36,7 +36,7 @@ final readonly class UpdateMailingListHandler implements ApiHandler
         try {
             $list = $this->lists->handle(
                 actor: $actor,
-                name: MailingListPath::name($request),
+                address: MailingListPath::name($request),
                 changes: MailingListBody::changes(ParsedBody::of($request)),
                 ifMatch: MailingListPath::ifMatch($request),
             );

@@ -92,7 +92,7 @@ final readonly class MailingListResponder
      */
     public function created(ServerRequestInterface $request, MailingList $list): ResponseInterface
     {
-        $location = rtrim($request->getUri()->getPath(), '/') . '/' . rawurlencode($list->name->toString());
+        $location = rtrim($request->getUri()->getPath(), '/') . '/' . rawurlencode($list->address);
 
         return $this->json(201, MailingListView::representation($list))
             ->withHeader('Location', $location)
@@ -182,7 +182,7 @@ final readonly class MailingListResponder
             // Word for word what the framework's own 404 says, so that a list
             // that is absent and a list that may not be seen are one answer.
             404 => 'No resource matches this path and method.',
-            409 => 'A mailing list with this name already exists.',
+            409 => 'The mailing list address is already in use.',
             412 => 'The mailing list has changed since the If-Match value was issued.',
             default => 'The request does not satisfy a rule for mailing lists.',
         };

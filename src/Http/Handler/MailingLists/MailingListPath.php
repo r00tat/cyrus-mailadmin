@@ -17,7 +17,7 @@ use Psr\Http\Message\ServerRequestInterface;
  * an external tool also writes, and keeping two of those in step is work that
  * buys nothing.
  *
- * The router has already URL-decoded it. The value is passed on **whole** and is
+ * The router does not URL-decode it, so this does. The value is passed on **whole** and is
  * never taken apart.
  *
  * ## `If-Match`
@@ -38,7 +38,7 @@ final class MailingListPath
     {
         $value = $request->getAttribute(self::PARAMETER);
 
-        return is_string($value) ? $value : '';
+        return is_string($value) ? rawurldecode($value) : '';
     }
 
     public static function ifMatch(ServerRequestInterface $request): ?string

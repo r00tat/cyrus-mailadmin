@@ -42,38 +42,61 @@ final class MailingListFailure extends RuntimeException
         parent::__construct($message);
     }
 
-    public static function alreadyExists(string $name): self
+    public static function addressTaken(string $address): self
     {
         return new self(
-            MailingListErrorCode::ALREADY_EXISTS,
+            MailingListErrorCode::ADDRESS_TAKEN,
             409,
-            sprintf('A mailing list named "%s" already exists.', $name),
+            sprintf('The address "%s" is already in use.', $address),
         );
     }
 
     /**
-     * No such list — or a name that could never be one.
-     *
-     * A name carrying whitespace or a colon cannot be a row in `lists` at all
-     * ({@see \Mailadmin\Domain\MailingList\MailingListName}), and answering `422`
-     * for it while answering `404` for a name that merely does not exist would
-     * tell a caller which of the two it had guessed.
+     * The local part carries the recipient delimiter. A field error, because
+     * it is something the form can point at.
      */
-    public static function notFound(string $name): self
+    public static function addressHasExtension(string $address): self
+    {
+        return new self(
+            MailingListErrorCode::ADDRESS_HAS_EXTENSION,
+            422,
+            sprintf('The list address "%s" carries an address extension.', $address),
+            ['body.address' => MailingListErrorCode::ADDRESS_HAS_EXTENSION],
+        );
+    }
+
+    public static function unknownDomain(string $domain): self
+    {
+        return new self(
+            MailingListErrorCode::UNKNOWN_DOMAIN,
+            422,
+            sprintf('The domain "%s" is not a managed domain.', $domain),
+            ['body.address' => MailingListErrorCode::UNKNOWN_DOMAIN],
+        );
+    }
+
+    /**
+     * No such list — or a value that could never be the address of one.
+     *
+     * A path value that is not an address cannot be a list at all, and
+     * answering `422` for it while answering `404` for an address that merely
+     * does not exist would tell a caller which of the two it had guessed.
+     */
+    public static function notFound(string $address): self
     {
         return new self(
             MailingListErrorCode::NOT_FOUND,
             404,
-            sprintf('No mailing list named "%s".', $name),
+            sprintf('No mailing list with the address "%s".', $address),
         );
     }
 
-    public static function preconditionFailed(string $name): self
+    public static function preconditionFailed(string $address): self
     {
         return new self(
             MailingListErrorCode::PRECONDITION_FAILED,
             412,
-            sprintf('The mailing list "%s" has changed since the If-Match value was issued.', $name),
+            sprintf('The mailing list "%s" has changed since the If-Match value was issued.', $address),
         );
     }
 

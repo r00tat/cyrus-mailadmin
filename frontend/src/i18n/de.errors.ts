@@ -125,11 +125,14 @@ export const deErrors = {
   'errors.vacation.rejected': 'Der Sieve-Dienst hat die Abwesenheitsnotiz abgelehnt.',
 
   // Verteilerlisten (A5)
+  'errors.list.address_has_extension': 'Eine Listenadresse darf kein „+“ enthalten.',
+  'errors.list.address_taken': 'Diese Adresse ist bereits vergeben.',
   'errors.list.already_exists': 'Diese Liste existiert bereits.',
   'errors.list.invalid_address': 'Die Listenadresse ist unzulässig.',
   'errors.list.invalid_member': 'Mindestens eine Mitgliedsadresse ist unzulässig.',
   'errors.list.invalid_name': 'Der Listenname ist unzulässig.',
   'errors.list.invalid_tag': 'Die Listenkennung ist unzulässig.',
+  'errors.list.unknown_domain': 'Die Domain der Listenadresse wird hier nicht verwaltet.',
 
   // Reparaturwarteschlange (A6)
   'errors.repair.already_resolved': 'Dieser Reparatureintrag ist bereits erledigt.',

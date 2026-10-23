@@ -33,7 +33,7 @@ final readonly class DeleteMailingListHandler implements ApiHandler
         try {
             $this->lists->handle(
                 actor: $actor,
-                name: MailingListPath::name($request),
+                address: MailingListPath::name($request),
                 ifMatch: MailingListPath::ifMatch($request),
             );
         } catch (MailingListFailure $failure) {

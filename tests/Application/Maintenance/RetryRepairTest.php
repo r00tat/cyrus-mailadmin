@@ -17,11 +17,14 @@ use Mailadmin\Application\Maintenance\RepairResolution;
 use Mailadmin\Application\Maintenance\RepairStatus;
 use Mailadmin\Application\Maintenance\ResolveRepair;
 use Mailadmin\Application\Maintenance\RetryRepair;
+use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Mailstore\Quota;
+use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Domain\Password\InMemoryCommonPasswordList;
 use Mailadmin\Domain\Password\PasswordPolicy;
 use Mailadmin\Domain\Repair\RepairRequest;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
+use Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairLedger;
 use Mailadmin\Tests\Application\Account\AccountUseCaseTestCase;
 use Mailadmin\Tests\Support\DomainFixture;
@@ -38,6 +41,8 @@ final class RetryRepairTest extends AccountUseCaseTestCase
 {
     private InMemoryRepairLedger $ledger;
 
+    private InMemoryMailingListRepository $lists;
+
     /** What the use cases see; the ledger itself unless a test puts a double in front. */
     private ?RepairLedger $port = null;
 
@@ -45,6 +50,7 @@ final class RetryRepairTest extends AccountUseCaseTestCase
     {
         parent::setUp();
         $this->ledger = new InMemoryRepairLedger();
+        $this->lists = new InMemoryMailingListRepository();
     }
 
     // ------------------------------------------------- the DoD round trip
@@ -233,6 +239,53 @@ final class RetryRepairTest extends AccountUseCaseTestCase
         $this->retry()->handle(DomainFixture::superuser(), $entry->id);
 
         self::assertFalse($this->mailstore->inner()->mailboxExists($this->identity('anna.example.test')));
+    }
+
+    // ------------------------------------------------------- mailing lists
+
+    public function testAnOrphanedListRowIsRemovedOnRetry(): void
+    {
+        $this->lists->given(MailingList::fromStoredValues('Team', '', 'team@example.test', ''));
+        $id = $this->record(RepairCatalogue::REMOVE_LIST_ROW, ['address' => 'team@example.test', 'domain' => 'example.test']);
+
+        self::assertTrue($this->ledger->find($id)?->toRepresentation()['retryable']);
+
+        $this->retry()->handle(DomainFixture::superuser(), $id);
+
+        self::assertNull($this->lists->find(EmailAddress::parse('team@example.test')));
+        self::assertFalse($this->ledger->find($id)?->isOpen());
+        self::assertTrue($this->domains->namespaceLocksTaken() > 0);
+    }
+
+    public function testAListRowThatIsGoneAlreadyOnlyClosesTheEntry(): void
+    {
+        $id = $this->record(RepairCatalogue::REMOVE_LIST_ROW, ['address' => 'team@example.test', 'domain' => 'example.test']);
+
+        $this->retry()->handle(DomainFixture::superuser(), $id);
+
+        self::assertFalse($this->ledger->find($id)?->isOpen());
+    }
+
+    public function testAListRowWithAVirtualRowIsNotRemoved(): void
+    {
+        $this->lists->given(MailingList::fromStoredValues('Team', '', 'team@example.test', ''));
+        $this->virtual->givenRow('team@example.test', 'team.example.test@maillist.invalid');
+        $id = $this->record(RepairCatalogue::REMOVE_LIST_ROW, ['address' => 'team@example.test', 'domain' => 'example.test']);
+
+        $failure = $this->expectRefusal(fn () => $this->retry()->handle(DomainFixture::superuser(), $id));
+
+        self::assertSame(RepairErrorCode::STATE_CHANGED, $failure->errorCode);
+        self::assertNotNull($this->lists->find(EmailAddress::parse('team@example.test')));
+        self::assertTrue($this->ledger->find($id)?->isOpen());
+    }
+
+    public function testAnEntryWithAnUnusableListAddressIsNotGuessedAt(): void
+    {
+        $id = $this->record(RepairCatalogue::REMOVE_LIST_ROW, ['address' => 'not an address', 'domain' => 'example.test']);
+
+        $failure = $this->expectRefusal(fn () => $this->retry()->handle(DomainFixture::superuser(), $id));
+
+        self::assertSame(RepairErrorCode::NOT_RETRYABLE, $failure->errorCode);
     }
 
     // ------------------------------------------------------------- quota
@@ -515,6 +568,8 @@ final class RetryRepairTest extends AccountUseCaseTestCase
             $this->audit,
             new FrozenClock(),
             new NullLogger(),
+            $this->lists,
+            $this->virtual,
         );
     }
 

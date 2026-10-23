@@ -332,21 +332,19 @@ final class PolicyTest extends TestCase
     // Mailing lists
     // ------------------------------------------------------------------
 
-    public function testMailingListsAreSuperuserOnlyForNow(): void
+    public function testBothRolesMayManageMailingLists(): void
     {
-        $superuser = ActorContext::superuser('root');
+        foreach ([ActorContext::superuser('root'), $this->domainMaster()] as $actor) {
+            ListPolicy::requireRead($actor);
+            ListPolicy::requireWrite($actor);
+            ListPolicy::requireDelete($actor);
+            ListPolicy::requireCreateIn($actor, self::address('team', self::OWN));
+        }
 
-        ListPolicy::requireRead($superuser);
-        ListPolicy::requireWrite($superuser);
-        ListPolicy::requireDelete($superuser);
-
-        $this->addToAssertionCount(3);
-
-        $this->expectException(AccessDenied::class);
-        ListPolicy::requireRead($this->domainMaster());
+        $this->addToAssertionCount(8);
     }
 
-    public function testTheScopingHookA5WouldNeedIsThereAndWorks(): void
+    public function testAListOfAForeignDomainIsNotFound(): void
     {
         ListPolicy::requireVisible($this->domainMaster(), self::address('team', self::OWN));
 
@@ -354,6 +352,14 @@ final class PolicyTest extends TestCase
 
         $this->expectException(ResourceNotVisible::class);
         ListPolicy::requireVisible($this->domainMaster(), self::address('team', self::FOREIGN));
+    }
+
+    public function testCreatingAListInAForeignDomainIsForbiddenNotHidden(): void
+    {
+        // Nothing exists yet that a 404 could hide; the refusal is about the
+        // operation in that domain (spec 4.3, "Rechte").
+        $this->expectException(AccessDenied::class);
+        ListPolicy::requireCreateIn($this->domainMaster(), self::address('team', self::FOREIGN));
     }
 
     // ------------------------------------------------------------------

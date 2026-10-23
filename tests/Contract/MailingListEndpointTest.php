@@ -6,19 +6,27 @@ namespace Mailadmin\Tests\Contract;
 
 use League\OpenAPIValidation\PSR7\OperationAddress;
 use League\OpenAPIValidation\PSR7\ValidatorBuilder;
+use Mailadmin\Application\Address\AddressStore;
+use Mailadmin\Application\Audit\AuditWriter;
+use Mailadmin\Application\Domain\DomainStore;
 use Mailadmin\Domain\Access\AdminDirectory;
 use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Model\AdminRole;
 use Mailadmin\Domain\Password\Password;
 use Mailadmin\Domain\Password\PasswordSubject;
+use Mailadmin\Domain\Repair\RepairQueue;
 use Mailadmin\Http\Handler\MailingLists\MailingListResponder;
 use Mailadmin\Http\MiddlewareDispatcher;
 use Mailadmin\Infrastructure\Persistence\InMemoryAdminDirectory;
+use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
+use Mailadmin\Infrastructure\Persistence\InMemoryDomainStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryLoginAttemptLog;
 use Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository;
 use Mailadmin\Infrastructure\Persistence\InMemoryRefreshTokenStore;
 use Mailadmin\Infrastructure\Persistence\InMemoryTokenDenylist;
+use Mailadmin\Infrastructure\Persistence\InMemoryVirtualStore;
 use Mailadmin\Infrastructure\Persistence\MailingListRepository;
+use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
 use Mailadmin\Infrastructure\Security\LoginAttemptLog;
 use Mailadmin\Infrastructure\Security\PasswordHasher;
 use Mailadmin\Infrastructure\Security\PasswordHashingOptions;
@@ -26,6 +34,7 @@ use Mailadmin\Infrastructure\Security\RefreshTokenStore;
 use Mailadmin\Infrastructure\Security\TokenDenylist;
 use Mailadmin\Kernel\Bootstrap;
 use Mailadmin\Runtime\Paths;
+use Mailadmin\Tests\Support\DomainFixture;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -84,6 +93,12 @@ final class MailingListEndpointTest extends ContractTestCase
             MailingList::fromStoredValues('team-example', 'team', 'team@example.test', 'anna@example.test'),
         );
 
+        $this->lists->given(MailingList::fromStoredValues('foreign', '', 'team@other.test', ''));
+
+        $domains = new InMemoryDomainStore();
+        $domains->given(DomainFixture::domain('example.test'));
+        $domains->given(DomainFixture::domain('other.test', prefix: 'other.test'));
+
         $context = Bootstrap::prepare(Paths::detect());
         $context->cache->ensureUsable(mayCreate: true);
 
@@ -93,6 +108,10 @@ final class MailingListEndpointTest extends ContractTestCase
             TokenDenylist::class => new InMemoryTokenDenylist(),
             LoginAttemptLog::class => new InMemoryLoginAttemptLog(),
             MailingListRepository::class => $this->lists,
+            DomainStore::class => $domains,
+            AddressStore::class => new InMemoryVirtualStore(),
+            AuditWriter::class => new InMemoryAuditTrail(),
+            RepairQueue::class => new InMemoryRepairQueue(),
         ]);
     }
 
@@ -105,8 +124,8 @@ final class MailingListEndpointTest extends ContractTestCase
 
         $body = self::bodyOf($response);
 
-        self::assertSame(2, $body['meta']['total']);
-        self::assertSame(['legacy-list', 'team-example'], array_map(
+        self::assertSame(3, $body['meta']['total']);
+        self::assertSame(['foreign', 'legacy-list', 'team-example'], array_map(
             static fn (mixed $item): mixed => is_array($item) ? $item['name'] : null,
             (array) $body['items'],
         ));
@@ -114,7 +133,7 @@ final class MailingListEndpointTest extends ContractTestCase
 
     public function testASingleListCarriesItsMembersAsAnArrayAndFlagsTheOddEntry(): void
     {
-        $response = $this->send('GET', '/api/v1/lists/legacy-list', token: $this->tokenFor('root'));
+        $response = $this->send('GET', '/api/v1/lists/legacy%40example.test', token: $this->tokenFor('root'));
 
         self::assertSame(200, $response->getStatusCode());
         $this->assertMatchesContract('get', '/lists/{listName}', $response);
@@ -142,7 +161,7 @@ final class MailingListEndpointTest extends ContractTestCase
         self::assertSame(201, $response->getStatusCode());
         $this->assertMatchesContract('post', '/lists', $response);
 
-        self::assertSame('/api/v1/lists/new-list', $response->getHeaderLine('Location'));
+        self::assertSame('/api/v1/lists/new-list%40example.test', $response->getHeaderLine('Location'));
         self::assertSame(
             MailingListResponder::EFFECT_PENDING,
             $response->getHeaderLine(MailingListResponder::EFFECT_HEADER),
@@ -160,7 +179,7 @@ final class MailingListEndpointTest extends ContractTestCase
 
         self::assertSame(409, $response->getStatusCode());
         $this->assertMatchesContract('post', '/lists', $response);
-        self::assertSame('list.already_exists', self::bodyOf($response)['code']);
+        self::assertSame('list.address_taken', self::bodyOf($response)['code']);
     }
 
     public function testAPipeEntryIsRefusedOverTheWire(): void
@@ -182,7 +201,7 @@ final class MailingListEndpointTest extends ContractTestCase
     {
         $response = $this->send(
             'PATCH',
-            '/api/v1/lists/legacy-list',
+            '/api/v1/lists/legacy%40example.test',
             ['tag' => 'crew'],
             $this->tokenFor('root'),
         );
@@ -201,13 +220,13 @@ final class MailingListEndpointTest extends ContractTestCase
     public function testAStaleIfMatchIsRefusedAndAFreshOneIsNot(): void
     {
         $token = $this->tokenFor('root');
-        $stale = $this->send('GET', '/api/v1/lists/legacy-list', token: $token)->getHeaderLine('ETag');
+        $stale = $this->send('GET', '/api/v1/lists/legacy%40example.test', token: $token)->getHeaderLine('ETag');
 
-        $this->send('PATCH', '/api/v1/lists/legacy-list', ['tag' => 'crew'], $token);
+        $this->send('PATCH', '/api/v1/lists/legacy%40example.test', ['tag' => 'crew'], $token);
 
         $refused = $this->send(
             'PATCH',
-            '/api/v1/lists/legacy-list',
+            '/api/v1/lists/legacy%40example.test',
             ['tag' => 'other'],
             $token,
             ['If-Match' => $stale],
@@ -217,10 +236,10 @@ final class MailingListEndpointTest extends ContractTestCase
         $this->assertMatchesContract('patch', '/lists/{listName}', $refused);
         self::assertSame('request.precondition_failed', self::bodyOf($refused)['code']);
 
-        $fresh = $this->send('GET', '/api/v1/lists/legacy-list', token: $token)->getHeaderLine('ETag');
+        $fresh = $this->send('GET', '/api/v1/lists/legacy%40example.test', token: $token)->getHeaderLine('ETag');
         $accepted = $this->send(
             'PATCH',
-            '/api/v1/lists/legacy-list',
+            '/api/v1/lists/legacy%40example.test',
             ['tag' => 'other'],
             $token,
             ['If-Match' => $fresh],
@@ -231,7 +250,7 @@ final class MailingListEndpointTest extends ContractTestCase
 
     public function testDeletingAnswersTwoHundredAndFourWithTheEffectHeader(): void
     {
-        $response = $this->send('DELETE', '/api/v1/lists/team-example', token: $this->tokenFor('root'));
+        $response = $this->send('DELETE', '/api/v1/lists/team%40example.test', token: $this->tokenFor('root'));
 
         self::assertSame(204, $response->getStatusCode());
         self::assertSame('', (string) $response->getBody());
@@ -248,22 +267,48 @@ final class MailingListEndpointTest extends ContractTestCase
     public static function everyOperation(): iterable
     {
         yield 'list' => ['GET', '/api/v1/lists', '/lists'];
-        yield 'get' => ['GET', '/api/v1/lists/legacy-list', '/lists/{listName}'];
+        yield 'get' => ['GET', '/api/v1/lists/legacy%40example.test', '/lists/{listName}'];
         yield 'create' => ['POST', '/api/v1/lists', '/lists'];
-        yield 'update' => ['PATCH', '/api/v1/lists/legacy-list', '/lists/{listName}'];
-        yield 'delete' => ['DELETE', '/api/v1/lists/legacy-list', '/lists/{listName}'];
+        yield 'update' => ['PATCH', '/api/v1/lists/legacy%40example.test', '/lists/{listName}'];
+        yield 'delete' => ['DELETE', '/api/v1/lists/legacy%40example.test', '/lists/{listName}'];
     }
 
-    #[DataProvider('everyOperation')]
-    public function testADomainMasterIsForbidden(string $method, string $path, string $specPath): void
+    /**
+     * @return iterable<string, array{string, string, string, int, string|null}>
+     */
+    public static function foreignOperations(): iterable
     {
-        // U-58. The `403` comes out of AuthorizationMiddleware, from the
-        // `x-permission` the contract declares — not from anything in A5.
-        $response = $this->send($method, $path, self::bodyFor($method), $this->tokenFor('anna'));
+        yield 'get' => ['GET', '/api/v1/lists/team%40other.test', '/lists/{listName}', 404, 'request.not_found'];
+        yield 'update' => ['PATCH', '/api/v1/lists/team%40other.test', '/lists/{listName}', 404, 'request.not_found'];
+        yield 'delete' => ['DELETE', '/api/v1/lists/team%40other.test', '/lists/{listName}', 404, 'request.not_found'];
+        yield 'create' => ['POST', '/api/v1/lists', '/lists', 403, 'request.forbidden'];
+    }
 
-        self::assertSame(403, $response->getStatusCode());
+    #[DataProvider('foreignOperations')]
+    public function testADomainMasterReachesNoListOutsideTheirDomains(
+        string $method,
+        string $path,
+        string $specPath,
+        int $status,
+        string $code,
+    ): void {
+        $body = $method === 'POST'
+            ? ['name' => 'foreign-list', 'address' => 'new@other.test']
+            : self::bodyFor($method);
+
+        $response = $this->send($method, $path, $body, $this->tokenFor('anna'));
+
+        self::assertSame($status, $response->getStatusCode());
         $this->assertMatchesContract(strtolower($method), $specPath, $response);
-        self::assertSame('request.forbidden', self::bodyOf($response)['code']);
+        self::assertSame($code, self::bodyOf($response)['code']);
+    }
+
+    public function testADomainMasterSeesOnlyTheListsOfTheirDomains(): void
+    {
+        $response = $this->send('GET', '/api/v1/lists', token: $this->tokenFor('anna'));
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame(2, self::bodyOf($response)['meta']['total']);
     }
 
     #[DataProvider('everyOperation')]
@@ -274,7 +319,7 @@ final class MailingListEndpointTest extends ContractTestCase
 
     public function testAListThatIsNotThereIsTheSameAnswerAsOneThatIsHidden(): void
     {
-        $response = $this->send('GET', '/api/v1/lists/no-such-list', token: $this->tokenFor('root'));
+        $response = $this->send('GET', '/api/v1/lists/no-such%40example.test', token: $this->tokenFor('root'));
 
         self::assertSame(404, $response->getStatusCode());
         $this->assertMatchesContract('get', '/lists/{listName}', $response);

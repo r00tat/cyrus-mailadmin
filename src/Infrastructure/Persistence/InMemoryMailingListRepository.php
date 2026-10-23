@@ -11,6 +11,7 @@ use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\CriteriaError;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 use Mailadmin\Infrastructure\Persistence\Criteria\SortDirection;
+use Throwable;
 
 /**
  * `lists` in an array — the double the A5 use cases are tested against.
@@ -52,6 +53,8 @@ final class InMemoryMailingListRepository implements MailingListRepository
     /** Statements that would have hit the database, for tests that count them. */
     private int $writes = 0;
 
+    private ?Throwable $removeFailure = null;
+
     public function given(MailingList ...$lists): void
     {
         foreach ($lists as $list) {
@@ -66,6 +69,12 @@ final class InMemoryMailingListRepository implements MailingListRepository
     public function storedMembers(string $address): ?string
     {
         return $this->firstWith($address)?->members->toStoredValue();
+    }
+
+    /** Make the next {@see remove()} fail before it writes. */
+    public function failNextRemove(Throwable $failure): void
+    {
+        $this->removeFailure = $failure;
     }
 
     public function writeCount(): int
@@ -141,6 +150,13 @@ final class InMemoryMailingListRepository implements MailingListRepository
 
     public function remove(EmailAddress $address): bool
     {
+        if ($this->removeFailure !== null) {
+            $failure = $this->removeFailure;
+            $this->removeFailure = null;
+
+            throw $failure;
+        }
+
         $remaining = array_values(array_filter(
             $this->lists,
             static fn (MailingList $list): bool => !self::sameAddress($list->address, $address->toString()),

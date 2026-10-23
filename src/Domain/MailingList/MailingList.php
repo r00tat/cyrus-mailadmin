@@ -89,19 +89,22 @@ final readonly class MailingList
     }
 
     /**
+     * A new display name, through the strict door — the name is free text and
+     * not the identity, so changing it touches nothing but this column.
+     *
      * @throws InvalidMailingList
      */
-    public function withTag(string $tag): self
+    public function withName(string $name): self
     {
-        return new self($this->name, self::guardTag($tag), $this->address, $this->members);
+        return new self(MailingListName::fromString($name), $this->tag, $this->address, $this->members);
     }
 
     /**
      * @throws InvalidMailingList
      */
-    public function withAddress(string $address): self
+    public function withTag(string $tag): self
     {
-        return new self($this->name, $this->tag, self::guardAddress($address), $this->members);
+        return new self($this->name, self::guardTag($tag), $this->address, $this->members);
     }
 
     /**
@@ -135,9 +138,7 @@ final readonly class MailingList
      *
      * The only reason this exists is scoping: `lists` has no domain column, so a
      * domain master could only ever be scoped through the address
-     * ({@see \Mailadmin\Domain\Policy\ListPolicy}). Nothing calls it while list
-     * management is superuser-only (U-58), and it is here so that widening does
-     * not have to invent it.
+     * ({@see \Mailadmin\Domain\Policy\ListPolicy}).
      */
     public function domain(): ?DomainName
     {

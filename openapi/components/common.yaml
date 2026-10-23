@@ -158,11 +158,14 @@ components:
         # `list.invalid_*` are raised for new or changed values only. A row that
         # is already in the table is shown and flagged, never rejected (U-22) —
         # `unusable_members` and `address_usable` in the representation.
+        - list.address_has_extension
+        - list.address_taken
         - list.already_exists
         - list.invalid_address
         - list.invalid_member
         - list.invalid_name
         - list.invalid_tag
+        - list.unknown_domain
         # --- addresses, aliases, catchall, forwards, vacation notice (A3) ---
         # `address.invalid*` sit in the domain-model block and belong to this
         # prefix; every `address.` name here sorts after `invalid_local_part`,

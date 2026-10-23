@@ -18,6 +18,7 @@ namespace Mailadmin\Application\Maintenance;
  * | `mailstore.delete_mailbox` | delete the mailbox | no row, alias or sender claims the name (under the locks of U-97) |
  * | `mailstore.restore_quota` | set the limit back | the limit is still the one the entry left |
  * | `mailstore.rename_back` | rename the mailbox back | database still has the old name, mailbox only under the new one |
+ * | `lists.remove` | remove the `lists` row of the address | no `virtual` row has the address (under the namespace lock) |
  *
  * Everything else is manual: `mailstore.create_mailbox_uncertain` (nobody knows
  * whose mailbox it is), `database.remove_rows` and `virtual.restore` (the rows
@@ -36,6 +37,14 @@ final class RepairCatalogue
     public const string RENAME_BACK = 'mailstore.rename_back';
 
     /**
+     * A mailing list row left behind by a failed creation or deletion
+     * (`list.create`, `list.delete`). Without its `virtual` row it receives
+     * nothing, so removing it is safe — as long as no `virtual` row has come
+     * back for the address.
+     */
+    public const string REMOVE_LIST_ROW = 'lists.remove';
+
+    /**
      * Step => the parameters a retry reads. `limit_kib` and `current_kib` may be
      * empty (no limit), so they are required to be present, not non-empty.
      */
@@ -44,6 +53,7 @@ final class RepairCatalogue
         self::DELETE_MAILBOX => ['account', 'domain'],
         self::RESTORE_QUOTA => ['account', 'domain', 'limit_kib', 'current_kib'],
         self::RENAME_BACK => ['account', 'domain', 'target_account', 'target_domain'],
+        self::REMOVE_LIST_ROW => ['address', 'domain'],
     ];
 
     /** Parameters that may legitimately be the empty string. */

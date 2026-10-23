@@ -29,12 +29,8 @@ use Mailadmin\Infrastructure\Persistence\Criteria\SortAllowlist;
  * `SUBSTRING_INDEX(address, '@', -1) AS list_domain` in a derived table, and the
  * scope predicate is an ordinary `IN` over an identifier again.
  *
- * That matters even though **nothing is scoped today**: `list.*` is superuser
- * only (U-58), so {@see Repository::scopedTo()} is a no-op for every actor who
- * can reach this code. Writing it as a no-op that will start working, rather
- * than as an `if` somebody has to remember to add, is exactly the point of
- * `scopedTo()` (U-45) — widening the permission later is then a change in
- * `RolePermissions` and `ListPolicy`, with nothing to remember here.
+ * Domain masters hold `list.*` (spec 4.3, "Rechte"), so for them
+ * {@see Repository::scopedTo()} narrows the listing to their domains (U-45).
  *
  * ## The storage engine caveat
  *

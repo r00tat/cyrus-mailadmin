@@ -8,11 +8,12 @@ use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Policy\AccessDenied;
 use Mailadmin\Domain\Policy\ListPolicy;
+use Mailadmin\Domain\Policy\ResourceNotVisible;
 use Mailadmin\Infrastructure\Persistence\MailingListRepository;
 use Mailadmin\Infrastructure\Persistence\PersistenceError;
 
 /**
- * `GET /lists/{listName}` — one mailing list (A5).
+ * `GET /lists/{address}` — one mailing list (A5).
  *
  * The order is permission first, existence second, and it is not
  * interchangeable: an actor whose role may not read lists at all learns nothing
@@ -28,13 +29,14 @@ final readonly class GetMailingList
 
     /**
      * @throws AccessDenied
+     * @throws ResourceNotVisible when the list is in a domain the actor does not manage
      * @throws MailingListFailure when there is no such list
      * @throws PersistenceError
      */
-    public function handle(ActorContext $actor, string $name): MailingList
+    public function handle(ActorContext $actor, string $address): MailingList
     {
         ListPolicy::requireRead($actor);
 
-        return MailingListGuard::load($this->repository, $actor, $name);
+        return MailingListGuard::load($this->repository, $actor, $address);
     }
 }

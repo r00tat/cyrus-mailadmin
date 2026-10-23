@@ -273,11 +273,10 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
     }
 
     /**
-     * The scope predicate is a no-op today, because `list.*` is superuser-only
-     * (U-58). This test exists so that the derived `list_domain` column is
-     * exercised against a real MariaDB rather than only in principle: if
-     * `SUBSTRING_INDEX` or the derived table were wrong, the widening described
-     * in `ListPolicy` would fail on the day somebody made it, not today.
+     * A domain master holds `list.*` and sees only the lists of their domains.
+     * This test exercises the derived `list_domain` column against a real
+     * MariaDB: if `SUBSTRING_INDEX` or the derived table were wrong, the scope
+     * would leak or hide lists.
      */
     public function testTheScopePredicateNarrowsByTheDomainInTheAddress(): void
     {

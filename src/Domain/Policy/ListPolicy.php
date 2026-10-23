@@ -11,19 +11,22 @@ use Mailadmin\Domain\Model\EmailAddress;
 /**
  * Mailing lists — A5's gate.
  *
- * Superuser only, for now, and the reason is that there is nothing to preserve:
- * webcyradm had no list management at all. `lists` is written by Salt and read
- * by it; the table has four columns and no owner among them. Where there is no
- * legacy behaviour, deny-by-default decides, and widening later takes nothing
- * away from anybody while narrowing later would.
+ * Superusers and domain masters (spec 4.3, "Rechte"). `lists` has no domain
+ * column, so a domain master is scoped through the domain of the list
+ * address — the one part of a list that names a domain.
  *
- * ## What A5 needs if it wants to widen
+ * Two kinds of refusal, and the difference is the usual one (U-44):
  *
- * `lists.address` carries a domain, so a domain master *can* be scoped — the
- * hook is {@see requireVisible()}, which is written and tested and simply not
- * called by the `require*` methods below. Widening is then two changes: add the
- * three permissions to `RolePermissions::domainMaster()`, and call
- * {@see requireVisible()} from each method here. Neither touches a handler.
+ *  - an **existing** list outside the actor's domains is not there for them:
+ *    {@see requireVisible()} answers `404`, the same answer as for a list that
+ *    does not exist at all;
+ *  - **creating** a list in a domain outside the actor's is a refusal of the
+ *    operation, not of an object — there is no object yet that a `404` could
+ *    hide — so {@see requireCreateIn()} answers `403`.
+ *
+ * The `require*` methods without an address check the permission only; the use
+ * cases call {@see requireVisible()} once they have loaded the list, and the
+ * listing is narrowed by the repository (U-45).
  */
 final class ListPolicy
 {
@@ -56,11 +59,23 @@ final class ListPolicy
     }
 
     /**
-     * The scoping A5 would need to grant a domain master anything here.
+     * A new list at this address: the permission, and the address's domain
+     * inside the actor's scope — refused with `403`, see the class comment.
      *
-     * Not called from the methods above on purpose: calling it while no role
-     * below superuser holds a `list.*` permission would be dead code that reads
-     * like enforcement.
+     * @throws AccessDenied
+     */
+    public static function requireCreateIn(ActorContext $actor, EmailAddress $listAddress): void
+    {
+        Guard::permission($actor, Permission::ListWrite);
+
+        if (!$actor->canSee($listAddress->domain)) {
+            throw AccessDenied::outsideScope($actor, Permission::ListWrite, $listAddress->domain->toString());
+        }
+    }
+
+    /**
+     * An existing list is visible only within the actor's domains — `404`
+     * otherwise.
      *
      * @throws ResourceNotVisible
      */
