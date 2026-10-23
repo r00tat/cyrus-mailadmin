@@ -73,7 +73,7 @@ final class MailingListUseCaseTest extends TestCase
             new MailingListChanges(tag: 'crew'),
         );
 
-        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('legacy-list'));
+        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('legacy@example.test'));
     }
 
     public function testResendingExactlyTheMembersThatWereReadAlsoKeepsThoseBytes(): void
@@ -91,7 +91,7 @@ final class MailingListUseCaseTest extends TestCase
             new MailingListChanges(members: $read->members->members()),
         );
 
-        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('legacy-list'));
+        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('legacy@example.test'));
     }
 
     public function testAChangedMembershipIsRewrittenOnePerLine(): void
@@ -106,7 +106,7 @@ final class MailingListUseCaseTest extends TestCase
 
         self::assertSame(
             "anna@example.test\ncarla@example.test",
-            $this->repository->storedMembers('legacy-list'),
+            $this->repository->storedMembers('legacy@example.test'),
         );
     }
 
@@ -160,7 +160,7 @@ final class MailingListUseCaseTest extends TestCase
             self::assertSame(['body.members' => 'list.invalid_member'], $failure->errors);
         }
 
-        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('legacy-list'));
+        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('legacy@example.test'));
     }
 
     public function testTheStrangerEntryThatIsAlreadyStoredDoesNotBlockAnEditOfTheSameList(): void
@@ -197,15 +197,15 @@ final class MailingListUseCaseTest extends TestCase
         );
 
         self::assertSame('team-example', $list->name->toString());
-        self::assertSame('anna@example.test', $this->repository->storedMembers('team-example'));
+        self::assertSame('anna@example.test', $this->repository->storedMembers('team-list@example.test'));
     }
 
-    public function testANameThatIsTakenIsAConflictAndNotAnOverwrite(): void
+    public function testAnAddressThatIsTakenIsAConflictAndNotAnOverwrite(): void
     {
         $this->givenLegacyList();
 
         try {
-            $this->create()->handle($this->superuser, 'legacy-list', '', 'other@example.test', []);
+            $this->create()->handle($this->superuser, 'other-name', '', 'legacy@example.test', []);
 
             self::fail('An existing list was silently overwritten.');
         } catch (MailingListFailure $failure) {
@@ -213,7 +213,40 @@ final class MailingListUseCaseTest extends TestCase
             self::assertSame('list.already_exists', $failure->errorCode);
         }
 
-        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('legacy-list'));
+        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('legacy@example.test'));
+    }
+
+    public function testADifferentAddressWithTheSameListKeyIsAConflict(): void
+    {
+        $this->repository->given(MailingList::fromStoredValues('dotted', '', 'a.b@c.example.test', ''));
+
+        $this->expectException(MailingListFailure::class);
+
+        $this->create()->handle($this->superuser, 'other', '', 'a@b.c.example.test', []);
+    }
+
+    public function testTheSameDisplayNameOnAnotherAddressIsNotAConflict(): void
+    {
+        $this->givenLegacyList();
+
+        $list = $this->create()->handle($this->superuser, 'legacy-list', '', 'other@example.test', []);
+
+        self::assertSame('other@example.test', $list->address);
+    }
+
+    public function testChangingTheAddressMovesTheListAndRefusesATakenOne(): void
+    {
+        $this->givenLegacyList();
+        $this->repository->given(MailingList::fromStoredValues('taken', '', 'taken@example.test', ''));
+
+        $this->update()->handle($this->superuser, 'legacy-list', new MailingListChanges(address: 'moved@example.test'));
+
+        self::assertNull($this->repository->storedMembers('legacy@example.test'));
+        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers('moved@example.test'));
+
+        $this->expectException(MailingListFailure::class);
+
+        $this->update()->handle($this->superuser, 'legacy-list', new MailingListChanges(address: 'taken@example.test'));
     }
 
     public function testDeletingRemovesTheRow(): void
@@ -222,7 +255,7 @@ final class MailingListUseCaseTest extends TestCase
 
         $this->delete()->handle($this->superuser, 'legacy-list');
 
-        self::assertNull($this->repository->storedMembers('legacy-list'));
+        self::assertNull($this->repository->storedMembers('legacy@example.test'));
     }
 
     /**

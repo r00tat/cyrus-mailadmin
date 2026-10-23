@@ -6,7 +6,7 @@ namespace Mailadmin\Infrastructure\Persistence;
 
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
-use Mailadmin\Domain\MailingList\MailingListName;
+use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 
 /**
@@ -43,34 +43,51 @@ interface MailingListRepository
     public function list(ActorContext $actor, ListCriteria $criteria): Page;
 
     /**
-     * @throws PersistenceError
-     */
-    public function find(MailingListName $name): ?MailingList;
-
-    /**
-     * @return bool `false` when a list of that name already exists — the name is
-     *              the primary key, so this is a conflict, not a failure
+     * The list with that address.
+     *
+     * `lists` has no unique index on `address`, so an old row can exist twice.
+     * Then this is the one with the smallest `id`.
      *
      * @throws PersistenceError
      */
-    public function add(MailingList $list): bool;
+    public function find(EmailAddress $address): ?MailingList;
 
     /**
-     * Overwrite `tag`, `address` and `members` of an existing row.
+     * Is there any list whose `REPLACE(address, '@', '.')` equals the key —
+     * including one with a different address (`a.b@c` and `a@b.c` share a key)?
      *
-     * The name is the primary key and is **not** changed here: renaming a list
-     * is a delete and a create, so that the URL of a list and the key the
-     * configuration management reads never disagree about which list is meant
-     * (U-60).
+     * @throws PersistenceError
+     */
+    public function existsWithKey(string $listKey): bool;
+
+    /**
+     * Insert a row; `id` is assigned by the database.
+     *
+     * There is no unique index, so there is no conflict to report here: that
+     * the address and its key are free is the use case's check.
+     *
+     * @throws PersistenceError
+     */
+    public function add(MailingList $list): void;
+
+    /**
+     * Overwrite `name`, `tag` and `members` of the row(s) with this list's
+     * address.
+     *
+     * The address is the identity and is **not** changed here: changing it is a
+     * delete and a create, so that the URL of a list and the key the pipe
+     * script reads never disagree about which list is meant (U-60).
      *
      * @throws PersistenceError
      */
     public function replace(MailingList $list): void;
 
     /**
+     * Delete every row with this address — an old duplicate goes with the rest.
+     *
      * @return bool `false` when there was no such row
      *
      * @throws PersistenceError
      */
-    public function remove(MailingListName $name): bool;
+    public function remove(EmailAddress $address): bool;
 }

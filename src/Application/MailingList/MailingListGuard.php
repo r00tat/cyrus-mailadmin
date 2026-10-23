@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace Mailadmin\Application\MailingList;
 
+use Mailadmin\Domain\Access\ActorContext;
+use Mailadmin\Domain\Exception\InvalidAddress;
 use Mailadmin\Domain\Exception\InvalidMailingList;
 use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\MailingList\MailingListName;
+use Mailadmin\Domain\Model\EmailAddress;
+use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 use Mailadmin\Infrastructure\Persistence\MailingListRepository;
 
 /**
@@ -45,11 +49,46 @@ final class MailingListGuard
     }
 
     /**
+     * The list the path value names.
+     *
+     * A list is identified by its address now, but the HTTP contract still
+     * carries the display name in the path, so the name is resolved through the
+     * listing until the contract moves to the address. Names may repeat; the
+     * first match wins, which is exactly the ambiguity that move removes.
+     *
      * @throws MailingListFailure when there is no such list
      */
-    public static function load(MailingListRepository $repository, string $name): MailingList
+    public static function load(MailingListRepository $repository, ActorContext $actor, string $name): MailingList
     {
-        return $repository->find(self::name($name)) ?? throw MailingListFailure::notFound($name);
+        $wanted = self::name($name);
+
+        $page = $repository->list($actor, new ListCriteria(
+            perPage: ListCriteria::MAX_PER_PAGE,
+            filters: ['name' => $wanted->toString()],
+        ));
+
+        foreach ($page->items as $list) {
+            if ($list->name->equals($wanted)) {
+                return $list;
+            }
+        }
+
+        throw MailingListFailure::notFound($name);
+    }
+
+    /**
+     * The identity of a stored list.
+     *
+     * @throws MailingListFailure when the stored address is not an address at
+     *                            all, so the row cannot be addressed
+     */
+    public static function addressOf(MailingList $list): EmailAddress
+    {
+        try {
+            return EmailAddress::parseStored($list->address);
+        } catch (InvalidAddress) {
+            throw MailingListFailure::notFound($list->name->toString());
+        }
     }
 
     /**

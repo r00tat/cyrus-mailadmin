@@ -6,8 +6,8 @@ namespace Mailadmin\Tests\Integration\Persistence;
 
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
-use Mailadmin\Domain\MailingList\MailingListName;
 use Mailadmin\Domain\Model\DomainName;
+use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\CriteriaError;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 use Mailadmin\Infrastructure\Persistence\Criteria\SortDirection;
@@ -19,11 +19,10 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * {@see SqlMailingListRepository} against a real MariaDB.
  *
  * The table is created here rather than taken from the fixtures, with the
- * definition the baseline schema declares — `MyISAM`, `latin1`, `name` as the
- * primary key, `members` as a `LONGTEXT` that may be `NULL`. That matters for
- * two of the tests below: the primary key is what makes a duplicate a conflict
- * rather than an overwrite, and the nullable column is the case an in-memory
- * double cannot really have.
+ * production definition the baseline schema declares — `MyISAM`, `latin1`, an
+ * AUTO_INCREMENT `id` as the only key, `members` as a `NOT NULL` `TEXT`. That
+ * matters for the tests below: with no unique index, two lists may share a
+ * `name` or even an `address`, and `find` has to say which row wins.
  *
  * The centrepiece is the acceptance criterion the package document names by
  * name: **read an existing row, save it unchanged, compare byte for byte.**
@@ -40,28 +39,28 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
         $this->dropIfPresent('lists');
         $this->willCreate('lists');
 
-        // The definition from `docker/db/init/00-baseline-schema.sql`, which in
-        // turn follows what the analysis recorded of the production table.
+        // The definition from `docker/db/init/00-baseline-schema.sql`, which is
+        // the production DDL.
         $this->pdo->exec(
             'CREATE TABLE `lists` (
-                name    VARCHAR(255) NOT NULL DEFAULT "",
-                tag     VARCHAR(255) NOT NULL DEFAULT "",
-                address VARCHAR(255) NOT NULL DEFAULT "",
-                members LONGTEXT,
-                PRIMARY KEY (name)
-            ) ENGINE=MyISAM DEFAULT CHARSET=latin1',
+                `id` int(4) unsigned NOT NULL AUTO_INCREMENT,
+                `name` varchar(255) NOT NULL,
+                `tag` varchar(255) NOT NULL,
+                `address` varchar(255) NOT NULL,
+                `members` text NOT NULL,
+                PRIMARY KEY (`id`)
+            ) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci',
         );
 
         $this->repository = new SqlMailingListRepository($this->connection);
     }
 
     /**
-     * @return iterable<string, array{string|null}>
+     * @return iterable<string, array{string}>
      */
     public static function storedMemberTexts(): iterable
     {
-        // Every plausible shape of the column, because which one the 22 existing
-        // rows use was never captured — and none of them may be damaged.
+        // Every plausible shape of the column — none of them may be damaged.
         yield 'comma separated' => ['anna@example.test,bernd@example.test'];
         yield 'comma and space' => ['anna@example.test, bernd@example.test'];
         yield 'semicolon and spaces' => ['anna@example.test ;  bernd@example.test'];
@@ -69,15 +68,14 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
         yield 'trailing separator' => ['anna@example.test,'];
         yield 'a pipe among the members' => ['anna@example.test,|/usr/bin/processor'];
         yield 'empty string' => [''];
-        yield 'null' => [null];
     }
 
     #[DataProvider('storedMemberTexts')]
-    public function testAnExistingRowSavedUnchangedIsIdenticalByteForByte(?string $members): void
+    public function testAnExistingRowSavedUnchangedIsIdenticalByteForByte(string $members): void
     {
         $this->insertRaw('legacy-list', 'legacy', 'legacy@example.test', $members);
 
-        $read = $this->repository->find(MailingListName::fromStoredValue('legacy-list'));
+        $read = $this->repository->find(EmailAddress::parse('legacy@example.test'));
 
         self::assertNotNull($read);
 
@@ -85,62 +83,119 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
         // the membership alone.
         $this->repository->replace($read->withTag('corrected'));
 
-        self::assertSame($members, $this->rawMembers('legacy-list'));
+        self::assertSame($members, $this->rawMembers('legacy@example.test'));
         self::assertSame('corrected', $this->repository->find(
-            MailingListName::fromStoredValue('legacy-list'),
+            EmailAddress::parse('legacy@example.test'),
         )?->tag);
     }
 
     #[DataProvider('storedMemberTexts')]
-    public function testResendingTheParsedMembersIsAlsoIdenticalByteForByte(?string $members): void
+    public function testResendingTheParsedMembersIsAlsoIdenticalByteForByte(string $members): void
     {
         $this->insertRaw('legacy-list', 'legacy', 'legacy@example.test', $members);
 
-        $read = $this->repository->find(MailingListName::fromStoredValue('legacy-list'));
+        $read = $this->repository->find(EmailAddress::parse('legacy@example.test'));
 
         self::assertNotNull($read);
 
         $this->repository->replace($read->withMembers($read->members->members()));
 
-        self::assertSame($members, $this->rawMembers('legacy-list'));
+        self::assertSame($members, $this->rawMembers('legacy@example.test'));
     }
 
-    public function testAChangedMembershipIsWrittenCommaSeparated(): void
+    public function testAChangedMembershipIsWrittenOnePerLine(): void
     {
         $this->insertRaw('legacy-list', 'legacy', 'legacy@example.test', "anna@example.test\n");
 
-        $read = $this->repository->find(MailingListName::fromStoredValue('legacy-list'));
+        $read = $this->repository->find(EmailAddress::parse('legacy@example.test'));
 
         self::assertNotNull($read);
 
         $this->repository->replace($read->withMembers(['anna@example.test', 'bernd@example.test']));
 
-        self::assertSame('anna@example.test,bernd@example.test', $this->rawMembers('legacy-list'));
+        self::assertSame("anna@example.test\nbernd@example.test", $this->rawMembers('legacy@example.test'));
     }
 
-    public function testAddingTellsAConflictApartFromAFailure(): void
+    public function testAddingStoresARowThatFindReadsBackByAddress(): void
     {
-        $list = MailingList::create('team-example', 'team', 'team@example.test', ['anna@example.test']);
+        $this->repository->add(
+            MailingList::create('Team-Example', 'team', 'team@example.test', ['anna@example.test']),
+        );
 
-        self::assertTrue($this->repository->add($list));
+        $found = $this->repository->find(EmailAddress::parse('team@example.test'));
 
-        // The primary key refuses the second one, and the repository reports that
-        // as a conflict rather than letting a driver exception become a 500.
-        self::assertFalse($this->repository->add($list));
+        self::assertNotNull($found);
+        self::assertSame('Team-Example', $found->name->toString());
+        self::assertSame('anna@example.test', $this->rawMembers('team@example.test'));
+    }
+
+    public function testTwoListsMayShareADisplayName(): void
+    {
+        $this->repository->add(MailingList::create('Team', '', 'one@example.test', []));
+        $this->repository->add(MailingList::create('Team', '', 'two@example.test', []));
+
+        self::assertSame(2, $this->countRows());
+        self::assertSame(
+            'one@example.test',
+            $this->repository->find(EmailAddress::parse('one@example.test'))?->address,
+        );
+        self::assertSame(
+            'two@example.test',
+            $this->repository->find(EmailAddress::parse('two@example.test'))?->address,
+        );
+    }
+
+    public function testFindPrefersTheSmallestIdWhenAnAddressExistsTwice(): void
+    {
+        $this->insertRaw('first', '', 'dup@example.test', 'a@example.test');
+        $this->insertRaw('second', '', 'dup@example.test', 'b@example.test');
+
+        self::assertSame(
+            'first',
+            $this->repository->find(EmailAddress::parse('dup@example.test'))?->name->toString(),
+        );
+    }
+
+    public function testReplaceChangesNameTagAndMembersButNotTheAddress(): void
+    {
+        $this->insertRaw('old', 'old-tag', 'team@example.test', 'anna@example.test');
+
+        $this->repository->replace(
+            MailingList::fromStoredValues('New-Name', 'new-tag', 'team@example.test', 'bernd@example.test'),
+        );
+
+        $after = $this->repository->find(EmailAddress::parse('team@example.test'));
+
+        self::assertNotNull($after);
+        self::assertSame('New-Name', $after->name->toString());
+        self::assertSame('new-tag', $after->tag);
+        self::assertSame('bernd@example.test', $this->rawMembers('team@example.test'));
         self::assertSame(1, $this->countRows());
     }
 
-    public function testRemovingReportsWhetherThereWasAnything(): void
+    public function testExistsWithKeyFindsADifferentAddressWithTheSameKey(): void
     {
-        $this->insertRaw('legacy-list', '', 'legacy@example.test', null);
+        $this->insertRaw('dotted', '', 'a.b@c.test', '');
 
-        self::assertTrue($this->repository->remove(MailingListName::fromStoredValue('legacy-list')));
-        self::assertFalse($this->repository->remove(MailingListName::fromStoredValue('legacy-list')));
+        // `a@b.c.test` and `a.b@c.test` both become `a.b.c.test`.
+        self::assertTrue($this->repository->existsWithKey('a.b.c.test'));
+        self::assertFalse($this->repository->existsWithKey('other.c.test'));
+    }
+
+    public function testRemovingDeletesEveryRowOfTheAddressAndReportsWhetherThereWasAnything(): void
+    {
+        $this->insertRaw('one', '', 'legacy@example.test', '');
+        $this->insertRaw('two', '', 'legacy@example.test', '');
+        $this->insertRaw('keep', '', 'keep@example.test', '');
+
+        self::assertTrue($this->repository->remove(EmailAddress::parse('legacy@example.test')));
+        self::assertFalse($this->repository->remove(EmailAddress::parse('legacy@example.test')));
+        self::assertSame(1, $this->countRows());
     }
 
     public function testAMissingRowIsNullAndNotAnException(): void
     {
-        self::assertNull($this->repository->find(MailingListName::fromStoredValue('no-such-list')));
+        self::assertNull($this->repository->find(EmailAddress::parse('nobody@example.test')));
     }
 
     public function testTheListingPagesSortsAndFilters(): void
@@ -187,9 +242,9 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
      */
     public function testTheScopePredicateNarrowsByTheDomainInTheAddress(): void
     {
-        $this->insertRaw('a-list', '', 'a@example.test', null);
-        $this->insertRaw('b-list', '', 'b@other.test', null);
-        $this->insertRaw('c-list', '', 'not-an-address', null);
+        $this->insertRaw('a-list', '', 'a@example.test', '');
+        $this->insertRaw('b-list', '', 'b@other.test', '');
+        $this->insertRaw('c-list', '', 'not-an-address', '');
 
         $scoped = ActorContext::domainMaster('anna', DomainName::fromString('example.test'));
 
@@ -201,7 +256,7 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
 
     // -----------------------------------------------------------------
 
-    private function insertRaw(string $name, string $tag, string $address, ?string $members): void
+    private function insertRaw(string $name, string $tag, string $address, string $members): void
     {
         $this->connection->execute(
             'INSERT INTO `lists` (`name`, `tag`, `address`, `members`) VALUES (:name, :tag, :address, :members)',
@@ -209,12 +264,12 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
         );
     }
 
-    private function rawMembers(string $name): ?string
+    private function rawMembers(string $address): ?string
     {
         /** @var mixed $value */
         $value = $this->connection->selectValue(
-            'SELECT `members` FROM `lists` WHERE `name` = :name',
-            ['name' => $name],
+            'SELECT `members` FROM `lists` WHERE `address` = :address',
+            ['address' => $address],
         );
 
         return is_string($value) ? $value : null;

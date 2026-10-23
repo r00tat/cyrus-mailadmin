@@ -7,13 +7,12 @@ namespace Mailadmin\Infrastructure\Persistence;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\Exception\InvalidMailingList;
 use Mailadmin\Domain\MailingList\MailingList;
-use Mailadmin\Domain\MailingList\MailingListName;
+use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\FilterAllowlist;
 use Mailadmin\Infrastructure\Persistence\Criteria\FilterComparison;
 use Mailadmin\Infrastructure\Persistence\Criteria\FilterField;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 use Mailadmin\Infrastructure\Persistence\Criteria\SortAllowlist;
-use PDOException;
 
 /**
  * `lists`, over PDO (A5).
@@ -43,24 +42,30 @@ use PDOException;
  * rolls back nothing (O-11). Every write here is therefore a **single
  * statement** — there is no multi-statement write in this repository that would
  * quietly depend on atomicity it does not have.
+ *
+ * ## The identity is the address
+ *
+ * Production `lists` has an AUTO_INCREMENT `id` and no unique index at all, so
+ * `name` is only a display text and may repeat. The address identifies a list;
+ * that it is unique is the use cases' job, because the database cannot say so.
+ * Old data may still hold an address twice: {@see find()} then takes the lowest
+ * `id`, and {@see remove()} deletes all of them.
  */
 final class SqlMailingListRepository extends Repository implements MailingListRepository
 {
-    /** SQLSTATE for an integrity constraint violation — here, the primary key. */
-    private const string SQLSTATE_INTEGRITY_VIOLATION = '23000';
-
     /**
      * The four columns, and the domain lifted out of `address` so that the scope
      * predicate has an identifier to bind against.
      */
-    private const string SOURCE = '(SELECT `name`, `tag`, `address`, `members`, '
+    private const string SOURCE = '(SELECT `id`, `name`, `tag`, `address`, `members`, '
         . "SUBSTRING_INDEX(`address`, '@', -1) AS `list_domain` FROM `lists`) AS `ml`";
 
     protected function sortable(): SortAllowlist
     {
-        // `name` is the primary key, so it is also the tiebreaker: sorting by a
-        // tag that 22 rows share would otherwise leave the order of equals to the
-        // server, and a row could appear on two pages.
+        // `address` is the identity, so it is also the tiebreaker: sorting by a
+        // tag that many rows share would otherwise leave the order of equals to
+        // the server, and a row could appear on two pages. (The database cannot
+        // promise it is unique; the use cases do.)
         return new SortAllowlist(
             [
                 'name' => 'ml.name',
@@ -68,6 +73,7 @@ final class SqlMailingListRepository extends Repository implements MailingListRe
                 'address' => 'ml.address',
             ],
             default: 'name',
+            tiebreaker: 'address',
         );
     }
 
@@ -98,33 +104,34 @@ final class SqlMailingListRepository extends Repository implements MailingListRe
         );
     }
 
-    public function find(MailingListName $name): ?MailingList
+    public function find(EmailAddress $address): ?MailingList
     {
+        // Lowest `id` first: with a duplicate address from old data the choice
+        // must not be left to the server.
         $row = $this->connection->selectOne(
-            'SELECT `name`, `tag`, `address`, `members` FROM `lists` WHERE `name` = :name',
-            ['name' => $name->toString()],
+            'SELECT `name`, `tag`, `address`, `members` FROM `lists` '
+            . 'WHERE `address` = :address ORDER BY `id` LIMIT 1',
+            ['address' => $address->toString()],
         );
 
         return $row === null ? null : self::toMailingList($row);
     }
 
-    public function add(MailingList $list): bool
+    public function existsWithKey(string $listKey): bool
     {
-        try {
-            $this->connection->execute(
-                'INSERT INTO `lists` (`name`, `tag`, `address`, `members`) '
-                . 'VALUES (:name, :tag, :address, :members)',
-                self::bindings($list),
-            );
-        } catch (PersistenceError $error) {
-            if (self::isDuplicateKey($error)) {
-                return false;
-            }
+        return $this->connection->selectOne(
+            "SELECT 1 AS `found` FROM `lists` WHERE REPLACE(`address`, '@', '.') = :list_key LIMIT 1",
+            ['list_key' => $listKey],
+        ) !== null;
+    }
 
-            throw $error;
-        }
-
-        return true;
+    public function add(MailingList $list): void
+    {
+        $this->connection->execute(
+            'INSERT INTO `lists` (`name`, `tag`, `address`, `members`) '
+            . 'VALUES (:name, :tag, :address, :members)',
+            self::bindings($list),
+        );
     }
 
     public function replace(MailingList $list): void
@@ -135,17 +142,17 @@ final class SqlMailingListRepository extends Repository implements MailingListRe
         // row exists is settled by the use case, which has to load it anyway for
         // the ETag.
         $this->connection->execute(
-            'UPDATE `lists` SET `tag` = :tag, `address` = :address, `members` = :members '
-            . 'WHERE `name` = :name',
+            'UPDATE `lists` SET `name` = :name, `tag` = :tag, `members` = :members '
+            . 'WHERE `address` = :address',
             self::bindings($list),
         );
     }
 
-    public function remove(MailingListName $name): bool
+    public function remove(EmailAddress $address): bool
     {
         return $this->connection->execute(
-            'DELETE FROM `lists` WHERE `name` = :name',
-            ['name' => $name->toString()],
+            'DELETE FROM `lists` WHERE `address` = :address',
+            ['address' => $address->toString()],
         ) > 0;
     }
 
@@ -158,16 +165,17 @@ final class SqlMailingListRepository extends Repository implements MailingListRe
             'name' => $list->name->toString(),
             'tag' => $list->tag,
             'address' => $list->address,
-            // Verbatim, `null` included. This is the promise the interface makes.
-            'members' => $list->members->toStoredValue(),
+            // Verbatim. This is the promise the interface makes. The production
+            // column is `NOT NULL`, so a row read as `null` goes back as ''.
+            'members' => $list->members->toStoredValue() ?? '',
         ];
     }
 
     /**
      * @param array<string, mixed> $row
      *
-     * @throws InvalidMailingList when the stored name is unusable as a key —
-     *                            empty, or carrying whitespace or a colon
+     * @throws InvalidMailingList when the stored name is unusable as a display
+     *                            name — empty, or carrying whitespace or a colon
      */
     private static function toMailingList(array $row): MailingList
     {
@@ -185,26 +193,5 @@ final class SqlMailingListRepository extends Repository implements MailingListRe
     private static function text(mixed $value): string
     {
         return is_scalar($value) ? (string) $value : '';
-    }
-
-    /**
-     * A primary-key collision, told apart from every other statement failure.
-     *
-     * The driver's error is wrapped by {@see Connection}, which deliberately
-     * keeps the values out of the message — so the classification is made on the
-     * SQLSTATE of the original {@see PDOException}, not on its text.
-     */
-    private static function isDuplicateKey(PersistenceError $error): bool
-    {
-        $previous = $error->getPrevious();
-
-        if (!$previous instanceof PDOException) {
-            return false;
-        }
-
-        /** @var mixed $sqlState */
-        $sqlState = $previous->errorInfo[0] ?? $previous->getCode();
-
-        return is_scalar($sqlState) && (string) $sqlState === self::SQLSTATE_INTEGRITY_VIOLATION;
     }
 }

@@ -35,6 +35,6 @@ final readonly class GetMailingList
     {
         ListPolicy::requireRead($actor);
 
-        return MailingListGuard::load($this->repository, $name);
+        return MailingListGuard::load($this->repository, $actor, $name);
     }
 }

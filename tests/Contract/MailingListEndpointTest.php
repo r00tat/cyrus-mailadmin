@@ -148,14 +148,14 @@ final class MailingListEndpointTest extends ContractTestCase
             $response->getHeaderLine(MailingListResponder::EFFECT_HEADER),
             'A write has to say that it is not in effect until the configuration runs.',
         );
-        self::assertSame('carla@example.test', $this->lists->storedMembers('new-list'));
+        self::assertSame('carla@example.test', $this->lists->storedMembers('new-list@example.test'));
     }
 
-    public function testANameThatIsTakenIsAConflict(): void
+    public function testAnAddressThatIsTakenIsAConflict(): void
     {
         $response = $this->send('POST', '/api/v1/lists', [
-            'name' => 'legacy-list',
-            'address' => 'other@example.test',
+            'name' => 'another-name',
+            'address' => 'legacy@example.test',
         ], $this->tokenFor('root'));
 
         self::assertSame(409, $response->getStatusCode());
@@ -191,7 +191,7 @@ final class MailingListEndpointTest extends ContractTestCase
         $this->assertMatchesContract('patch', '/lists/{listName}', $response);
 
         self::assertSame('crew', self::bodyOf($response)['tag']);
-        self::assertSame(self::LEGACY_MEMBERS, $this->lists->storedMembers('legacy-list'));
+        self::assertSame(self::LEGACY_MEMBERS, $this->lists->storedMembers('legacy@example.test'));
         self::assertSame(
             MailingListResponder::EFFECT_PENDING,
             $response->getHeaderLine(MailingListResponder::EFFECT_HEADER),

@@ -6,7 +6,7 @@ namespace Mailadmin\Infrastructure\Persistence;
 
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
-use Mailadmin\Domain\MailingList\MailingListName;
+use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\CriteriaError;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 use Mailadmin\Infrastructure\Persistence\Criteria\SortDirection;
@@ -40,7 +40,12 @@ final class InMemoryMailingListRepository implements MailingListRepository
     /** @var list<string> likewise for filters */
     private const array FILTERABLE = ['name', 'tag', 'address', 'member'];
 
-    /** @var array<string, MailingList> keyed by name, in insertion order */
+    /**
+     * In insertion order, which stands in for the `id` the database assigns.
+     * There is no key: like the table, the double may hold an address twice.
+     *
+     * @var list<MailingList>
+     */
     private array $lists = [];
 
     /** Statements that would have hit the database, for tests that count them. */
@@ -49,7 +54,7 @@ final class InMemoryMailingListRepository implements MailingListRepository
     public function given(MailingList ...$lists): void
     {
         foreach ($lists as $list) {
-            $this->lists[$list->name->toString()] = $list;
+            $this->lists[] = $list;
         }
     }
 
@@ -57,9 +62,9 @@ final class InMemoryMailingListRepository implements MailingListRepository
      * The raw `members` column of a stored list — what a byte-for-byte
      * comparison needs.
      */
-    public function storedMembers(string $name): ?string
+    public function storedMembers(string $address): ?string
     {
-        return ($this->lists[$name] ?? null)?->members->toStoredValue();
+        return $this->firstWith($address)?->members->toStoredValue();
     }
 
     public function writeCount(): int
@@ -83,39 +88,72 @@ final class InMemoryMailingListRepository implements MailingListRepository
         );
     }
 
-    public function find(MailingListName $name): ?MailingList
+    public function find(EmailAddress $address): ?MailingList
     {
-        return $this->lists[$name->toString()] ?? null;
+        return $this->firstWith($address->toString());
     }
 
-    public function add(MailingList $list): bool
+    public function existsWithKey(string $listKey): bool
     {
-        if (isset($this->lists[$list->name->toString()])) {
-            return false;
+        foreach ($this->lists as $list) {
+            if (strtolower(str_replace('@', '.', $list->address)) === strtolower($listKey)) {
+                return true;
+            }
         }
 
-        ++$this->writes;
-        $this->lists[$list->name->toString()] = $list;
+        return false;
+    }
 
-        return true;
+    public function add(MailingList $list): void
+    {
+        ++$this->writes;
+        $this->lists[] = $list;
     }
 
     public function replace(MailingList $list): void
     {
         ++$this->writes;
-        $this->lists[$list->name->toString()] = $list;
+
+        // Every row of the address, as the UPDATE does.
+        foreach ($this->lists as $index => $stored) {
+            if (self::sameAddress($stored->address, $list->address)) {
+                $this->lists[$index] = $list;
+            }
+        }
     }
 
-    public function remove(MailingListName $name): bool
+    public function remove(EmailAddress $address): bool
     {
-        if (!isset($this->lists[$name->toString()])) {
+        $remaining = array_values(array_filter(
+            $this->lists,
+            static fn (MailingList $list): bool => !self::sameAddress($list->address, $address->toString()),
+        ));
+
+        if (count($remaining) === count($this->lists)) {
             return false;
         }
 
         ++$this->writes;
-        unset($this->lists[$name->toString()]);
+        $this->lists = $remaining;
 
         return true;
+    }
+
+    private function firstWith(string $address): ?MailingList
+    {
+        foreach ($this->lists as $list) {
+            if (self::sameAddress($list->address, $address)) {
+                return $list;
+            }
+        }
+
+        return null;
+    }
+
+    /** The column's collation is case-insensitive, so the double is too. */
+    private static function sameAddress(string $left, string $right): bool
+    {
+        return strtolower($left) === strtolower($right);
     }
 
     /**
@@ -124,7 +162,7 @@ final class InMemoryMailingListRepository implements MailingListRepository
     private function scoped(ActorContext $actor): array
     {
         if (!$actor->requiresDomainScope()) {
-            return array_values($this->lists);
+            return $this->lists;
         }
 
         return array_values(array_filter($this->lists, static function (MailingList $list) use ($actor): bool {
@@ -186,9 +224,9 @@ final class InMemoryMailingListRepository implements MailingListRepository
         usort($lists, static function (MailingList $left, MailingList $right) use ($key, $descending): int {
             $comparison = strcmp(self::sortValue($left, $key), self::sortValue($right, $key));
 
-            // The same tiebreaker the SQL repository declares: the primary key.
+            // The same tiebreaker the SQL repository declares: the address.
             if ($comparison === 0) {
-                return strcmp($left->name->toString(), $right->name->toString());
+                return strcmp($left->address, $right->address);
             }
 
             return $descending ? -$comparison : $comparison;

@@ -44,10 +44,10 @@ final readonly class DeleteMailingList
     {
         ListPolicy::requireDelete($actor);
 
-        $list = MailingListGuard::load($this->repository, $name);
+        $list = MailingListGuard::load($this->repository, $actor, $name);
         MailingListGuard::precondition($list, $ifMatch);
 
-        if (!$this->repository->remove($list->name)) {
+        if (!$this->repository->remove(MailingListGuard::addressOf($list))) {
             // Somebody removed it between the read and the delete. The client's
             // intention is satisfied either way, but it did not happen here, and
             // reporting it as done would put a line in the audit trail for a

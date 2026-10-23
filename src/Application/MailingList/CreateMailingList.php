@@ -62,9 +62,16 @@ final readonly class CreateMailingList
 
         $list = self::assemble($name, $tag, $address, $members);
 
-        if (!$this->repository->add($list)) {
+        // The database has no unique index, so the address — and its list key,
+        // which is what the pipe script looks the list up by — is checked here.
+        $address = MailingListGuard::addressOf($list);
+
+        if ($this->repository->find($address) !== null
+            || $this->repository->existsWithKey(ListDelivery::listKey($address))) {
             throw MailingListFailure::alreadyExists($name);
         }
+
+        $this->repository->add($list);
 
         // Until `mailadmin_audit` exists (S4) this line is the record. The audit
         // entry belongs at exactly this point; the member addresses do not go

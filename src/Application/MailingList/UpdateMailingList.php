@@ -65,12 +65,12 @@ final readonly class UpdateMailingList
     ): MailingList {
         ListPolicy::requireWrite($actor);
 
-        $stored = MailingListGuard::load($this->repository, $name);
+        $stored = MailingListGuard::load($this->repository, $actor, $name);
         MailingListGuard::precondition($stored, $ifMatch);
 
         $updated = self::apply($stored, $changes);
 
-        $this->repository->replace($updated);
+        $this->write($stored, $updated);
 
         $this->logger->info('A mailing list was changed.', [
             'admin' => $actor->username,
@@ -80,6 +80,33 @@ final readonly class UpdateMailingList
         ]);
 
         return $updated;
+    }
+
+    /**
+     * The address is the identity, so a changed address is a delete and a
+     * create — with the same free-address check a create makes. Anything else
+     * is an `UPDATE` of the row.
+     *
+     * @throws MailingListFailure when the new address or its list key is taken
+     */
+    private function write(MailingList $stored, MailingList $updated): void
+    {
+        $before = MailingListGuard::addressOf($stored);
+        $after = MailingListGuard::addressOf($updated);
+
+        if ($before->toLowerCase()->equals($after->toLowerCase())) {
+            $this->repository->replace($updated);
+
+            return;
+        }
+
+        if ($this->repository->find($after) !== null
+            || $this->repository->existsWithKey(ListDelivery::listKey($after))) {
+            throw MailingListFailure::alreadyExists($updated->name->toString());
+        }
+
+        $this->repository->remove($before);
+        $this->repository->add($updated);
     }
 
     /**
