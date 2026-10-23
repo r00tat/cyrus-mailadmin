@@ -13,16 +13,23 @@
 # The frontend carries a placeholder instead of a base path; bin/install writes
 # the installation's own into it (U-71).
 #
-# The archive holds the tracked files (without tests/, docker/, .github/) and
+# The archive holds the tracked files (without tests/, docker/, .github/, maillist/) and
 # the build output — vendor/, the frontend in public/ and the contract
 # artefacts in var/cache/. Nothing untracked from the working tree: no
 # node_modules, no .env, no tool caches. Everything sits below mailadmin-TAG/.
 #
-# Writes OUTDIR/mailadmin-TAG.tar.gz, OUTDIR/install and OUTDIR/SHA256SUMS.
+# The list delivery script (maillist/) is not part of that archive; it ships on
+# its own, for the server that runs Postfix: maillist-TAG.tar.gz (root
+# maillist-TAG/, with VERSION holding the tag) and its installer as
+# install-maillist, which `install-maillist --release` downloads again.
+#
+# Writes OUTDIR/mailadmin-TAG.tar.gz, OUTDIR/install, OUTDIR/maillist-TAG.tar.gz,
+# OUTDIR/install-maillist and OUTDIR/SHA256SUMS.
 
 set -euo pipefail
 
 readonly BASE_PLACEHOLDER='/__MAILADMIN_BASE__/'
+readonly MAILLIST_FILES=(maillist.py install maillist.ini.example README.md pyproject.toml)
 readonly CACHE_ARTEFACTS=(var/cache/openapi.bundled.yaml var/cache/openapi.bundled.json var/cache/routes.php)
 
 die() { printf 'package-release: %s\n' "$*" >&2; exit 1; }
@@ -43,6 +50,9 @@ for file in "${CACHE_ARTEFACTS[@]}"; do
 done
 grep -qF "$BASE_PLACEHOLDER" public/index.html 2>/dev/null \
     || die 'public/index.html is not built with MAILADMIN_BASE_PATH=__MAILADMIN_BASE__'
+for file in "${MAILLIST_FILES[@]}"; do
+    [ -f "maillist/$file" ] || die "maillist/$file is missing"
+done
 [ -d public/assets ] || die 'public/assets/ is missing: the frontend is not built'
 [ -z "$(git status --porcelain --untracked-files=no)" ] \
     || die 'tracked files are modified; a release is built from a clean checkout'
@@ -55,7 +65,7 @@ trap 'rm -rf "$stage"' EXIT
 
 # --- the file list --------------------------------------------------------------
 {
-    git ls-files -z | grep -zv -E '^(tests|docker|\.github)/'
+    git ls-files -z | grep -zv -E '^(tests|docker|\.github|maillist)/'
     find vendor public/assets \( -type f -o -type l \) -print0
     printf '%s\0' public/index.html "${CACHE_ARTEFACTS[@]}"
 } | LC_ALL=C sort -zu >"$stage/files"
@@ -76,7 +86,22 @@ gzip -n -9 <"$stage/$name.tar" >"$out/$name.tar.gz"
 # start: curl it, run it.
 cp bin/install "$out/install"
 
-(cd "$out" && sha256sum "$name.tar.gz" install >SHA256SUMS)
+# The list delivery script: its own archive, built the same reproducible way.
+ml_name="maillist-$tag"
+mkdir -p "$stage/$ml_name"
+chmod 0755 "$stage/$ml_name"
+for file in "${MAILLIST_FILES[@]}"; do
+    cp "maillist/$file" "$stage/$ml_name/$file"
+    chmod 0644 "$stage/$ml_name/$file"
+done
+chmod 0755 "$stage/$ml_name/install" "$stage/$ml_name/maillist.py"
+printf '%s\n' "$tag" >"$stage/$ml_name/VERSION"
+chmod 0644 "$stage/$ml_name/VERSION"
+tar -cf "$stage/$ml_name.tar" "${tar_options[@]}" -C "$stage" "$ml_name"
+gzip -n -9 <"$stage/$ml_name.tar" >"$out/$ml_name.tar.gz"
+cp maillist/install "$out/install-maillist"
+
+(cd "$out" && sha256sum "$name.tar.gz" install "$ml_name.tar.gz" install-maillist >SHA256SUMS)
 
 printf 'package-release: %s (%s files, commit %s)\n' \
     "$out/$name.tar.gz" "$(tr -cd '\0' <"$stage/files" | wc -c | tr -d ' ')" "$(head -c 10 "$stage/REVISION")"
