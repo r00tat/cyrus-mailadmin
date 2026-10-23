@@ -7,8 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import EmailMessage
 
-from config import EX_NOUSER, EX_OK, EX_TEMPFAIL, Settings
-from headers import sanitize_text
+from maillist_config import EX_NOUSER, EX_OK, EX_TEMPFAIL, Settings
+from maillist_headers import sanitize_text
 
 SMTP_TIMEOUT = 30
 

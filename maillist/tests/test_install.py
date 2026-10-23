@@ -13,7 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install"
 # The modules maillist.py imports from its own directory; a release is incomplete without any of them.
-MODULES = ("config.py", "delivery.py", "headers.py", "members.py")
+MODULES = ("maillist_config.py", "maillist_delivery.py", "maillist_headers.py", "maillist_members.py")
 
 
 def _load():
@@ -160,7 +160,7 @@ def test_success_output_shows_master_cf_line_and_recipient_limit(env, capsys) ->
     assert "user=listuser" in out
     # pipe(8) passes no environment, so a non-default config path has to travel in argv
     expected = (
-        f"argv=/usr/bin/env MAILLIST_CONFIG={env['config']} /usr/bin/python3x {env['prefix']}/current/maillist.py"
+        f"argv=/usr/bin/env MAILLIST_CONFIG={env['config']} /usr/bin/python3x -I {env['prefix']}/current/maillist.py"
     )
     assert f"{expected} -- ${{user}}" in out
     assert "maillist_destination_recipient_limit = 1" in out
@@ -689,11 +689,11 @@ def test_default_config_path_needs_no_env_wrapper(env, monkeypatch, capsys) -> N
     assert run(env, "--source", str(src)) == 0
     out = capsys.readouterr().out
     assert "/usr/bin/env" not in out and "MAILLIST_CONFIG" not in out
-    assert f"argv=/usr/bin/python3 {env['prefix']}/current/maillist.py -- ${{user}}" in out
+    assert f"argv=/usr/bin/python3 -I {env['prefix']}/current/maillist.py -- ${{user}}" in out
 
 
 def test_maillist_script_honours_config_environment_variable() -> None:
-    assert 'CONFIG_ENV_VAR = "MAILLIST_CONFIG"' in (ROOT / "config.py").read_text()
+    assert 'CONFIG_ENV_VAR = "MAILLIST_CONFIG"' in (ROOT / "maillist_config.py").read_text()
 
 
 @pytest.mark.parametrize("flag", ["--prefix", "--config", "--python"])
@@ -1045,7 +1045,7 @@ def test_dependency_check_runs_isolated_from_root_directory(monkeypatch) -> None
 
     monkeypatch.setattr(install.subprocess, "run", fake_run)
     assert install.Runner().check_dependency("/usr/bin/python3")
-    assert seen["cmd"] == ["/usr/bin/python3", "-I", "-c", "import mysql.connector"]
+    assert seen["cmd"] == ["/usr/bin/python3", "-I", "-B", "-c", "import mysql.connector"]
     assert seen["cwd"] == "/"
 
 
@@ -1058,7 +1058,7 @@ def test_check_runs_isolated_from_root_directory(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(install.subprocess, "run", fake_run)
     install.Runner().run_check("/usr/bin/python3", tmp_path / "maillist.py", tmp_path / "c.ini", None)
-    assert seen["cmd"] == ["/usr/bin/python3", "-I", str(tmp_path / "maillist.py"), "--check"]
+    assert seen["cmd"] == ["/usr/bin/python3", "-I", "-B", str(tmp_path / "maillist.py"), "--check"]
     assert seen["cwd"] == "/"
 
 
@@ -1084,10 +1084,10 @@ def test_code_files_are_the_script_and_every_module_beside_it() -> None:
 
 def test_packaging_and_project_list_every_code_file() -> None:
     package = (ROOT.parent / "bin" / "package-release").read_text()
-    (line,) = [line for line in package.splitlines() if line.startswith("readonly MAILLIST_FILES=")]
+    shipped = package.split("readonly MAILLIST_FILES=(", 1)[1].split(")", 1)[0].split()
     pyproject = (ROOT / "pyproject.toml").read_text()
     for name in install.CODE_FILES:
-        assert name in line.split("(", 1)[1].split()
+        assert name in shipped
         assert f'"{name.removesuffix(".py")}"' in pyproject
 
 
@@ -1190,12 +1190,18 @@ def assert_check_runs(env, runner) -> None:
     (output,) = runner.outputs
     assert "config ok\nlog ok\ndatabase FAILED" in output, output
     assert "ModuleNotFoundError" not in output and "ImportError" not in output
+    # -B: the check imported the modules without writing bytecode into the release directory.
+    assert not (env["prefix"] / "current" / "__pycache__").exists()
     script = env["prefix"] / "current" / "maillist.py"
     environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "MAILLIST_CONFIG": str(env["config"])}
-    # As the installer starts it (-I leaves the script directory off sys.path) and as Postfix does (no -I).
-    for flags in (["-I"], []):
+    runner_script = env["tmp"] / "runner" / "run.py"
+    runner_script.parent.mkdir()
+    runner_script.write_text(RUNNER)
+    # As the installer and master.cf start it (-I leaves the script directory off sys.path), and as an older
+    # master.cf line without -I does. The runner keeps the checkout's editable install out of the imports.
+    for flags in (["-I", "-B"], ["-B"]):
         result = install.subprocess.run(  # noqa: S603
-            [sys.executable, *flags, str(script), "--check"],
+            [sys.executable, *flags, str(runner_script), str(script), "--check"],
             capture_output=True,
             text=True,
             env=environment,
@@ -1232,3 +1238,52 @@ def test_install_from_release_archive_yields_a_runnable_check(env) -> None:
     assert run(env, "--release", tag, "--python", sys.executable, verify=True, runner=runner, fetch=fetch) == 0
     assert os.readlink(env["prefix"] / "current") == f"releases/{tag}"
     assert_check_runs(env, runner)
+
+
+# --- a broken installation defers instead of bouncing ---------------------------------------
+
+# Runs a script the way Postfix does, but without the editable install of this project: its import hook would
+# otherwise supply a module missing next to the script from the checkout.
+RUNNER = """\
+import runpy
+import sys
+
+sys.meta_path[:] = [f for f in sys.meta_path if "__editable__" not in getattr(f, "__module__", "")]
+script = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_path(script, run_name="__main__")
+"""
+
+
+def run_copied_script(tmp_path, missing=None):
+    release = tmp_path / "release"
+    release.mkdir()
+    for name in install.CODE_FILES:
+        if name != missing:
+            (release / name).write_bytes((ROOT / name).read_bytes())
+    runner = tmp_path / "runner" / "run.py"
+    runner.parent.mkdir()
+    runner.write_text(RUNNER)
+    return install.subprocess.run(  # noqa: S603
+        [sys.executable, "-I", "-B", str(runner), str(release / "maillist.py"), "--no-such-option"],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+        cwd="/",
+        timeout=60,
+        check=False,
+    )
+
+
+def test_complete_copy_imports_and_reaches_argument_parsing(tmp_path) -> None:
+    result = run_copied_script(tmp_path)
+    assert result.returncode == 64, result.stderr
+    assert result.stderr == "maillist: invalid arguments\n"
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_missing_module_defers_with_a_fixed_line_and_no_traceback(tmp_path, module) -> None:
+    result = run_copied_script(tmp_path, missing=module)
+    assert result.returncode == 75
+    assert result.stderr == "maillist: installation unusable\n"
+    assert result.stdout == ""

@@ -16,7 +16,7 @@ dependencies = ["mysql-connector-python"]
 dev = ["pytest", "ruff"]
 
 [tool.setuptools]
-py-modules = ["maillist", "config", "delivery", "headers", "members"]
+py-modules = ["maillist", "maillist_config", "maillist_delivery", "maillist_headers", "maillist_members"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

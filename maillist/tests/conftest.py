@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-import config
-import delivery
 import maillist
+import maillist_config
+import maillist_delivery
 
 CONFIG_TEXT = textwrap.dedent(
     """\
@@ -35,8 +35,8 @@ def config_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def settings(config_file: Path) -> config.Settings:
-    return config.load_settings(str(config_file))
+def settings(config_file: Path) -> maillist_config.Settings:
+    return maillist_config.load_settings(str(config_file))
 
 
 # --- helpers for tests that drive maillist.main() ---------------------------
@@ -132,7 +132,7 @@ def run_main(monkeypatch, config_file):
         monkeypatch.setenv("MAILLIST_CONFIG", str(config_file))
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw)))
         monkeypatch.setattr(maillist.mysql.connector, "connect", connect or (lambda **_: connection))
-        monkeypatch.setattr(delivery.smtplib, "SMTP", smtp)
+        monkeypatch.setattr(maillist_delivery.smtplib, "SMTP", smtp)
         code = maillist.main(argv)
         return code, connection, RecordingSMTP.instances
 

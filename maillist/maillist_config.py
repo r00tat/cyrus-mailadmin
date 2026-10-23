@@ -1,8 +1,9 @@
 """Configuration, logging and the exit codes of the list delivery script.
 
-The base module: it imports none of the others, so headers, delivery and maillist can all import from here
-without a cycle. That is also why the exit codes live here and not in the entry point: delivery returns them
-too, and importing them from maillist.py would load the script a second time under its module name.
+The base module: it imports none of the others, so maillist_headers, maillist_delivery and maillist can all
+import from here without a cycle. That is also why the exit codes live here and not in the entry point:
+maillist_delivery returns them too, and importing them from maillist.py would load the script a second time
+under its module name.
 """
 
 import configparser

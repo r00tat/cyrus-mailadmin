@@ -4,7 +4,7 @@ import re
 from email.message import EmailMessage
 from email.utils import parseaddr
 
-from config import ListSettings
+from maillist_config import ListSettings
 
 MAX_LOOP_HOPS = 10  # safety net: this many X-Loop headers means the message circulates
 

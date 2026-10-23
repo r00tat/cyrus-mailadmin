@@ -4,61 +4,71 @@
 Postfix hands the message over on stdin; the list is looked up in the database
 and the message is relayed to every member through the local MTA.
 
-Entry point of the script. The rest lives in sibling modules next to this file: config (settings,
-logging, exit codes), members (reading the member field), headers (loop/bounce checks, list headers)
-and delivery (SMTP relay, admin reports).
+Entry point of the script. The rest lives in sibling modules next to this file: maillist_config
+(settings, logging, exit codes), maillist_members (reading the member field), maillist_headers
+(loop/bounce checks, list headers) and maillist_delivery (SMTP relay, admin reports).
 
 Originally written by Erich Malzer for the maillist-py project, Apache License 2.0;
 maintained as part of mailadmin.
 """
 
-import argparse
-import logging
 import os
 import sys
-from contextlib import closing
-from dataclasses import dataclass
-from email import policy
-from email.message import EmailMessage
-from email.parser import BytesParser
 
-import mysql.connector
-from mysql.connector import errorcode
-from mysql.connector.abstracts import MySQLConnectionAbstract
-from mysql.connector.pooling import PooledMySQLConnection
-
-# The sibling modules are imported from the directory this file really lives in, the release directory.
-# Postfix runs the script without -I, so Python already puts the script's directory first on sys.path; the
-# installer's --check runs it with -I, which leaves it out. Putting the resolved directory first makes both
-# invocations import the same files, and resolving the `current` symlink keeps the imports in one release
-# directory instead of following `current` while an update switches it.
+# The sibling modules are imported from the directory this file really lives in, the release directory, and
+# that directory goes first on sys.path before anything else is imported. Python only puts the script's
+# directory there itself without -I; with -I (Postfix's master.cf line and the installer's --check) it
+# leaves it out. Resolving the `current` symlink almost always keeps every import in the release this file
+# came from. The remaining window: an update switches `current` after Python opened this file and before the
+# path is resolved here, so the modules come from the next release. If that mix, or anything else, makes an
+# import fail, the guard below defers the message instead of bouncing it.
 _HERE = os.path.dirname(os.path.realpath(__file__))
 if sys.path[:1] != [_HERE]:
     sys.path.insert(0, _HERE)
 
-from config import (  # noqa: E402
-    CONFIG_ENV_VAR,
-    DEFAULT_CONFIG_PATH,
-    EX_NOUSER,
-    EX_OK,
-    EX_SOFTWARE,
-    EX_TEMPFAIL,
-    EX_USAGE,
-    ConfigError,
-    Settings,
-    configure_logging,
-    load_settings,
-)
-from delivery import notify_ambiguous_list, notify_unexpected_error, send_via_local_postfix  # noqa: E402
-from headers import (  # noqa: E402
-    apply_list_headers,
-    extract_delivered_to_local_part,
-    list_sender_address,
-    sanitize_text,
-    should_drop_for_bounce,
-    should_drop_for_loop,
-)
-from members import normalize_recipients  # noqa: E402
+import argparse  # noqa: E402
+import logging  # noqa: E402
+from contextlib import closing  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+from email import policy  # noqa: E402
+from email.message import EmailMessage  # noqa: E402
+from email.parser import BytesParser  # noqa: E402
+
+try:
+    import mysql.connector
+    from mysql.connector import errorcode
+    from mysql.connector.abstracts import MySQLConnectionAbstract
+    from mysql.connector.pooling import PooledMySQLConnection
+
+    from maillist_config import (
+        CONFIG_ENV_VAR,
+        DEFAULT_CONFIG_PATH,
+        EX_NOUSER,
+        EX_OK,
+        EX_SOFTWARE,
+        EX_TEMPFAIL,
+        EX_USAGE,
+        ConfigError,
+        Settings,
+        configure_logging,
+        load_settings,
+    )
+    from maillist_delivery import notify_ambiguous_list, notify_unexpected_error, send_via_local_postfix
+    from maillist_headers import (
+        apply_list_headers,
+        extract_delivered_to_local_part,
+        list_sender_address,
+        sanitize_text,
+        should_drop_for_bounce,
+        should_drop_for_loop,
+    )
+    from maillist_members import normalize_recipients
+except ImportError:
+    # A broken installation is an operator error: Postfix should keep the message and retry, not bounce a
+    # traceback to the sender (pipe(8) copies stderr into the bounce). 75 is EX_TEMPFAIL, written out here
+    # because maillist_config may be the module that failed to import.
+    sys.stderr.write("maillist: installation unusable\n")
+    sys.exit(75)
 
 DBConnection = MySQLConnectionAbstract | PooledMySQLConnection
 

@@ -48,7 +48,7 @@ EXIT_CONFIG = 2
 MARKER = ".mailadmin-maillist"
 # The script and the modules it imports from its own directory. All of them make up a release: they are
 # copied, compared and hashed together, so a release never mixes code from two versions.
-CODE_FILES = ("maillist.py", "config.py", "delivery.py", "headers.py", "members.py")
+CODE_FILES = ("maillist.py", "maillist_config.py", "maillist_delivery.py", "maillist_headers.py", "maillist_members.py")
 RELEASE_FILES = (*CODE_FILES, "maillist.ini.example", "VERSION", "README.md")
 OPTIONAL_FILES = ("README.md",)
 DEFAULT_PREFIX = "/opt/mailadmin-maillist"
@@ -105,15 +105,16 @@ class Runner:
 
     def check_dependency(self, python: str) -> bool:
         # -I and cwd="/": without them "-c" puts the caller's working directory first on sys.path, and a
-        # planted mysql/ there would run as root.
+        # planted mysql/ there would run as root. -B: a check run as root leaves no bytecode files behind.
         result = subprocess.run(  # noqa: S603
-            [python, "-I", "-c", "import mysql.connector"], capture_output=True, text=True, check=False, cwd="/"
+            [python, "-I", "-B", "-c", "import mysql.connector"], capture_output=True, text=True, check=False, cwd="/"
         )
         return result.returncode == 0
 
     def run_check(self, python: str, script: Path, config: Path, user: str | None) -> tuple[bool, str]:
         # -I and cwd="/" as in check_dependency: nothing from the caller's directory or environment is imported.
-        cmd = [python, "-I", str(script), "--check"]
+        # -B: importing the modules must not leave a __pycache__ in the release directory, least of all as root.
+        cmd = [python, "-I", "-B", str(script), "--check"]
         if user and self.is_root():
             # The check itself gets a minimal PATH, so the privilege-dropping tool is resolved here.
             runuser = shutil.which("runuser", path=TOOL_PATH)
@@ -560,9 +561,10 @@ class Installer:
         self.say("Add this service to Postfix master.cf (continuation lines are indented):")
         self.say("")
         self.say("maillist  unix  -  n  n  -  -  pipe")
-        self.say(
-            f"  flags=Rq user={user} argv={env_part}{self.args.python} {self.prefix}/current/maillist.py -- ${{user}}"
-        )
+        # -I: nothing from the environment or a user site directory reaches the script; maillist.py puts its
+        # own release directory on sys.path itself.
+        script = f"{self.prefix}/current/maillist.py"
+        self.say(f"  flags=Rq user={user} argv={env_part}{self.args.python} -I {script} -- ${{user}}")
         self.say("")
         self.say("and in main.cf, so that every list member gets its own delivery:")
         self.say("")
