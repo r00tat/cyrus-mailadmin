@@ -193,6 +193,20 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
         self::assertSame(1, $this->countRows());
     }
 
+    public function testAStoredNameWithASpaceIsReadBackThroughTheListing(): void
+    {
+        $this->insertRaw('Team Example', '', 'a@example.test', '');
+        $this->insertRaw('plain', '', 'b@example.test', '');
+
+        $page = $this->repository->list(ActorContext::superuser('root'), new ListCriteria());
+
+        self::assertSame(2, $page->total);
+        self::assertEqualsCanonicalizing(
+            ['Team Example', 'plain'],
+            array_map(static fn (MailingList $list): string => $list->name->toString(), $page->items),
+        );
+    }
+
     public function testAMissingRowIsNullAndNotAnException(): void
     {
         self::assertNull($this->repository->find(EmailAddress::parse('nobody@example.test')));

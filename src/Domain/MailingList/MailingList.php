@@ -55,8 +55,6 @@ final readonly class MailingList
     /**
      * A row as the database has it. Nothing here is rejected for being
      * unconventional — see the class comment.
-     *
-     * @throws InvalidMailingList when the name is unusable as a key at all
      */
     public static function fromStoredValues(
         string $name,

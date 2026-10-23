@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Mailadmin\Infrastructure\Persistence;
 
 use Mailadmin\Domain\Access\ActorContext;
-use Mailadmin\Domain\Exception\InvalidMailingList;
 use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Infrastructure\Persistence\Criteria\FilterAllowlist;
@@ -173,9 +172,6 @@ final class SqlMailingListRepository extends Repository implements MailingListRe
 
     /**
      * @param array<string, mixed> $row
-     *
-     * @throws InvalidMailingList when the stored name is unusable as a display
-     *                            name — empty, or carrying whitespace or a colon
      */
     private static function toMailingList(array $row): MailingList
     {

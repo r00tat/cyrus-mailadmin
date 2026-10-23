@@ -6,7 +6,6 @@ namespace Mailadmin\Application\MailingList;
 
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\Exception\InvalidAddress;
-use Mailadmin\Domain\Exception\InvalidMailingList;
 use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\MailingList\MailingListName;
 use Mailadmin\Domain\Model\EmailAddress;
@@ -19,9 +18,9 @@ use Mailadmin\Infrastructure\Persistence\MailingListRepository;
  * Written once rather than four times, because each of them is a place where
  * getting it subtly wrong would not fail a test:
  *
- *  - **A name that could never be a row answers `404`, not `422`.** Otherwise
- *    the shape of the refusal tells a caller whether their guess was merely
- *    absent or malformed.
+ *  - **A name no list carries answers `404`, not `422`** — whatever it looks
+ *    like, since a stored name may hold anything. Otherwise the shape of the
+ *    refusal tells a caller whether their guess was merely absent or malformed.
  *  - **A missing list answers with the framework's own `404` code**, so that it
  *    is indistinguishable from a list somebody may not see — see
  *    {@see MailingListErrorCode::NOT_FOUND}.
@@ -36,16 +35,9 @@ final class MailingListGuard
     {
     }
 
-    /**
-     * @throws MailingListFailure when the value cannot name a row at all
-     */
     public static function name(string $value): MailingListName
     {
-        try {
-            return MailingListName::fromStoredValue($value);
-        } catch (InvalidMailingList) {
-            throw MailingListFailure::notFound($value);
-        }
+        return MailingListName::fromStoredValue($value);
     }
 
     /**

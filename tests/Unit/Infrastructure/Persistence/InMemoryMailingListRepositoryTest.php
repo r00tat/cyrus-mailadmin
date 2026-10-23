@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Mailadmin\Tests\Unit\Infrastructure\Persistence;
 
+use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Model\EmailAddress;
+use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 use Mailadmin\Infrastructure\Persistence\InMemoryMailingListRepository;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -89,6 +91,22 @@ final class InMemoryMailingListRepositoryTest extends TestCase
         self::assertTrue($this->repository->remove(EmailAddress::parse('dup@example.test')));
         self::assertFalse($this->repository->remove(EmailAddress::parse('dup@example.test')));
         self::assertNotNull($this->repository->find(EmailAddress::parse('keep@example.test')));
+    }
+
+    public function testAListWhoseNameHasASpaceIsStillListed(): void
+    {
+        $this->repository->given(
+            MailingList::fromStoredValues('Team Example', '', 'a@example.test', ''),
+            MailingList::fromStoredValues('plain', '', 'b@example.test', ''),
+        );
+
+        $page = $this->repository->list(ActorContext::superuser('root'), new ListCriteria());
+
+        self::assertSame(2, $page->total);
+        self::assertEqualsCanonicalizing(
+            ['Team Example', 'plain'],
+            array_map(static fn (MailingList $list): string => $list->name->toString(), $page->items),
+        );
     }
 
     public function testAddressesCompareWithoutRegardToCase(): void

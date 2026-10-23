@@ -7,19 +7,18 @@ namespace Mailadmin\Domain\MailingList;
 use Mailadmin\Domain\Exception\InvalidMailingList;
 
 /**
- * The primary key of `lists`, and therefore the identity of a mailing list.
+ * The display name of a mailing list.
  *
- * `lists` has no surrogate key — `name` is the primary key (analysis 4.1), so
- * it is what a URL addresses (U-60). Two doors, the same shape as
- * {@see \Mailadmin\Domain\Model\LocalPart}: {@see fromString()} is strict for a
- * name somebody is creating, {@see fromStoredValue()} is tolerant for a row that
- * is already there and only marks it {@see isConventional()} `=== false` (U-22).
+ * The identity of a list is its address; `lists.name` is display text and may
+ * repeat. Two doors, the same shape as {@see \Mailadmin\Domain\Model\LocalPart}:
+ * {@see fromString()} is strict for a name somebody is creating,
+ * {@see fromStoredValue()} accepts every string a row can hold and only marks
+ * it {@see isConventional()} `=== false` (U-22) — one odd row must neither
+ * disappear nor make a listing fail.
  *
- * The strict rules are not decoration. The name ends up as the key of an entry
- * in an aliases file, where whitespace and `:` are structure; a name carrying
- * either would produce a file the MTA reads differently from what the form said.
- * Both doors therefore refuse those outright, and the strict door additionally
- * refuses anything that is not a plain label.
+ * The strict rules stay for new names: a name has been the key of an entry in
+ * an aliases file, where whitespace and `:` are structure, and a plain label is
+ * what the other tools expect to read.
  */
 final readonly class MailingListName
 {
@@ -50,15 +49,12 @@ final readonly class MailingListName
     }
 
     /**
-     * The tolerant door: for a name that is already in the table.
-     *
-     * @throws InvalidMailingList
+     * The tolerant door: for a name that is already in the table. Nothing is
+     * refused, trimmed or changed, so a row saved unchanged keeps its bytes.
      */
     public static function fromStoredValue(string $value): self
     {
-        $name = self::guardUsable($value);
-
-        return new self($name, self::isConventionalValue($name));
+        return new self($value, self::isConventionalValue($value));
     }
 
     public function toString(): string
@@ -67,7 +63,8 @@ final readonly class MailingListName
     }
 
     /**
-     * False for a stored name this application would not accept from a form.
+     * False for a stored name this application would not accept from a form —
+     * including an empty one or one with whitespace.
      */
     public function isConventional(): bool
     {
@@ -119,6 +116,7 @@ final readonly class MailingListName
 
     private static function isConventionalValue(string $value): bool
     {
-        return preg_match('/^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$/', $value) === 1;
+        return strlen($value) <= self::MAX_LENGTH
+            && preg_match('/^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$/', $value) === 1;
     }
 }

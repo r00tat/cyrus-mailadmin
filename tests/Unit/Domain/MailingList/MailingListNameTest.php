@@ -35,7 +35,7 @@ final class MailingListNameTest extends TestCase
     /**
      * @return iterable<string, array{string}>
      */
-    public static function namesNoRowCanCarry(): iterable
+    public static function namesTheStrictDoorRefuses(): iterable
     {
         yield 'empty' => [''];
         yield 'whitespace only' => ['   '];
@@ -49,20 +49,23 @@ final class MailingListNameTest extends TestCase
         yield 'too long' => [str_repeat('a', 256)];
     }
 
-    #[DataProvider('namesNoRowCanCarry')]
-    public function testANameThatCouldNeverBeAKeyIsRefusedByBothDoors(string $name): void
+    #[DataProvider('namesTheStrictDoorRefuses')]
+    public function testANewNameWithStructureCharactersIsRefused(string $name): void
     {
-        $refusals = 0;
+        $this->expectException(InvalidMailingList::class);
 
-        foreach ([MailingListName::fromString(...), MailingListName::fromStoredValue(...)] as $door) {
-            try {
-                $door($name);
-            } catch (InvalidMailingList) {
-                ++$refusals;
-            }
-        }
+        MailingListName::fromString($name);
+    }
 
-        self::assertSame(2, $refusals, 'Both the strict and the tolerant door have to refuse this.');
+    #[DataProvider('namesTheStrictDoorRefuses')]
+    public function testAStoredNameIsNeverRefusedOnlyMarkedUnconventional(string $name): void
+    {
+        // The name is display text (U-22): one odd row must not make the
+        // listing fail for every other row, and must come back byte for byte.
+        $stored = MailingListName::fromStoredValue($name);
+
+        self::assertSame($name, $stored->toString());
+        self::assertFalse($stored->isConventional());
     }
 
     /**
@@ -91,9 +94,10 @@ final class MailingListNameTest extends TestCase
         MailingListName::fromString($name);
     }
 
-    public function testSurroundingWhitespaceIsTrimmed(): void
+    public function testSurroundingWhitespaceIsTrimmedForANewNameOnly(): void
     {
-        self::assertSame('team', MailingListName::fromStoredValue('  team  ')->toString());
+        self::assertSame('team', MailingListName::fromString('  team  ')->toString());
+        self::assertSame('  team  ', MailingListName::fromStoredValue('  team  ')->toString());
     }
 
     public function testComparisonIsCaseSensitive(): void

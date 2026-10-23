@@ -83,9 +83,15 @@ final readonly class UpdateMailingList
     }
 
     /**
-     * The address is the identity, so a changed address is a delete and a
-     * create — with the same free-address check a create makes. Anything else
-     * is an `UPDATE` of the row.
+     * The address is the identity, so a changed address is a create and a
+     * delete — with the same free-address check a create makes, ignoring the
+     * list's own old row. An unchanged address (compared exactly, so a change
+     * of case counts) is an `UPDATE` of the row.
+     *
+     * The new row goes in first: a leftover duplicate is harmless, lost members
+     * are not. The one exception is a change of case only — `remove()` matches
+     * the address case-insensitively like the column does, so it would take the
+     * new row with it; there the old row has to go first.
      *
      * @throws MailingListFailure when the new address or its list key is taken
      */
@@ -94,19 +100,28 @@ final readonly class UpdateMailingList
         $before = MailingListGuard::addressOf($stored);
         $after = MailingListGuard::addressOf($updated);
 
-        if ($before->toLowerCase()->equals($after->toLowerCase())) {
+        if ($before->toString() === $after->toString()) {
             $this->repository->replace($updated);
 
             return;
         }
 
+        if ($before->toLowerCase()->equals($after->toLowerCase())) {
+            $this->repository->remove($before);
+            $this->repository->add($updated);
+
+            return;
+        }
+
+        $sameKey = ListDelivery::listKey($before->toLowerCase()) === ListDelivery::listKey($after->toLowerCase());
+
         if ($this->repository->find($after) !== null
-            || $this->repository->existsWithKey(ListDelivery::listKey($after))) {
+            || (!$sameKey && $this->repository->existsWithKey(ListDelivery::listKey($after)))) {
             throw MailingListFailure::alreadyExists($updated->name->toString());
         }
 
-        $this->repository->remove($before);
         $this->repository->add($updated);
+        $this->repository->remove($before);
     }
 
     /**

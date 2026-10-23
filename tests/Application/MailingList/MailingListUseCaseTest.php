@@ -15,6 +15,7 @@ use Mailadmin\Application\MailingList\UpdateMailingList;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Model\DomainName;
+use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Domain\Policy\AccessDenied;
 use Mailadmin\Infrastructure\Persistence\Criteria\CriteriaError;
 use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
@@ -223,6 +224,38 @@ final class MailingListUseCaseTest extends TestCase
         $this->expectException(MailingListFailure::class);
 
         $this->create()->handle($this->superuser, 'other', '', 'a@b.c.example.test', []);
+    }
+
+    public function testACaseOnlyAddressChangeIsStoredWithTheNewCase(): void
+    {
+        $this->repository->given(MailingList::fromStoredValues('team', '', 'Team@example.test', 'a@example.test'));
+
+        $updated = $this->update()->handle(
+            $this->superuser,
+            'team',
+            new MailingListChanges(address: 'team@example.test'),
+        );
+
+        self::assertSame('team@example.test', $updated->address);
+
+        $stored = $this->repository->find(EmailAddress::parse('team@example.test'));
+
+        self::assertSame('team@example.test', $stored?->address);
+        self::assertSame('a@example.test', $this->repository->storedMembers('team@example.test'));
+    }
+
+    public function testAnAddressChangeThatKeepsTheListKeyIsNotACollisionWithTheListItself(): void
+    {
+        $this->repository->given(MailingList::fromStoredValues('dotted', '', 'a.b@c.example.test', ''));
+
+        $updated = $this->update()->handle(
+            $this->superuser,
+            'dotted',
+            new MailingListChanges(address: 'a@b.c.example.test'),
+        );
+
+        self::assertSame('a@b.c.example.test', $updated->address);
+        self::assertNull($this->repository->find(EmailAddress::parse('a.b@c.example.test')));
     }
 
     public function testTheSameDisplayNameOnAnotherAddressIsNotAConflict(): void
