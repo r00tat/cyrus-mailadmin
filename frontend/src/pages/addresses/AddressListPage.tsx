@@ -25,6 +25,7 @@ import { useTranslation } from '../../i18n';
 import { DomainPicker } from '../accounts/DomainPicker';
 import { accountPath } from '../accounts/labels';
 import { useDomainParam } from '../accounts/useDomainParam';
+import { listPath } from '../lists/listShared';
 
 import { AliasCreateDialog } from './AliasCreateDialog';
 import { CatchallCard } from './CatchallCard';
@@ -35,10 +36,12 @@ import { useReservedConfirmation } from './useReservedConfirmation';
  * A3 — every row of a domain in `virtual`, classified.
  *
  * The four types of architecture 3.4 — an account's own address, alias,
- * catchall, forward — and the rows that fit none, which are **shown** with
- * the reason (U-22, U-103), never skipped. Any row except an account's own
- * address can be removed one by one here; that is how the leftovers that
- * block deleting a domain are cleared (`domain.still_has_addresses`).
+ * catchall, forward —, the row that routes a mailing list (A5), and the rows
+ * that fit none, which are **shown** with the reason (U-22, U-103), never
+ * skipped. Any row except an account's own address and a list's row can be
+ * removed one by one here; that is how the leftovers that block deleting a
+ * domain are cleared (`domain.still_has_addresses`). A list's row links to
+ * the list, which is changed and deleted only there.
  *
  * Aliases are created here and changed on their own page; the catchall has
  * its card above the list; forwards and vacation notices live on the account
@@ -224,6 +227,9 @@ function EntryLink({ entry }: { entry: AddressEntry }): ReactNode {
 
   if (entry.type === 'alias') {
     to = aliasPath(entry.alias);
+  } else if (entry.type === 'mailing_list') {
+    // The row's alias is the list address, which is the list's identifier.
+    to = listPath(entry.alias);
   } else if (entry.type === 'forward') {
     // A forward row is keyed by the account's stored user name.
     to = accountPath(entry.alias);

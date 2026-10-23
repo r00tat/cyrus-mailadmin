@@ -132,7 +132,7 @@ export const deErrors = {
   'errors.list.invalid_address': 'Die Listenadresse ist unzulässig.',
   'errors.list.invalid_member': 'Mindestens eine Mitgliedsadresse ist unzulässig.',
   'errors.list.invalid_name': 'Der Listenname ist unzulässig.',
-  'errors.list.invalid_tag': 'Die Listenkennung ist unzulässig.',
+  'errors.list.invalid_tag': 'Das Kennzeichen ist unzulässig.',
   'errors.list.member_outside_latin1':
     'Mindestens ein Mitglied enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
   'errors.list.name_outside_latin1': 'Der Listenname enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',

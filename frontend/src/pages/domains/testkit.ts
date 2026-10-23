@@ -56,6 +56,9 @@ export const DOMAIN_MASTER = {
     'address.read',
     'address.write',
     'address.delete',
+    'list.read',
+    'list.write',
+    'list.delete',
   ],
 };
 

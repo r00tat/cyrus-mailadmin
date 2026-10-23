@@ -22,6 +22,7 @@ const POSTMASTER = row({ id: 'r3', type: 'alias', alias: 'postmaster@example.tes
 const CATCHALL_ROW = row({ id: 'r4', type: 'catchall', alias: '@example.test' });
 const FORWARD = row({ id: 'r5', type: 'forward', alias: 'bert.example.test', destinations: ['bert@elsewhere.test'] });
 const ODD = row({ id: 'r6', type: 'unknown', alias: 'lost@example.test', destinations: [], unknown_reason: 'no_destination' });
+const MAILING_LIST = row({ id: 'r7', type: 'mailing_list', alias: 'team@example.test', destinations: ['team.example.test@maillist.invalid'] });
 
 const NO_CATCHALL: Catchall = {
   domain: 'example.test',
@@ -38,7 +39,7 @@ const ENTRY = '/addresses?domain=example.test';
 
 function routes(extra: Record<string, Route> = {}): Record<string, Route> {
   return {
-    [`GET ${LIST}`]: () => jsonResponse(200, page([OWN, ALIAS, POSTMASTER, CATCHALL_ROW, FORWARD, ODD])),
+    [`GET ${LIST}`]: () => jsonResponse(200, page([OWN, ALIAS, POSTMASTER, CATCHALL_ROW, FORWARD, ODD, MAILING_LIST])),
     'GET /api/v1/domains/example.test/catchall': () => jsonResponse(200, NO_CATCHALL, { ETag: 'W/"c1"' }),
     ...extra,
   };
@@ -64,6 +65,11 @@ describe('the address list (A3)', () => {
     // An account's own address goes with the account; it has no remove button.
     expect(within(table).queryByRole('button', { name: 'Zeile anna@example.test entfernen' })).toBeNull();
     expect(within(table).getByRole('button', { name: 'Zeile lost@example.test entfernen' })).toBeInTheDocument();
+
+    // A list's row leads to the list and is changed and removed only there (A5).
+    expect(within(table).getByText('Mailingliste')).toBeInTheDocument();
+    expect(within(table).getByRole('link', { name: 'team@example.test' })).toHaveAttribute('href', '/lists/team%40example.test');
+    expect(within(table).queryByRole('button', { name: 'Zeile team@example.test entfernen' })).toBeNull();
 
     expect(await screen.findByText('Diese Domain hat keinen Catchall.')).toBeInTheDocument();
     expect(Object.fromEntries(queryOf(double.callsTo(LIST)[0]!))).toEqual({ page: '1', per_page: '50', sort: 'alias', order: 'asc' });

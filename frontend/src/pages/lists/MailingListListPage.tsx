@@ -14,13 +14,16 @@ import { PageHeader } from '../../components/PageHeader';
 import { useTableState, type SortFieldOf } from '../../components/useTableState';
 import { useTranslation } from '../../i18n';
 
-import { ConfigRunHint, listPath, type MailingList } from './listShared';
+import { listPath, type MailingList } from './listShared';
 import { MailingListCreateDialog } from './MailingListCreateDialog';
 
 /**
  * A5 — the `lists` table, made visible. Rows written before mailadmin may
  * hold values it would not accept; they are listed and flagged, never hidden
  * (U-22).
+ *
+ * Open to every session with `list.read`: a domain master sees the lists
+ * whose address is in their domains, the server scopes the rows.
  */
 
 const SORT = ['name', 'tag', 'address'] as const satisfies readonly SortFieldOf<'listMailingLists'>[];
@@ -91,12 +94,11 @@ export function MailingListListPage(): ReactNode {
           ) : undefined
         }
       />
-      <ConfigRunHint />
       <DataTable
         label={t('list.list.title')}
         columns={columns}
         rows={lists.data?.items}
-        rowKey={(row) => row.name}
+        rowKey={(row) => row.address}
         meta={lists.data?.meta}
         state={table}
         loading={lists.isFetching}

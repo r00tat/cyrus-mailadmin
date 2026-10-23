@@ -15,18 +15,21 @@ import { ifMatch, isVersionConflict } from '../../api/etag';
 import type { components } from '../../api/schema';
 import { useSession } from '../../auth/SessionContext';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
-import { errorAtOrBelow, fieldProps, FormActions, useFieldErrors } from '../../components/form';
+import { fieldProps, FormActions, useFieldErrors, useRequiredCheck, type FieldErrors } from '../../components/form';
 import { useNotify } from '../../components/Notifications';
 import { PageHeader } from '../../components/PageHeader';
 import { ProblemAlert } from '../../components/ProblemAlert';
 import { ErrorState, LoadingState } from '../../components/StateViews';
 import { useTranslation } from '../../i18n';
-import { describeUnknownError } from '../../i18n/problemText';
 
-import { ConfigRunHint, parseMembers, sameMembers, type MailingList } from './listShared';
+import { membersFieldError, parseMembers, sameMembers, type MailingList } from './listShared';
 
 /**
  * A5 — one mailing list: its values, the change form and the delete.
+ *
+ * The address is the identifier (`/lists/{address}`) and read-only here; to
+ * move a list to another address, it is deleted and created anew. Name, tag
+ * and members are editable.
  *
  * The form sends only what changed (`PATCH`, absent means untouched). That
  * matters most for the members: a list whose membership is not touched is
@@ -118,8 +121,13 @@ function MailingListDetail({
   const notify = useNotify();
   const { can } = useSession();
 
+  const [name, setName] = useState(list.name);
   const [tag, setTag] = useState(list.tag);
   const [members, setMembers] = useState(list.members.join('\n'));
+  // The member text as it was sent: a refused entry's position refers to it.
+  const [sentMembers, setSentMembers] = useState('');
+  const [clientErrors, setClientErrors] = useState<FieldErrors>({});
+  const required = useRequiredCheck();
   const [unchanged, setUnchanged] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -129,10 +137,12 @@ function MailingListDetail({
     mutationFn: (body: MailingListUpdateRequest) =>
       client.requestVersioned('patch', '/lists/{address}', { pathParams, body, headers: ifMatch(etag) }),
     onSuccess: async (exchange) => {
+      const saved = exchange.data;
+
       notify(
         hasPendingConfigurationRun(exchange)
-          ? t('list.detail.savedPendingRun', { name: list.name })
-          : t('list.detail.saved', { name: list.name }),
+          ? t('list.detail.savedPendingRun', { name: saved.name })
+          : t('list.detail.saved', { name: saved.name }),
       );
       await queryClient.invalidateQueries({ queryKey: ['lists'] });
     },
@@ -159,16 +169,23 @@ function MailingListDetail({
     },
   });
 
-  const fieldError = useFieldErrors(update.error);
-  const membersError = update.error === null
-    ? undefined
-    : errorAtOrBelow(describeUnknownError(update.error, translator).fieldErrors, 'body.members');
+  const fieldError = useFieldErrors(update.error, clientErrors);
+  const membersError = membersFieldError(update.error, sentMembers, translator);
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
 
+    const missing = required({ 'body.name': name });
+
+    setClientErrors(missing);
+
+    if (Object.keys(missing).length > 0) {
+      return;
+    }
+
     const parsedMembers = parseMembers(members);
     const body: MailingListUpdateRequest = {
+      ...(name.trim() === list.name ? {} : { name: name.trim() }),
       ...(tag.trim() === list.tag ? {} : { tag: tag.trim() }),
       ...(sameMembers(parsedMembers, list.members) ? {} : { members: parsedMembers }),
     };
@@ -180,6 +197,7 @@ function MailingListDetail({
     }
 
     setUnchanged(false);
+    setSentMembers(members);
     update.mutate(body);
   };
 
@@ -199,8 +217,6 @@ function MailingListDetail({
           ) : undefined
         }
       />
-
-      <ConfigRunHint />
 
       <Stack spacing={3}>
         {reloaded && (
@@ -223,14 +239,21 @@ function MailingListDetail({
             <Stack spacing={2}>
               <TextField
                 label={t('list.field.name')}
-                value={list.name}
-                disabled
-                helperText={t('list.detail.hint.name')}
+                required
+                value={name}
+                onChange={(event) => {
+                  touched();
+                  setName(event.target.value);
+                }}
+                disabled={!canWrite || update.isPending}
+                autoComplete="off"
+                {...fieldProps(fieldError, 'body.name', t('list.form.hint.name'))}
               />
               <TextField
                 label={t('list.field.address')}
                 value={list.address}
                 disabled
+                helperText={t('list.detail.hint.address')}
               />
               <TextField
                 label={t('list.field.tag')}

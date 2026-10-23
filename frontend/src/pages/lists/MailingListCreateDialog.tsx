@@ -1,4 +1,3 @@
-import Alert from '@mui/material/Alert';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
@@ -12,24 +11,25 @@ import { useNavigate } from 'react-router-dom';
 import { useApiClient } from '../../api/ApiContext';
 import { hasPendingConfigurationRun } from '../../api/client';
 import type { components } from '../../api/schema';
-import { errorAtOrBelow, fieldProps, FormActions, useFieldErrors, useRequiredCheck, type FieldErrors } from '../../components/form';
+import { fieldProps, FormActions, useFieldErrors, useRequiredCheck, type FieldErrors } from '../../components/form';
 import { useNotify } from '../../components/Notifications';
 import { ProblemAlert } from '../../components/ProblemAlert';
 import { useTranslation } from '../../i18n';
-import { describeUnknownError } from '../../i18n/problemText';
 
-import { listPath, parseMembers } from './listShared';
+import { listPath, membersFieldError, parseMembers } from './listShared';
 
 /**
  * A5 — a new mailing list, in a dialog on the list page.
  *
- * A dialog rather than `/lists/new`: the name is the identifier and `new` is a
- * valid list name, so that path would belong to a list.
+ * A dialog rather than `/lists/new`: the address is the identifier, and the
+ * list routes keep the level below `/lists/` for addresses alone. The name is
+ * free display text.
  *
- * Every member must be a mail address — a security rule, not tidiness: the
- * column is rendered into an aliases file where `|command` is a command
- * (U-57). The server enforces it; a refused member comes back as
- * `body.members.<n>` and is shown on the member field.
+ * Every member must be a mail address — a security rule, not tidiness: in
+ * alias delivery mode the column is rendered into an aliases file where
+ * `|command` is a command (U-57). The server enforces it; a refused member
+ * comes back as `body.members.<n>` and is shown on the member field, with the
+ * line where the server names one (`membersFieldError`).
  */
 
 type MailingListCreateRequest = components['schemas']['MailingListCreateRequest'];
@@ -47,6 +47,8 @@ export function MailingListCreateDialog({ open, onClose }: { open: boolean; onCl
   const [address, setAddress] = useState('');
   const [tag, setTag] = useState('');
   const [members, setMembers] = useState('');
+  // The member text as it was sent: a refused entry's position refers to it.
+  const [sentMembers, setSentMembers] = useState('');
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
   const required = useRequiredCheck();
 
@@ -68,9 +70,7 @@ export function MailingListCreateDialog({ open, onClose }: { open: boolean; onCl
   });
 
   const fieldError = useFieldErrors(create.error, clientErrors);
-  const membersError = create.error === null
-    ? undefined
-    : errorAtOrBelow(describeUnknownError(create.error, translator).fieldErrors, 'body.members');
+  const membersError = membersFieldError(create.error, sentMembers, translator);
 
   function reset(): void {
     setName('');
@@ -101,6 +101,7 @@ export function MailingListCreateDialog({ open, onClose }: { open: boolean; onCl
       return;
     }
 
+    setSentMembers(members);
     create.mutate({
       name: name.trim(),
       address: address.trim(),
@@ -115,7 +116,6 @@ export function MailingListCreateDialog({ open, onClose }: { open: boolean; onCl
         <DialogTitle id={titleId}>{t('list.create.title')}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
-            <Alert severity="info">{t('list.hint.configRun')}</Alert>
             <TextField
               label={t('list.field.name')}
               required
@@ -124,7 +124,7 @@ export function MailingListCreateDialog({ open, onClose }: { open: boolean; onCl
               disabled={create.isPending}
               autoComplete="off"
               slotProps={{ htmlInput: { spellCheck: false, autoCapitalize: 'off' } }}
-              {...fieldProps(fieldError, 'body.name', t('list.create.hint.name'))}
+              {...fieldProps(fieldError, 'body.name', t('list.form.hint.name'))}
             />
             <TextField
               label={t('list.field.address')}

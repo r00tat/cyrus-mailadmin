@@ -21,26 +21,25 @@ export const deList = {
   'list.list.unusableCount#one': '{{count}} unbrauchbar',
   'list.list.unusableCount#other': '{{count}} unbrauchbar',
 
-  'list.hint.configRun':
-    'Änderungen an Mailinglisten wirken erst nach dem nächsten Lauf der Konfigurationsverwaltung: Eine neue Liste stellt bis dahin nicht zu, eine gelöschte stellt bis dahin weiter zu.',
-
   'list.field.name': 'Name',
   'list.field.address': 'Adresse',
   'list.field.tag': 'Kennzeichen',
   'list.field.members': 'Mitglieder',
 
+  'list.form.hint.name':
+    'Freier Anzeigename mit bis zu 255 Zeichen. Leerzeichen und Umlaute sind möglich, Emojis und Steuerzeichen nicht.',
   'list.form.hint.tag': 'Freitext. mailadmin wertet das Kennzeichen nicht aus.',
   'list.form.hint.members': 'Eine Mailadresse pro Zeile.',
+  'list.form.error.memberOutsideLatin1':
+    'Zeile {{line}}: Dieses Mitglied enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
 
   'list.create.title': 'Mailingliste anlegen',
   'list.create.submit': 'Anlegen',
-  'list.create.hint.name':
-    'Freier Anzeigename mit bis zu 255 Zeichen. Leerzeichen und Umlaute sind möglich, Emojis und Steuerzeichen nicht.',
   'list.create.saved': 'Liste {{name}} angelegt.',
   'list.create.savedPendingRun': 'Liste {{name}} angelegt. Sie stellt nach dem nächsten Konfigurationslauf zu.',
 
   'list.detail.action.delete': 'Löschen',
-  'list.detail.hint.name': 'Der Name lässt sich nicht ändern. Zum Umbenennen die Liste löschen und neu anlegen.',
+  'list.detail.hint.address': 'Die Adresse lässt sich nicht ändern. Zum Ändern der Adresse die Liste löschen und neu anlegen.',
   'list.detail.addressUnusable':
     'Die gespeicherte Adresse ist keine Mailadresse. Sie wird angezeigt, aber nicht automatisch korrigiert.',
   'list.detail.unusableMembers#one':
@@ -55,6 +54,5 @@ export const deList = {
   'list.detail.reloaded': 'Die Liste wurde neu geladen. Prüfe den Stand und ändere erneut.',
 
   'list.delete.title': 'Liste {{name}} löschen?',
-  'list.delete.message':
-    'Die Liste wird aus der Datenbank entfernt. {{address}} stellt bis zum nächsten Lauf der Konfigurationsverwaltung weiter zu.',
+  'list.delete.message': 'Die Liste und ihre Adresse {{address}} werden entfernt. Das lässt sich nicht rückgängig machen.',
 } as const;
