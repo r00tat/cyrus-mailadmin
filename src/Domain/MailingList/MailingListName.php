@@ -28,24 +28,13 @@ use Mailadmin\Domain\Exception\InvalidMailingList;
  *    the limit is in characters and every accepted character is one byte there;
  *  - control characters (below U+0020, and U+007F), which no label needs and
  *    which make a row look different in every tool that shows it;
- *  - characters outside printable latin1 (U+0020–U+007E, U+00A0–U+00FF).
- *
- * The last rule is the column, not taste. The connection speaks utf8mb4 and
- * MariaDB converts on write: an umlaut arrives intact, but a character latin1
- * cannot hold makes a strict-mode server refuse the statement (error 1366, an
- * opaque `500`) and a non-strict one store `?` — neither is what the form said,
- * so the form is told instead (`list.name_outside_latin1`). The C1 controls
- * (U+0080–U+009F) are refused with them: the server turns them into `?` too.
- * MariaDB's latin1 is in fact cp1252 and would store `€`, but the other tools
- * reading `lists` are not known to agree on that, so ISO 8859-1 is the bound.
+ *  - characters the latin1 column cannot hold — see {@see Latin1Text}
+ *    (`list.name_outside_latin1`).
  */
 final readonly class MailingListName
 {
     /** `lists.name` is a latin1 `varchar(255)`: 255 characters. */
     public const int MAX_LENGTH = 255;
-
-    /** Printable ISO 8859-1 — what the latin1 column holds without loss. */
-    private const string PRINTABLE_LATIN1 = '/^[\x{20}-\x{7E}\x{A0}-\x{FF}]*$/u';
 
     /** C0 controls and DEL. */
     private const string CONTROL = '/[\x00-\x1F\x7F]/';
@@ -74,12 +63,11 @@ final readonly class MailingListName
             throw InvalidMailingList::nameHasForbiddenCharacter($name, 'it contains a control character');
         }
 
-        // Also false for a string that is not UTF-8 at all.
-        if (preg_match(self::PRINTABLE_LATIN1, $name) !== 1) {
+        if (!Latin1Text::fits($name)) {
             throw InvalidMailingList::nameOutsideLatin1($name);
         }
 
-        $length = self::characters($name);
+        $length = Latin1Text::characters($name);
 
         if ($length > self::MAX_LENGTH) {
             throw InvalidMailingList::nameTooLong($length, self::MAX_LENGTH);
@@ -128,11 +116,5 @@ final readonly class MailingListName
         } catch (InvalidMailingList) {
             return false;
         }
-    }
-
-    /** Characters, not bytes; the caller has established valid UTF-8. */
-    private static function characters(string $value): int
-    {
-        return (int) preg_match_all('/./su', $value);
     }
 }

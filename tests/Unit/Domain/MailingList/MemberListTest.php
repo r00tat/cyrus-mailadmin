@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mailadmin\Tests\Unit\Domain\MailingList;
 
+use Mailadmin\Domain\Exception\DomainErrorCode;
 use Mailadmin\Domain\Exception\InvalidMailingList;
 use Mailadmin\Domain\MailingList\MemberList;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -280,6 +281,47 @@ final class MemberListTest extends TestCase
         self::assertTrue(MemberList::fromStoredValue(null)->isEmpty());
         self::assertTrue(MemberList::fromStoredValue('')->isEmpty());
         self::assertFalse(MemberList::fromStoredValue('anna@example.test')->isEmpty());
+    }
+
+    public function testADisplayNameWithUmlautsIsAMember(): void
+    {
+        $list = MemberList::none()->withMembers(['Jürgen Groß <juergen@example.test>']);
+
+        self::assertSame(['Jürgen Groß <juergen@example.test>'], $list->members());
+        self::assertSame([], $list->unusableMembers());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function membersLatin1CannotHold(): iterable
+    {
+        yield 'an emoji in the display name' => ['Party 🎉 <party@example.test>'];
+        yield 'a euro sign in the display name' => ['€ Kasse <kasse@example.test>'];
+        yield 'Cyrillic in the display name' => ['Иван <ivan@example.test>'];
+    }
+
+    #[DataProvider('membersLatin1CannotHold')]
+    public function testAMemberLatin1CannotHoldIsRefusedWithItsPosition(string $member): void
+    {
+        try {
+            MemberList::none()->withMembers(['anna@example.test', $member]);
+            self::fail('The member was accepted.');
+        } catch (InvalidMailingList $error) {
+            self::assertSame(DomainErrorCode::LIST_MEMBER_OUTSIDE_LATIN1, $error->code());
+            self::assertSame(['index' => 1], $error->context(), 'The position only — never the address.');
+            self::assertStringNotContainsString('@', $error->getMessage());
+        }
+    }
+
+    public function testAStoredMemberLatin1CannotHoldIsReadAndKeptWhileUnchanged(): void
+    {
+        // An entity decodes to text the column cannot hold. Reading it is fine,
+        // and saving the list unchanged writes the stored bytes back.
+        $stored = MemberList::fromStoredValue('&#x1F389; <party@example.test>,anna@example.test');
+
+        self::assertSame(['🎉 <party@example.test>', 'anna@example.test'], $stored->members());
+        self::assertSame($stored, $stored->withMembers($stored->members()));
     }
 
     public function testClearingAListIsAChangeAndIsAllowed(): void

@@ -79,6 +79,9 @@ final class DomainErrorCode
     /** A mailing list tag that is too long or carries a control character. */
     public const string LIST_INVALID_TAG = 'list.invalid_tag';
 
+    /** A mailing list tag with a character the latin1 column cannot store. */
+    public const string LIST_TAG_OUTSIDE_LATIN1 = 'list.tag_outside_latin1';
+
     /** A mailing list address that is not a mail address, or does not fit the column. */
     public const string LIST_INVALID_ADDRESS = 'list.invalid_address';
 
@@ -90,6 +93,12 @@ final class DomainErrorCode
      * {@see InvalidMailingList::memberNotAnAddress()}.
      */
     public const string LIST_INVALID_MEMBER = 'list.invalid_member';
+
+    /**
+     * A member entry with a character the latin1 column cannot store. Reported
+     * at the entry's position (`body.members.<n>`), never with its text.
+     */
+    public const string LIST_MEMBER_OUTSIDE_LATIN1 = 'list.member_outside_latin1';
 
     /**
      * The actor's role does not carry the permission the operation needs (S3).

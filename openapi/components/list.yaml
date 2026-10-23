@@ -129,7 +129,11 @@ components:
           type: string
           maxLength: 255
           default: ''
-          description: Free-text label. See `MailingList.tag`.
+          description: |
+            Free-text label. See `MailingList.tag`. No control characters
+            (`list.invalid_tag`), at most 255 characters, and only characters
+            the latin1 column can store — an emoji or `€` is
+            `list.tag_outside_latin1`.
         address:
           type: string
           minLength: 3
@@ -146,6 +150,12 @@ components:
             Every entry has to be a mail address. This is not tidiness: the
             column is rendered into an aliases file, where `|command` and
             `/path/to/file` are instructions rather than recipients.
+
+            A display name (`Jürgen <j@example.test>`) is fine, but every entry
+            has to fit the latin1 column: an emoji or `€` is
+            `list.member_outside_latin1`, reported at the entry's position
+            (`body.members.<n>`). The same rules apply to `tag` and `members`
+            on `PATCH`.
           items:
             type: string
             minLength: 3

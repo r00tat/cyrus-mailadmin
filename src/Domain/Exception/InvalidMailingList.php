@@ -60,11 +60,20 @@ final class InvalidMailingList extends DomainError
         );
     }
 
+    /** See {@see nameOutsideLatin1()}. */
+    public static function tagOutsideLatin1(): self
+    {
+        return new self(
+            DomainErrorCode::LIST_TAG_OUTSIDE_LATIN1,
+            'A mailing list tag may only use latin1 characters (ISO 8859-1); the column cannot store the others.',
+        );
+    }
+
     public static function tagTooLong(int $length, int $limit): self
     {
         return new self(
             DomainErrorCode::LIST_INVALID_TAG,
-            sprintf('A mailing list tag must not exceed %d bytes, got %d.', $limit, $length),
+            sprintf('A mailing list tag must not exceed %d characters, got %d.', $limit, $length),
             ['length' => $length, 'limit' => $limit],
         );
     }
@@ -124,6 +133,23 @@ final class InvalidMailingList extends DomainError
                 self::excerpt($member),
             ),
             ['member' => self::excerpt($member)],
+        );
+    }
+
+    /**
+     * A member entry the latin1 column cannot hold. Carries the entry's
+     * position in the request and nothing of its text: the entry is an
+     * address, and this message may end up in a log.
+     */
+    public static function memberOutsideLatin1(int $index): self
+    {
+        return new self(
+            DomainErrorCode::LIST_MEMBER_OUTSIDE_LATIN1,
+            sprintf(
+                'Member entry %d may only use latin1 characters (ISO 8859-1); the column cannot store the others.',
+                $index,
+            ),
+            ['index' => $index],
         );
     }
 

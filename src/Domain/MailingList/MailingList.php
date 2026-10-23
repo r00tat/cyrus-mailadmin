@@ -170,8 +170,15 @@ final readonly class MailingList
 
         $value = trim($tag);
 
-        if (strlen($value) > self::MAX_TAG_LENGTH) {
-            throw InvalidMailingList::tagTooLong(strlen($value), self::MAX_TAG_LENGTH);
+        if (!Latin1Text::fits($value)) {
+            throw InvalidMailingList::tagOutsideLatin1();
+        }
+
+        // Characters, not bytes: the column is latin1, so 255 umlauts fit.
+        $length = Latin1Text::characters($value);
+
+        if ($length > self::MAX_TAG_LENGTH) {
+            throw InvalidMailingList::tagTooLong($length, self::MAX_TAG_LENGTH);
         }
 
         return $value;

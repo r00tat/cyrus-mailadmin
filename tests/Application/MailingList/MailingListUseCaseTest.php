@@ -115,6 +115,44 @@ final class MailingListUseCaseTest extends TestCase
         self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers(self::LEGACY));
     }
 
+    public function testAMemberLatin1CannotHoldIsReportedAtItsPositionAndNothingIsWritten(): void
+    {
+        $this->givenLegacyList();
+
+        try {
+            $this->update()->handle(
+                $this->superuser,
+                self::LEGACY,
+                new MailingListChanges(members: ['anna@example.test', 'Party 🎉 <party@example.test>']),
+                null,
+            );
+
+            self::fail('A member the latin1 column cannot hold was accepted.');
+        } catch (MailingListFailure $failure) {
+            self::assertSame(422, $failure->status);
+            self::assertSame('list.member_outside_latin1', $failure->errorCode);
+            self::assertSame(['body.members.1' => 'list.member_outside_latin1'], $failure->errors);
+        }
+
+        self::assertSame(self::LEGACY_MEMBERS, $this->repository->storedMembers(self::LEGACY));
+    }
+
+    public function testATagLatin1CannotHoldIsReportedOnTheTagAndNothingIsWritten(): void
+    {
+        $this->givenLegacyList();
+
+        try {
+            $this->update()->handle($this->superuser, self::LEGACY, new MailingListChanges(tag: 'Team 🎉'), null);
+
+            self::fail('A tag the latin1 column cannot hold was accepted.');
+        } catch (MailingListFailure $failure) {
+            self::assertSame(422, $failure->status);
+            self::assertSame(['body.tag' => 'list.tag_outside_latin1'], $failure->errors);
+        }
+
+        self::assertSame(0, $this->repository->writeCount());
+    }
+
     public function testResendingExactlyTheMembersThatWereReadAlsoKeepsThoseBytes(): void
     {
         $this->givenLegacyList();

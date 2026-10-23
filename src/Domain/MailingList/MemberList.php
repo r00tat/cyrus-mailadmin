@@ -213,6 +213,15 @@ final readonly class MemberList
             return $this;
         }
 
+        // Every entry, stored ones included: a changed list is rendered anew,
+        // and an entity decoded on read can be text the column cannot hold.
+        // Reported by position, never by value — the value is an address.
+        foreach (array_values($requested) as $index => $value) {
+            if (!Latin1Text::fits(trim($value))) {
+                throw InvalidMailingList::memberOutsideLatin1($index);
+            }
+        }
+
         foreach ($clean as $member) {
             // Already in the list: left alone, whatever it is. Being added: has
             // to be an address, and has to read back as exactly itself — a `,`,

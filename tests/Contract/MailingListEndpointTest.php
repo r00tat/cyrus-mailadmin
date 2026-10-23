@@ -368,6 +368,59 @@ final class MailingListEndpointTest extends ContractTestCase
         self::assertSame($writes, $this->lists->writeCount());
     }
 
+    /**
+     * @return iterable<string, array{array<string, mixed>, string, string}>
+     */
+    public static function fieldsLatin1CannotHold(): iterable
+    {
+        yield 'a tag' => [['tag' => 'Team 🎉'], 'list.tag_outside_latin1', 'body.tag'];
+        yield 'a member' => [
+            ['members' => ['anna@example.test', 'Party 🎉 <party@example.test>']],
+            'list.member_outside_latin1',
+            'body.members.1',
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $fields
+     */
+    #[DataProvider('fieldsLatin1CannotHold')]
+    public function testAFieldTheLatin1ColumnCannotHoldIsRefusedOnCreate(array $fields, string $code, string $at): void
+    {
+        $writes = $this->lists->writeCount();
+
+        $response = $this->send(
+            'POST',
+            '/api/v1/lists',
+            ['name' => 'emoji', 'address' => 'emoji@example.test', ...$fields],
+            $this->tokenFor('root'),
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        $this->assertMatchesContract('post', '/lists', $response);
+        self::assertSame($code, self::bodyOf($response)['code']);
+        self::assertSame([$at => $code], self::bodyOf($response)['errors']);
+        self::assertSame($writes, $this->lists->writeCount());
+        self::assertNull($this->lists->storedMembers('emoji@example.test'));
+    }
+
+    /**
+     * @param array<string, mixed> $fields
+     */
+    #[DataProvider('fieldsLatin1CannotHold')]
+    public function testAFieldTheLatin1ColumnCannotHoldIsRefusedOnUpdate(array $fields, string $code, string $at): void
+    {
+        $writes = $this->lists->writeCount();
+
+        $response = $this->send('PATCH', '/api/v1/lists/team%40example.test', $fields, $this->tokenFor('root'));
+
+        self::assertSame(422, $response->getStatusCode());
+        $this->assertMatchesContract('patch', '/lists/{address}', $response);
+        self::assertSame($code, self::bodyOf($response)['code']);
+        self::assertSame([$at => $code], self::bodyOf($response)['errors']);
+        self::assertSame($writes, $this->lists->writeCount());
+    }
+
     public function testAPipeEntryIsRefusedOverTheWire(): void
     {
         // The end-to-end form of the package's one security rule: this column is

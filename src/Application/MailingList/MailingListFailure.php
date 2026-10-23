@@ -121,13 +121,26 @@ final class MailingListFailure extends RuntimeException
         );
     }
 
+    /**
+     * The member entry's position, where the error knows it — the same
+     * `body.members.<n>` shape schema validation uses, which the forms already
+     * resolve onto the member field.
+     */
     private static function fieldFor(DomainError $error): string
     {
         return match ($error->code()) {
-            DomainErrorCode::LIST_INVALID_TAG => 'tag',
+            DomainErrorCode::LIST_INVALID_TAG, DomainErrorCode::LIST_TAG_OUTSIDE_LATIN1 => 'tag',
             DomainErrorCode::LIST_INVALID_ADDRESS => 'address',
             DomainErrorCode::LIST_INVALID_MEMBER => 'members',
+            DomainErrorCode::LIST_MEMBER_OUTSIDE_LATIN1 => self::memberField($error),
             default => 'name',
         };
+    }
+
+    private static function memberField(DomainError $error): string
+    {
+        $index = $error->context()['index'] ?? null;
+
+        return is_int($index) ? 'members.' . $index : 'members';
     }
 }

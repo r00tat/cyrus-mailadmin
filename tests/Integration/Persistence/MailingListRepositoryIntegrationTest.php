@@ -146,6 +146,25 @@ final class MailingListRepositoryIntegrationTest extends DatabaseTestCase
         }
     }
 
+    public function testAnUmlautTagAndAnUmlautMemberDisplayNameSurviveTheLatin1Column(): void
+    {
+        $tag = str_repeat('ü', MailingList::MAX_TAG_LENGTH);
+
+        $this->repository->add(MailingList::create(
+            'Team',
+            $tag,
+            'umlaut@example.test',
+            ['Jürgen Groß <juergen@example.test>', 'anna@example.test'],
+        ));
+
+        $found = $this->repository->find(EmailAddress::parse('umlaut@example.test'));
+
+        self::assertNotNull($found);
+        self::assertSame($tag, $found->tag);
+        self::assertSame(['Jürgen Groß <juergen@example.test>', 'anna@example.test'], $found->members->members());
+        self::assertSame([], $found->members->unusableMembers());
+    }
+
     public function testTwoListsMayShareADisplayName(): void
     {
         $this->repository->add(MailingList::create('Team', '', 'one@example.test', []));
