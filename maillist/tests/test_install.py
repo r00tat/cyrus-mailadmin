@@ -32,9 +32,16 @@ install = _load()
 class FakeRunner:
     """Replaces every system command: no root, no useradd, no real verification."""
 
-    def __init__(self, root=True, users=(), deps=True, check_ok=True):
+    def __init__(self, root=True, users=(), deps=True, check_ok=True, trusted=None):
         self.root, self.users, self.deps, self.check_ok = root, set(users), deps, check_ok
+        self.trusted = trusted if trusted is not None else {os.geteuid(), 0}
         self.calls: list[tuple] = []
+
+    def trusted_uids(self):
+        return self.trusted
+
+    def fchown(self, fd, user, group):
+        self.calls.append(("fchown", os.fstat(fd).st_ino, user, group))
 
     def is_root(self):
         return self.root
@@ -116,6 +123,7 @@ def test_first_install_creates_config_and_stops_with_2(env, capsys) -> None:
     assert env["config"].read_text() == (ROOT / "maillist.ini.example").read_text()
     assert mode(env["config"]) == 0o640
     assert not (env["prefix"] / "current").exists()
+    assert not (env["prefix"] / "releases").exists()  # nothing orphaned before the config is filled in
     assert "fill" in capsys.readouterr().out.lower()
 
 
@@ -146,7 +154,11 @@ def test_success_output_shows_master_cf_line_and_recipient_limit(env, capsys) ->
     out = capsys.readouterr().out
     assert "flags=Rq" in out
     assert "user=listuser" in out
-    assert f"argv=/usr/bin/python3x {env['prefix']}/current/maillist.py -- ${{user}}" in out
+    # pipe(8) passes no environment, so a non-default config path has to travel in argv
+    expected = (
+        f"argv=/usr/bin/env MAILLIST_CONFIG={env['config']} /usr/bin/python3x {env['prefix']}/current/maillist.py"
+    )
+    assert f"{expected} -- ${{user}}" in out
     assert "maillist_destination_recipient_limit = 1" in out
 
 
@@ -183,6 +195,8 @@ def test_same_version_with_different_content_is_refused(env) -> None:
 
 def test_dev_checkout_gets_timestamped_id(env) -> None:
     src = make_source(env["tmp"], "dev")
+    run(env, "--source", str(src))
+    fill_config(env)
     run(env, "--source", str(src))
     (name,) = release_names(env)
     digest = hashlib.sha256(b"print('maillist')\n").hexdigest()[:8]
@@ -327,10 +341,11 @@ def test_user_is_created_and_files_are_chowned(env) -> None:
     runner = FakeRunner()
     assert run(env, "--source", str(src), "--user", "listuser", user=True, runner=runner) == install.EXIT_CONFIG
     assert ("useradd", "listuser") in runner.calls
-    assert ("chown", str(env["config"]), "root", "listuser") in runner.calls
+    assert ("chown", str(env["config"].parent), "root", "listuser") in runner.calls
+    assert ("fchown", env["config"].stat().st_ino, "root", "listuser") in runner.calls
     fill_config(env)
     run(env, "--source", str(src), "--user", "listuser", user=True, runner=runner)
-    assert ("chown", str(env["log"]), "listuser", "listuser") in runner.calls
+    assert ("fchown", env["log"].stat().st_ino, "listuser", "listuser") in runner.calls
     assert [c for c in runner.calls if c[0] == "useradd"] == [("useradd", "listuser")]
 
 
@@ -505,3 +520,395 @@ def test_source_and_release_are_mutually_exclusive(env, tmp_path) -> None:
     with pytest.raises(SystemExit) as excinfo:
         run(env, "--source", str(tmp_path), "--release", "v1.0.0")
     assert excinfo.value.code != 0
+
+
+# --- review round: security hardening ------------------------------------------------------
+
+
+def configured(env, version="1.0.0"):
+    """First run creates the config, then fill it in. Returns the source directory."""
+    src = make_source(env["tmp"], version)
+    assert run(env, "--source", str(src)) == install.EXIT_CONFIG
+    fill_config(env)
+    return src
+
+
+def snapshot_modes(path):
+    return mode(path), path.stat().st_ino
+
+
+# 1. log file
+
+
+def test_log_symlink_is_refused_and_target_untouched(env) -> None:
+    src = configured(env)
+    victim = env["tmp"] / "victim"
+    victim.write_text("precious")
+    victim.chmod(0o600)
+    env["log"].parent.mkdir(parents=True)
+    env["log"].symlink_to(victim)
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+    assert victim.read_text() == "precious" and mode(victim) == 0o600
+    assert not (env["prefix"] / "current").exists()
+
+
+def test_dangling_log_symlink_is_refused(env) -> None:
+    src = configured(env)
+    target = env["tmp"] / "does-not-exist"
+    env["log"].parent.mkdir(parents=True)
+    env["log"].symlink_to(target)
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+    assert not target.exists()
+
+
+def test_log_hardlink_is_refused_and_target_untouched(env) -> None:
+    src = configured(env)
+    victim = env["tmp"] / "victim"
+    victim.write_text("precious")
+    victim.chmod(0o666)
+    env["log"].parent.mkdir(parents=True)
+    os.link(victim, env["log"])
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+    assert mode(victim) == 0o666 and victim.read_text() == "precious"
+
+
+def test_log_parent_writable_by_others_is_refused(env) -> None:
+    src = configured(env)
+    env["log"].parent.mkdir(parents=True)
+    env["log"].parent.chmod(0o777)
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+    assert not env["log"].exists()
+
+
+def test_log_parent_not_owned_by_trusted_user_is_refused(env) -> None:
+    src = configured(env)
+    env["log"].parent.mkdir(parents=True)
+    assert run(env, "--source", str(src), runner=FakeRunner(trusted={0})) == install.EXIT_FAIL
+    assert not env["log"].exists()
+
+
+def test_log_parent_created_by_installer_is_0755(env) -> None:
+    src = configured(env)
+    assert run(env, "--source", str(src)) == 0
+    assert mode(env["log"].parent) == 0o755
+    assert mode(env["log"]) == 0o640
+
+
+def test_existing_log_file_gets_mode_corrected_in_place(env) -> None:
+    src = configured(env)
+    env["log"].parent.mkdir(parents=True)
+    env["log"].write_text("old line\n")
+    env["log"].chmod(0o666)
+    inode = env["log"].stat().st_ino
+    assert run(env, "--source", str(src)) == 0
+    assert mode(env["log"]) == 0o640 and env["log"].stat().st_ino == inode
+    assert env["log"].read_text() == "old line\n"
+
+
+# 2. config and its parent directory
+
+
+def test_config_in_existing_shared_directory_leaves_directory_alone(env) -> None:
+    shared = env["tmp"] / "shared"
+    shared.mkdir()
+    shared.chmod(0o755)
+    env["config"] = shared / "maillist.ini"
+    runner = FakeRunner()
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src), "--user", "listuser", user=True, runner=runner) == install.EXIT_CONFIG
+    assert mode(shared) == 0o755
+    assert ("chown", str(shared), "root", "listuser") not in runner.calls
+    assert mode(env["config"]) == 0o640
+
+
+def test_config_in_group_writable_shared_directory_is_refused(env) -> None:
+    shared = env["tmp"] / "shared"
+    shared.mkdir()
+    shared.chmod(0o775)
+    env["config"] = shared / "maillist.ini"
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+    assert not env["config"].exists()
+    assert mode(shared) == 0o775
+
+
+def test_config_directory_with_untrusted_owner_is_refused(env) -> None:
+    shared = env["tmp"] / "shared"
+    shared.mkdir()
+    env["config"] = shared / "maillist.ini"
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src), runner=FakeRunner(trusted={0})) == install.EXIT_FAIL
+
+
+def test_config_directory_created_by_installer_is_0750(env) -> None:
+    src = make_source(env["tmp"], "1.0.0")
+    run(env, "--source", str(src))
+    assert mode(env["config"].parent) == 0o750
+
+
+def test_symlinked_config_is_refused_and_target_untouched(env) -> None:
+    real = env["tmp"] / "real.ini"
+    real.write_text("[log]\nfile = " + str(env["log"]) + "\n")
+    real.chmod(0o666)
+    env["config"].parent.mkdir(parents=True)
+    env["config"].symlink_to(real)
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+    assert mode(real) == 0o666
+
+
+def test_config_creation_does_not_follow_a_planted_symlink(env) -> None:
+    victim = env["tmp"] / "victim"
+    victim.write_text("precious")
+    env["config"].parent.mkdir(parents=True)
+    env["config"].symlink_to(victim)  # dangling-or-not, creation must refuse
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+    assert victim.read_text() == "precious"
+
+
+# 3. master.cf and the config path
+
+
+def test_default_config_path_needs_no_env_wrapper(env, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(install, "DEFAULT_CONFIG", str(env["config"]))
+    src = configured(env)
+    capsys.readouterr()
+    assert run(env, "--source", str(src)) == 0
+    out = capsys.readouterr().out
+    assert "/usr/bin/env" not in out and "MAILLIST_CONFIG" not in out
+    assert f"argv=/usr/bin/python3 {env['prefix']}/current/maillist.py -- ${{user}}" in out
+
+
+def test_maillist_script_honours_config_environment_variable() -> None:
+    assert 'CONFIG_ENV_VAR = "MAILLIST_CONFIG"' in (ROOT / "maillist.py").read_text()
+
+
+@pytest.mark.parametrize("flag", ["--prefix", "--config", "--python"])
+def test_paths_with_whitespace_are_refused(env, flag) -> None:
+    src = make_source(env["tmp"], "1.0.0")
+    extra = [flag, str(env["tmp"] / "with space" / "x")]
+    assert run(env, "--source", str(src), *extra) == install.EXIT_FAIL
+
+
+def test_relative_python_is_refused(env) -> None:
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src), "--python", "python3") == install.EXIT_FAIL
+
+
+# 4. --check environment
+
+
+def test_check_runs_with_minimal_environment_and_timeout(monkeypatch, tmp_path) -> None:
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(cmd=cmd, **kwargs)
+        return install.subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+    ok, _ = install.Runner().run_check("/usr/bin/python3", tmp_path / "maillist.py", tmp_path / "c.ini", None)
+    assert ok
+    assert seen["env"] == {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "MAILLIST_CONFIG": str(tmp_path / "c.ini")}
+    assert seen["timeout"] == 60
+
+
+def test_check_timeout_counts_as_failure(monkeypatch, tmp_path) -> None:
+    def fake_run(cmd, **kwargs):
+        raise install.subprocess.TimeoutExpired(cmd, 60)
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+    ok, output = install.Runner().run_check("/usr/bin/python3", tmp_path / "m.py", tmp_path / "c.ini", None)
+    assert ok is False and "timed out" in output
+
+
+def test_check_really_gets_only_the_minimal_environment(monkeypatch, tmp_path) -> None:
+    script = tmp_path / "probe.py"
+    script.write_text(
+        "import os, sys\nprint(sorted(k for k in os.environ if k in ('HOME','SECRET','MAILLIST_CONFIG','PATH')))\n"
+    )
+    monkeypatch.setenv("SECRET", "x")
+    ok, output = install.Runner().run_check(sys.executable, script, tmp_path / "c.ini", None)
+    assert ok and "SECRET" not in output and "HOME" not in output and "MAILLIST_CONFIG" in output
+
+
+# 5. umask
+
+
+def test_main_uses_a_sane_umask_and_restores_the_callers(env) -> None:
+    deep = env["tmp"] / "etc" / "a" / "b" / "maillist.ini"
+    env["config"] = deep
+    src = make_source(env["tmp"], "1.0.0")
+    old = os.umask(0o077)
+    try:
+        assert run(env, "--source", str(src)) == install.EXIT_CONFIG
+        assert os.umask(0o077) == 0o077  # restored to what the caller had
+    finally:
+        os.umask(old)
+    assert mode(deep.parent.parent) == 0o755  # intermediate directory created under umask 022
+
+
+# 6. redirects and latest
+
+
+def test_redirect_handler_rejects_non_https_targets() -> None:
+    import urllib.request
+
+    handler = install._HttpsOnlyRedirect()
+    request = urllib.request.Request("https://github.com/x")
+    with pytest.raises(install.InstallError):
+        handler.redirect_request(request, None, 302, "Found", {}, "http://evil.example/x")
+    handler.redirect_request(request, None, 302, "Found", {}, "https://objects.example.org/x")
+
+
+@pytest.mark.parametrize(
+    "final",
+    [
+        "https://evil.example/r00tat/cyrus-mailadmin/releases/tag/v1.0.0",
+        "https://github.com/other/repo/releases/tag/v1.0.0",
+        "https://github.com/r00tat/cyrus-mailadmin/releases/latest",
+        "https://github.com/r00tat/cyrus-mailadmin/releases/tag/v1;ls",
+        "https://github.com/r00tat/cyrus-mailadmin/releases/tag/",
+        "http://github.com/r00tat/cyrus-mailadmin/releases/tag/v1.0.0",
+    ],
+)
+def test_latest_with_unexpected_final_url_is_refused(env, final) -> None:
+    fetch, requested = fake_network("v1.0.0", build_archive("v1.0.0"))
+    assert run(env, "--release", "latest", fetch=fetch, final_url=lambda _u: final) == install.EXIT_FAIL
+    assert requested == []
+
+
+# 7. size caps
+
+
+def test_oversized_archive_is_refused(env, monkeypatch) -> None:
+    archive = build_archive("v1.0.0")
+    monkeypatch.setattr(install, "MAX_ARCHIVE_BYTES", len(archive) - 1)
+    fetch, _ = fake_network("v1.0.0", archive)
+    assert run(env, "--release", "v1.0.0", fetch=fetch) == install.EXIT_FAIL
+
+
+def test_oversized_checksum_file_is_refused(env, monkeypatch) -> None:
+    monkeypatch.setattr(install, "MAX_SUMS_BYTES", 10)
+    fetch, _ = fake_network("v1.0.0", build_archive("v1.0.0"))
+    assert run(env, "--release", "v1.0.0", fetch=fetch) == install.EXIT_FAIL
+
+
+def test_default_fetch_reads_at_most_the_cap_plus_one(monkeypatch) -> None:
+    reads = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, n=-1):
+            reads.append(n)
+            return b"x" * (n if n >= 0 else 10)
+
+    class Opener:
+        def open(self, url, timeout=None):
+            return Response()
+
+    monkeypatch.setattr(install, "_opener", lambda: Opener())
+    monkeypatch.setattr(install, "MAX_ARCHIVE_BYTES", 5)
+    with pytest.raises(install.InstallError, match="too large"):
+        install.default_fetch("https://github.com/x")
+    assert reads == [6]
+
+
+# 8. prefix ownership and prune
+
+
+def test_existing_prefix_with_untrusted_owner_is_refused(env) -> None:
+    env["prefix"].mkdir()
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src), runner=FakeRunner(trusted={0})) == install.EXIT_FAIL
+
+
+def test_world_writable_prefix_is_refused(env) -> None:
+    env["prefix"].mkdir()
+    env["prefix"].chmod(0o777)
+    src = make_source(env["tmp"], "1.0.0")
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+    assert mode(env["prefix"]) == 0o777
+
+
+def test_group_writable_releases_directory_is_refused(env) -> None:
+    src = configured(env)
+    assert run(env, "--source", str(src)) == 0
+    (env["prefix"] / "releases").chmod(0o775)
+    assert run(env, "--source", str(src)) == install.EXIT_FAIL
+
+
+def test_prune_skips_symlinks_in_releases(env) -> None:
+    src = configured(env)
+    outside = env["tmp"] / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("x")
+    run(env, "--source", str(src))
+    (env["prefix"] / "releases" / "evil").symlink_to(outside)
+    for version in ("1.1.0", "1.2.0", "1.3.0"):
+        run(env, "--source", str(make_source(env["tmp"] / "s", version)), "--keep-releases", "1")
+    assert (outside / "keep.txt").read_text() == "x"
+    assert (env["prefix"] / "releases" / "evil").is_symlink()
+
+
+# 9. orphans
+
+
+def test_failed_verification_removes_the_release_created_in_this_run(env) -> None:
+    src = configured(env)
+    assert run(env, "--source", str(src), verify=True, runner=FakeRunner(check_ok=False)) == install.EXIT_FAIL
+    assert release_names(env) == []
+
+
+def test_failed_verification_keeps_a_release_that_already_existed(env) -> None:
+    src = configured(env)
+    assert run(env, "--source", str(src)) == 0
+    assert run(env, "--source", str(src), verify=True, runner=FakeRunner(check_ok=False)) == install.EXIT_FAIL
+    assert release_names(env) == ["1.0.0"]
+    assert os.readlink(env["prefix"] / "current") == "releases/1.0.0"
+
+
+# 10. module header
+
+
+def test_installer_declares_future_annotations_and_checks_python_at_import() -> None:
+    text = INSTALL.read_text()
+    assert "from __future__ import annotations" in text
+    assert text.index("sys.version_info") < text.index("class InstallError")
+
+
+# 11. dry-run prune and the config note
+
+
+def test_dry_run_prune_matches_what_a_real_run_removes(env, capsys) -> None:
+    src = configured(env)
+    run(env, "--source", str(src))
+    for version in ("1.1.0", "1.2.0"):
+        assert run(env, "--source", str(make_source(env["tmp"] / "s", version)), "--keep-releases", "9") == 0
+    nxt = make_source(env["tmp"] / "s", "1.3.0")
+    capsys.readouterr()
+    run(env, "--source", str(nxt), "--keep-releases", "2", "--dry-run")
+    dry = capsys.readouterr().out
+    would_remove = sorted(re.findall(r"remove old release (\S+)", dry))
+    before = set(release_names(env))
+    run(env, "--source", str(nxt), "--keep-releases", "2")
+    removed = sorted(before - set(release_names(env)))
+    assert would_remove == removed and removed
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read any file")
+def test_dry_run_with_unreadable_config_notes_the_log_path_may_be_the_default(env, capsys) -> None:
+    src = configured(env)
+    env["config"].chmod(0o000)
+    try:
+        capsys.readouterr()
+        run(env, "--source", str(src), "--dry-run")
+        out = capsys.readouterr().out.lower()
+    finally:
+        env["config"].chmod(0o640)
+    assert "note" in out and "default" in out
