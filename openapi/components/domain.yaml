@@ -274,7 +274,9 @@ components:
             The domain name. Strictly validated: ASCII letter-digit-hyphen
             labels, at least two of them. Internationalised names are given as
             punycode (`xn--…`) — converting a U-label needs `ext-intl`, which is
-            not a dependency (E-12).
+            not a dependency (E-12). The mailing list transport domain, in any
+            spelling, is refused (`domain.invalid_name`): as a managed domain
+            Postfix would deliver its mail itself and every list would stop.
           example: example.test
         max_accounts:
           type: integer
@@ -323,7 +325,10 @@ components:
           type: string
           minLength: 3
           maxLength: 255
-          description: The new domain name. Present and different means a rename.
+          description: |
+            The new domain name. Present and different means a rename. The
+            mailing list transport domain is refused as on create
+            (`domain.invalid_name`).
         confirm_rename:
           type: boolean
           description: |

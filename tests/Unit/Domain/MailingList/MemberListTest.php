@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mailadmin\Tests\Unit\Domain\MailingList;
 
+use Mailadmin\Domain\Exception\DomainErrorCode;
 use Mailadmin\Domain\Exception\InvalidMailingList;
 use Mailadmin\Domain\MailingList\MemberList;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -100,15 +101,91 @@ final class MemberListTest extends TestCase
         self::assertNull($list->withMembers([])->toStoredValue());
     }
 
-    public function testAChangedMembershipIsRenderedCommaSeparated(): void
+    public function testAChangedMembershipIsRenderedOnePerLine(): void
     {
         $list = MemberList::fromStoredValue('anna@example.test');
 
         $changed = $list->withMembers(['anna@example.test', 'bernd@example.test']);
 
         self::assertNotSame($list, $changed);
-        self::assertSame('anna@example.test,bernd@example.test', $changed->toStoredValue());
+        self::assertSame("anna@example.test\nbernd@example.test", $changed->toStoredValue());
         self::assertTrue($changed->isCanonical());
+    }
+
+    public function testAnUnchangedLegacyBreakListComesBackByteForByte(): void
+    {
+        $stored = "a@x.test<br />\nb@x.test";
+        $list = MemberList::fromStoredValue($stored);
+
+        self::assertSame(['a@x.test', 'b@x.test'], $list->members());
+        self::assertSame($list, $list->withMembers(['a@x.test', 'b@x.test']));
+        self::assertSame($stored, $list->toStoredValue());
+        self::assertFalse($list->isCanonical());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function breakSpellings(): iterable
+    {
+        yield 'br' => ['<br>'];
+        yield 'br slash' => ['<br/>'];
+        yield 'br space slash' => ['<br />'];
+        yield 'upper case' => ['<BR>'];
+        yield 'encoded' => ['&lt;br&gt;'];
+    }
+
+    #[DataProvider('breakSpellings')]
+    public function testEveryBreakSpellingSeparates(string $break): void
+    {
+        $list = MemberList::fromStoredValue('a@x.test' . $break . 'b@x.test');
+
+        self::assertSame(['a@x.test', 'b@x.test'], $list->members());
+    }
+
+    public function testEntitiesAreDecodedBeforeTheBreaksAreSplit(): void
+    {
+        $list = MemberList::fromStoredValue('J&ouml;rg &lt;j@x.test&gt;&lt;br /&gt;Tom &amp; Jerry &lt;t@x.test&gt;');
+
+        self::assertSame(['Jörg <j@x.test>', 'Tom & Jerry <t@x.test>'], $list->members());
+    }
+
+    public function testAChangedLegacyListIsWrittenCanonicalWithDecodedEntities(): void
+    {
+        $list = MemberList::fromStoredValue('Tom &amp; Jerry &lt;t@x.test&gt;<br />a@x.test');
+
+        $changed = $list->withMembers(['Tom & Jerry <t@x.test>', 'a@x.test', 'b@x.test']);
+
+        self::assertSame("Tom & Jerry <t@x.test>\na@x.test\nb@x.test", $changed->toStoredValue());
+        self::assertTrue($changed->isCanonical());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function displayNamesWithSeparators(): iterable
+    {
+        yield 'comma' => ['"Doe, John" <j@x.test>'];
+        yield 'semicolon' => ['Doe; John <j@x.test>'];
+        yield 'break in the name' => ['Name<br>Foo <j@x.test>'];
+        yield 'entity that would be decoded' => ['Tom &amp; Jerry <t@x.test>'];
+    }
+
+    #[DataProvider('displayNamesWithSeparators')]
+    public function testANewMemberThatWouldNotReadBackAsItselfIsRefused(string $member): void
+    {
+        // Anything the parser would split or decode is not read back as the same
+        // member, so it would silently turn into something else on the next load.
+        $this->expectException(InvalidMailingList::class);
+
+        MemberList::none()->withMembers([$member]);
+    }
+
+    public function testDeliverableAddressesTakeTheAddressPartDropInvalidOnesAndDuplicates(): void
+    {
+        $list = MemberList::fromStoredValue("Alice <Alice@x.test>\n|/bin/sh\nalice@X.TEST\n bob@x.test ");
+
+        self::assertSame(['Alice@x.test', 'bob@x.test'], $list->deliverableAddresses());
     }
 
     public function testOrderIsPartOfTheMembership(): void
@@ -120,7 +197,7 @@ final class MemberListTest extends TestCase
         $reordered = $list->withMembers(['bernd@example.test', 'anna@example.test']);
 
         self::assertNotSame($list, $reordered);
-        self::assertSame('bernd@example.test,anna@example.test', $reordered->toStoredValue());
+        self::assertSame("bernd@example.test\nanna@example.test", $reordered->toStoredValue());
     }
 
     public function testDuplicatesAreKept(): void
@@ -204,6 +281,162 @@ final class MemberListTest extends TestCase
         self::assertTrue(MemberList::fromStoredValue(null)->isEmpty());
         self::assertTrue(MemberList::fromStoredValue('')->isEmpty());
         self::assertFalse(MemberList::fromStoredValue('anna@example.test')->isEmpty());
+    }
+
+    public function testADisplayNameWithUmlautsIsAMember(): void
+    {
+        $list = MemberList::none()->withMembers(['Jürgen Groß <juergen@example.test>']);
+
+        self::assertSame(['Jürgen Groß <juergen@example.test>'], $list->members());
+        self::assertSame([], $list->unusableMembers());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function membersLatin1CannotHold(): iterable
+    {
+        yield 'an emoji in the display name' => ['Party 🎉 <party@example.test>'];
+        yield 'a euro sign in the display name' => ['€ Kasse <kasse@example.test>'];
+        yield 'Cyrillic in the display name' => ['Иван <ivan@example.test>'];
+    }
+
+    #[DataProvider('membersLatin1CannotHold')]
+    public function testAMemberLatin1CannotHoldIsRefusedWithItsPosition(string $member): void
+    {
+        try {
+            MemberList::none()->withMembers(['anna@example.test', $member]);
+            self::fail('The member was accepted.');
+        } catch (InvalidMailingList $error) {
+            self::assertSame(DomainErrorCode::LIST_MEMBER_OUTSIDE_LATIN1, $error->code());
+            self::assertSame(['index' => 1], $error->context(), 'The position only — never the address.');
+            self::assertStringNotContainsString('@', $error->getMessage());
+        }
+    }
+
+    public function testAStoredMemberLatin1CannotHoldIsReadAndKeptWhileUnchanged(): void
+    {
+        // An entity decodes to text the column cannot hold. Reading it is fine,
+        // and saving the list unchanged writes the stored bytes back.
+        $stored = MemberList::fromStoredValue('&#x1F389; <party@example.test>,anna@example.test');
+
+        self::assertSame(['🎉 <party@example.test>', 'anna@example.test'], $stored->members());
+        self::assertSame($stored, $stored->withMembers($stored->members()));
+    }
+
+    /**
+     * Mail addresses the delivery script `maillist.py` would skip, or deliver
+     * somewhere else (`user:x@…` is group syntax there and goes to `x@…`).
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function membersTheScriptCannotDeliverTo(): iterable
+    {
+        yield 'non-ASCII local part' => ['müller@example.de'];
+        yield 'non-ASCII address behind a display name' => ['Jörg <jörg@example.de>'];
+        yield 'domain without a dot' => ['user@localhost'];
+        yield 'empty domain label' => ['user@example..de'];
+        yield 'trailing dot' => ['user@example.de.'];
+        yield 'quote in the local part' => ['a"b@example.de'];
+        yield 'comment parenthesis' => ['us(er@example.de'];
+        yield 'backslash' => ['a\b@example.de'];
+        yield 'domain literal' => ['user@[127.0.0.1]'];
+        yield 'group syntax' => ['user:x@example.de'];
+        yield 'group syntax in the display name' => ['Team: <x@example.de>'];
+        yield 'unbalanced quote in the display name' => ['a"b <j@example.de>'];
+        // `str.splitlines()` broke lines at these; a hidden address could
+        // end up in front of the one shown (U-137).
+        yield 'vertical tab in a quoted display name' => ["\"evil@attacker.test\x0b\" <victim@example.test>"];
+        yield 'form feed in a quoted display name' => ["\"a\x0cb\" <victim@example.test>"];
+        yield 'file separator in a display name' => ["a\x1cb <victim@example.test>"];
+        yield 'NUL in a display name' => ["x\x00y <victim@example.test>"];
+        yield 'DEL in a display name' => ["x\x7fy <victim@example.test>"];
+    }
+
+    public function testANewMemberWithATabIsRefusedWhileAStoredOneIsDelivered(): void
+    {
+        $this->testANewMemberTheScriptCannotDeliverToIsRefusedWithItsPosition("Tab\tName <tab@example.de>");
+
+        $stored = MemberList::fromStoredValue("Tab\tName <tab@example.de>\nanna@example.test");
+
+        self::assertSame(['tab@example.de', 'anna@example.test'], $stored->deliverableAddresses());
+    }
+
+    #[DataProvider('membersTheScriptCannotDeliverTo')]
+    public function testANewMemberTheScriptCannotDeliverToIsRefusedWithItsPosition(string $member): void
+    {
+        try {
+            MemberList::none()->withMembers(['anna@example.test', $member]);
+            self::fail('The member was accepted.');
+        } catch (InvalidMailingList $error) {
+            self::assertSame(DomainErrorCode::LIST_MEMBER_NOT_DELIVERABLE, $error->code());
+            self::assertSame(['index' => 1], $error->context(), 'The position only — never the address.');
+            self::assertStringNotContainsString('@', $error->getMessage());
+        }
+    }
+
+    /**
+     * Entity-like text the two parsers read differently: `html.unescape()`
+     * decodes `&#64` and `&lt` without a semicolon, PHP does not. A new member
+     * carries no `&` at all, so that no entry can look like one address here
+     * and go to another one there.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function membersWithAnAmpersand(): iterable
+    {
+        yield 'numeric entity without semicolon' => ['x&#64evil.de <ok@example.de>'];
+        yield 'named entity without semicolon in the display name' => ['x &lt y <a@example.de>'];
+        yield 'plain ampersand in the display name' => ['Tom & Jerry <tj@example.de>'];
+    }
+
+    #[DataProvider('membersWithAnAmpersand')]
+    public function testANewMemberWithAnAmpersandIsRefusedWithItsPosition(string $member): void
+    {
+        $this->testANewMemberTheScriptCannotDeliverToIsRefusedWithItsPosition($member);
+    }
+
+    public function testAStoredMemberWithAnAmpersandIsKeptWhileUnchanged(): void
+    {
+        $stored = MemberList::fromStoredValue('Tom & Jerry <tj@example.de>
+anna@example.test');
+
+        self::assertSame($stored, $stored->withMembers($stored->members()));
+        self::assertSame(['tj@example.de', 'anna@example.test'], $stored->deliverableAddresses());
+    }
+
+    #[DataProvider('membersTheScriptCannotDeliverTo')]
+    public function testAStoredMemberTheScriptCannotDeliverToIsKeptReportedAndNotCounted(string $member): void
+    {
+        $stored = MemberList::fromStoredValue($member . "\nanna@example.test");
+
+        // Saving the list with another member added leaves the stored line alone.
+        $changed = $stored->withMembers([$member, 'anna@example.test', 'bernd@example.test']);
+
+        self::assertSame([$member, 'anna@example.test', 'bernd@example.test'], $changed->members());
+        self::assertSame([$member], $changed->unusableMembers());
+        self::assertSame(['anna@example.test', 'bernd@example.test'], $changed->deliverableAddresses());
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function membersTheScriptDeliversTo(): iterable
+    {
+        yield 'bare address' => ['a.b-c_d+e@sub.example-x.de', 'a.b-c_d+e@sub.example-x.de'];
+        yield 'display name' => ['Jürgen Groß <juergen@example.test>', 'juergen@example.test'];
+        yield 'quoted display name' => ['"Groß: Jürgen" <juergen@example.test>', 'juergen@example.test'];
+        yield 'display name with dots' => ['J. R. R. Tolkien <jr@example.test>', 'jr@example.test'];
+        yield 'angle brackets only' => ['<anna@example.test>', 'anna@example.test'];
+    }
+
+    #[DataProvider('membersTheScriptDeliversTo')]
+    public function testAMemberTheScriptDeliversToIsAccepted(string $member, string $address): void
+    {
+        $list = MemberList::none()->withMembers([$member]);
+
+        self::assertSame([], $list->unusableMembers());
+        self::assertSame([$address], $list->deliverableAddresses());
     }
 
     public function testClearingAListIsAChangeAndIsAllowed(): void

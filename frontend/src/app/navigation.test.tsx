@@ -38,6 +38,8 @@ const DOMAIN_MASTER = {
     'session.read',
     'session.write',
     'profile.password.write',
+    'profile.preferences.read',
+    'profile.preferences.write',
     'domain.read',
     'account.read',
     'account.write',
@@ -46,6 +48,9 @@ const DOMAIN_MASTER = {
     'address.read',
     'address.write',
     'address.delete',
+    'list.read',
+    'list.write',
+    'list.delete',
   ],
   domains: ['example.test'],
   expires_at: '2026-01-01T13:00:00Z',
@@ -106,7 +111,8 @@ describe('area navigation', () => {
 
     const links = within(nav).getAllByRole('link').map((link) => link.textContent);
 
-    expect(links).toEqual(['Übersicht', 'Domains', 'Konten', 'Adressen']);
+    // Mailing lists through `list.read`, not through the role (A5).
+    expect(links).toEqual(['Übersicht', 'Domains', 'Konten', 'Adressen', 'Mailinglisten']);
     expect(within(nav).queryByText('Betrieb')).toBeNull();
   });
 

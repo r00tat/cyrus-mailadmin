@@ -174,8 +174,8 @@ abstract class DatabaseTestCase extends TestCase
      */
     protected function createLegacyBaseline(): void
     {
-        $this->dropIfPresent('accountuser', 'adminuser', 'domain', 'domainadmin', 'virtual', 'settings');
-        $this->willCreate('accountuser', 'adminuser', 'domain', 'domainadmin', 'virtual', 'settings');
+        $this->dropIfPresent('accountuser', 'adminuser', 'domain', 'domainadmin', 'virtual', 'settings', 'lists');
+        $this->willCreate('accountuser', 'adminuser', 'domain', 'domainadmin', 'virtual', 'settings', 'lists');
 
         $this->pdo->exec(
             'CREATE TABLE `domain` (
@@ -243,6 +243,19 @@ abstract class DatabaseTestCase extends TestCase
                 warnlevel  int(3) NOT NULL DEFAULT 90,
                 PRIMARY KEY (username)
             ) ENGINE=MyISAM DEFAULT CHARSET=latin1',
+        );
+
+        // The production DDL (`docker/db/init/00-baseline-schema.sql`). Tests
+        // that need other rows drop and recreate it themselves.
+        $this->pdo->exec(
+            'CREATE TABLE `lists` (
+                `id` int(4) unsigned NOT NULL AUTO_INCREMENT,
+                `name` varchar(255) NOT NULL,
+                `tag` varchar(255) NOT NULL,
+                `address` varchar(255) NOT NULL,
+                `members` text NOT NULL,
+                PRIMARY KEY (`id`)
+            ) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci',
         );
 
         // A handful of synthetic rows, so that "the tables are not empty" is part

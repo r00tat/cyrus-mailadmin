@@ -45,7 +45,7 @@ export interface Exchange<T> extends Versioned<T> {
   readonly effect: string | null;
 }
 
-/** `true` when the server said the change waits for the next configuration run. */
+/** `true` when the server said the aliases file follows only with the next configuration run. */
 export function hasPendingConfigurationRun(exchange: { readonly effect: string | null }): boolean {
   return exchange.effect === PENDING_CONFIGURATION_RUN;
 }

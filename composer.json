@@ -55,6 +55,7 @@
         "migrate": "@php bin/migrate.php",
         "migrate:status": "@php bin/migrate.php status",
         "migrate:check": "@php bin/migrate.php --dry-run",
+        "lists:migrate-delivery": "@php bin/migrate-list-delivery.php",
         "db:check": "@php bin/db-check.php",
         "check:deployment": "@php bin/check-deployment.php",
         "build:openapi": "@php bin/openapi-bundle.php",
@@ -77,6 +78,7 @@
         "migrate": "Applies pending migrations under the database lock. The deployment runs this; composer install deliberately does not.",
         "migrate:status": "Prints the schema state and changes nothing.",
         "migrate:check": "Lists what would run and verifies the additive-only rule. Exits 1 when something is pending.",
+        "lists:migrate-delivery": "Moves the legacy mailing list rows in virtual to the pipe transport (spec 6, step 4). Takes --dry-run and --revert.",
         "db:check": "Reports charset, collation and storage engine of the legacy tables, plus the migration state.",
         "check:deployment": "Probes a deployed installation for paths that must not be readable (U-25). Takes the base URL."
     }

@@ -21,6 +21,14 @@ use PHPUnit\Framework\Attributes\CoversNothing;
 #[CoversNothing]
 final class PermissionContractTest extends ContractTestCase
 {
+    /**
+     * Operations every role may perform that still answer `403` — not for a
+     * missing permission but for a domain outside the actor's scope, where
+     * there is no existing object a `404` could hide. Creating a mailing list
+     * in a foreign domain is the one case (spec 4.3, "Rechte").
+     */
+    private const array FORBIDDEN_BY_SCOPE = ['POST /lists'];
+
     public function testEveryDeclaredPermissionIsOneTheCodeKnows(): void
     {
         foreach (self::operations() as $where => $operation) {
@@ -87,7 +95,8 @@ final class PermissionContractTest extends ContractTestCase
         foreach (self::operations() as $where => $operation) {
             $permission = Permission::tryFrom((string) ($operation['x-permission'] ?? ''));
 
-            if ($permission === null || !self::everyRoleHolds($permission)) {
+            if ($permission === null || !self::everyRoleHolds($permission)
+                || in_array($where, self::FORBIDDEN_BY_SCOPE, true)) {
                 continue;
             }
 

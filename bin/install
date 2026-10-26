@@ -67,7 +67,7 @@ readonly REQUIRED_KEYS=(
     MAILADMIN_JWT_SIGNING_KEY
     MAILADMIN_IMAP_HOST MAILADMIN_IMAP_ADMIN_USER MAILADMIN_IMAP_ADMIN_PASSWORD
 )
-readonly CLI_COMMANDS='migrate|db-check|prune-tokens|check-deployment'
+readonly CLI_COMMANDS='migrate|db-check|prune-tokens|check-deployment|migrate-list-delivery'
 readonly DEFAULT_GITHUB_REPO='r00tat/cyrus-mailadmin'
 # The release workflow builds the frontend with this as its base path; the
 # installer replaces it with the installation's own (U-71). A <base> element
@@ -452,6 +452,11 @@ MAILADMIN_MANAGESIEVE_PORT='4190'
 
 # Naming scheme for NEW accounts only: dotted | fqun.
 MAILADMIN_NAMING_SCHEME='dotted'
+
+# Mailing lists: pseudo-domain of the pipe transport, and the delivery path
+# (alias | transport). Switch to transport once the Postfix side is set up.
+MAILADMIN_LIST_TRANSPORT_DOMAIN='maillist.invalid'
+MAILADMIN_LIST_DELIVERY='alias'
 EOF
 
     if [ "$dry_run" -eq 1 ]; then
@@ -916,6 +921,7 @@ step_cli_and_cron() {
 #   mailadmin db-check
 #   mailadmin prune-tokens [--dry-run]
 #   mailadmin check-deployment https://host
+#   mailadmin migrate-list-delivery [--dry-run] [--revert]
 set -eu
 
 if [ "\$#" -lt 1 ]; then

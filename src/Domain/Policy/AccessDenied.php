@@ -49,6 +49,21 @@ final class AccessDenied extends PolicyRefusal
     }
 
     /**
+     * A permission held in general, refused for a domain outside the actor's
+     * scope — where there is no existing object a `404` could hide, as when a
+     * new mailing list is to be created in that domain.
+     */
+    public static function outsideScope(ActorContext $actor, Permission $permission, string $domain): self
+    {
+        return new self($actor->username, $permission, sprintf(
+            'The permission "%s" does not extend to the domain "%s" for "%s".',
+            $permission->value,
+            self::excerpt($domain),
+            self::excerpt($actor->username),
+        ));
+    }
+
+    /**
      * A permission held in general, refused on this occasion — the actor is not
      * the person the operation is about.
      *

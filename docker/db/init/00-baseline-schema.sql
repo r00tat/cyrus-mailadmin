@@ -157,18 +157,19 @@ CREATE TABLE IF NOT EXISTS log (
 -- reconciliation view meet the same table list they will meet in production.
 -- ---------------------------------------------------------------------------
 
--- Mailing lists. Written by an external tool, read by Salt to generate
--- /etc/aliases-dir/aliases. webcyradm never shows them (A5 will).
--- ASSUMPTION: the column types are reconstructed from the four column names in
--- the analysis (`name`, `tag`, `address`, `members`); the real DDL was not
--- captured. A5 should confirm against production before relying on the widths.
-CREATE TABLE IF NOT EXISTS lists (
-    name    VARCHAR(255) NOT NULL DEFAULT '',
-    tag     VARCHAR(255) NOT NULL DEFAULT '',
-    address VARCHAR(255) NOT NULL DEFAULT '',
-    members LONGTEXT,
-    PRIMARY KEY (name)
-) ENGINE = MyISAM DEFAULT CHARSET = latin1;
+-- Mailing lists. Written by mailadmin and by an external tool, read by Salt to
+-- generate /etc/aliases-dir/aliases. webcyradm never shows them.
+-- Definition taken from `SHOW CREATE TABLE` of the production database,
+-- 2026-10-23. There is deliberately no unique index on `name` or `address`:
+-- `name` is display text, and the uniqueness of the address is kept by mailadmin.
+CREATE TABLE IF NOT EXISTS `lists` (
+    `id`      int(4) unsigned NOT NULL AUTO_INCREMENT,
+    `name`    varchar(255)    NOT NULL,
+    `tag`     varchar(255)    NOT NULL,
+    `address` varchar(255)    NOT NULL,
+    `members` text            NOT NULL,
+    PRIMARY KEY (`id`)
+) ENGINE = MyISAM DEFAULT CHARSET = latin1 COLLATE = latin1_swedish_ci;
 
 -- Dead tables. Empty in production, kept so nothing is surprised by their
 -- presence.

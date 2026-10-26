@@ -307,7 +307,30 @@ final class DomainRepository extends Repository implements DomainStore
             $bindings,
         );
 
-        return is_string($username) && $username !== '' ? $username : null;
+        if (is_string($username) && $username !== '') {
+            return $username;
+        }
+
+        // A list of a parent domain claims the namespace by its key,
+        // `REPLACE(address, '@', '.')` (U-145). `lists.address` compares
+        // without case; the domain part is everything after the last `@`.
+        $listBindings = $bindings;
+
+        foreach ($parents as $index => $parent) {
+            $listBindings['parent' . $index] = strtolower($parent->toString());
+        }
+
+        /** @var mixed $address */
+        $address = $this->connection->selectValue(
+            'SELECT address FROM `lists` '
+            . "WHERE LOWER(SUBSTRING_INDEX(address, '@', -1)) IN (" . implode(', ', $placeholders) . ') '
+            . 'AND CHAR_LENGTH(address) > :min '
+            . "AND LOWER(RIGHT(REPLACE(address, '@', '.'), :tail)) = :suffix "
+            . 'ORDER BY address LIMIT 1',
+            $listBindings,
+        );
+
+        return is_string($address) && $address !== '' ? $address : null;
     }
 
     public function accountUsernameTaken(string $username, DomainName $except): bool

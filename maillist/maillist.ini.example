@@ -1,0 +1,51 @@
+# Example configuration for maillist.py.
+#
+# Copy this file to the path in MAILLIST_CONFIG (default: /etc/mailadmin-maillist/maillist.ini),
+# fill in the required keys and restrict it to the user the script runs as (it holds a password):
+#   chmod 600 maillist.ini
+#
+# Keys with an empty value and no "required" note use their built-in default.
+
+[database]
+# Database server holding the mailadmin tables (the script only reads the "lists" table).
+host = localhost
+port = 3306
+# Required: database user with SELECT on the "lists" table.
+user =
+# Required: password of that user. Percent signs are allowed.
+password =
+# Database (schema) name.
+name = mail
+
+[smtp]
+# Relay the list mail is handed to (usually the local Postfix).
+host = localhost
+port = 25
+# yes: upgrade the connection with STARTTLS and verify the relay's certificate (the default).
+# no: deliberately send in clear text. Only sensible for a relay that listens on localhost only.
+# There is no setting that turns off certificate verification.
+starttls = yes
+# CA bundle (PEM) used to verify the relay's certificate. Empty: the system CAs.
+ca_file =
+# Name the relay's certificate must match. Empty: the value of "host". Set it when the relay
+# is reached as "localhost" but its certificate carries the public name, e.g. mx.example.org.
+tls_name =
+
+[list]
+# Required: address shown in the List-Owner header, e.g. owner@example.org.
+owner =
+# Required: administrators receive delivery error reports here, e.g. admins@example.org.
+error_report_to =
+# Required: sender of those reports, e.g. maillist@example.org.
+error_report_from =
+# Value of the X-maillist header, used to recognise mail that loops back into the list.
+loop_marker = mailadmin-maillist
+# yes: without a pipe argument, fall back to the Delivered-To header (only if exactly one is present).
+# Needed only while Postfix still delivers through the old alias; set to no once ${user} is passed.
+delivered_to_fallback = yes
+
+[log]
+# Log file; rotate it with logrotate. If it is not writable the script logs to syslog instead.
+file = /var/log/mail/maillist.log
+# DEBUG, INFO, WARNING or ERROR. Recipient addresses are only logged at DEBUG.
+level = INFO

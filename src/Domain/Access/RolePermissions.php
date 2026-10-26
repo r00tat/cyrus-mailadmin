@@ -32,10 +32,8 @@ use Mailadmin\Domain\Model\AdminRole;
  *    read them to render the form. Making that a permission is honest about
  *    something that was already true. It is scoped: the list contains their
  *    domains and no others.
- *  - **`list.*` is superuser-only.** webcyradm had no list management at all —
- *    `lists` is written by Salt — so there is no behaviour to preserve and
- *    deny-by-default decides. A5 may widen it; widening later takes nothing
- *    away from anyone, and narrowing later would.
+ *  - **`list.*` is granted to a domain master** (spec 4.3, "Rechte"), scoped
+ *    through the domain of the list address by `ListPolicy`.
  *
  * `audit.read` and `maintenance.*` are likewise superuser-only for want of
  * anything to preserve: an audit trail names administrators across domains, and
@@ -92,6 +90,12 @@ final class RolePermissions
             Permission::AddressRead,
             Permission::AddressWrite,
             Permission::AddressDelete,
+
+            // Mailing lists whose address is in those domains (spec 4.3,
+            // "Rechte"); `ListPolicy` scopes them through that address.
+            Permission::ListRead,
+            Permission::ListWrite,
+            Permission::ListDelete,
         );
     }
 }

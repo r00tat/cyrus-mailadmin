@@ -13,7 +13,6 @@ use Mailadmin\Application\Account\DomainAllowance;
 use Mailadmin\Application\Account\GetAccountQuota;
 use Mailadmin\Application\Account\SetAccountPassword;
 use Mailadmin\Application\Account\UpdateAccount;
-use Mailadmin\Application\Address\AddressReader;
 use Mailadmin\Application\Address\CatchallCleanup;
 use Mailadmin\Application\Address\RowWriter;
 use Mailadmin\Application\Domain\DomainDefaults;
@@ -23,7 +22,6 @@ use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\LocalPart;
 use Mailadmin\Domain\Model\MailboxIdentity;
 use Mailadmin\Domain\Model\NamingScheme;
-use Mailadmin\Domain\Model\Virtual\VirtualEntryClassifier;
 use Mailadmin\Domain\Password\InMemoryCommonPasswordList;
 use Mailadmin\Domain\Password\PasswordPolicy;
 use Mailadmin\Infrastructure\Mailstore\Credentials;
@@ -38,12 +36,14 @@ use Mailadmin\Infrastructure\Persistence\Connection;
 use Mailadmin\Infrastructure\Persistence\DomainRepository;
 use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
 use Mailadmin\Infrastructure\Persistence\OpenConnection;
+use Mailadmin\Infrastructure\Persistence\SqlMailingListRepository;
 use Mailadmin\Infrastructure\Persistence\VirtualRepository;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
 use Mailadmin\Infrastructure\Security\PasswordHasher;
 use Mailadmin\Infrastructure\Security\PasswordHashingOptions;
 use Mailadmin\Tests\Support\DomainFixture;
 use Mailadmin\Tests\Support\FrozenClock;
+use Mailadmin\Tests\Support\ListDeliveryFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -196,7 +196,7 @@ final class AccountLifecycleTest extends TestCase
             new NullLogger(),
             new DomainRepository($this->connection(), new FrozenClock()),
             $virtual,
-            new CatchallCleanup($virtual, new AddressReader($virtual, new VirtualEntryClassifier())),
+            new CatchallCleanup($virtual, ListDeliveryFixture::reader($virtual, new SqlMailingListRepository($this->connection()))),
             new RowWriter($virtual, $audit, $repairs, new NullLogger()),
         ))->handle($actor, $username, AccountView::etag($record));
 

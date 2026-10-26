@@ -111,6 +111,18 @@ final class DomainErrorCode
     public const string RENAME_INCOMPLETE = 'domain.rename_incomplete';
 
     /**
+     * The domain still has mailing lists: rows in `lists` whose address ends in
+     * `@<name>`.
+     *
+     * Answered with `409`, before anything is touched. A rename rewrites
+     * `virtual.alias` but not `lists.address`, the list key in `dest` or the
+     * legacy aliases file, and carrying those along is neither atomic nor, in
+     * the legacy mode, complete without a configuration run. The lists are
+     * deleted first and created again under the new name.
+     */
+    public const string RENAME_BLOCKED_BY_MAILING_LIST = 'domain.rename_blocked_by_mailing_list';
+
+    /**
      * The mail store could not be reached, so the rename was refused outright.
      *
      * Answered with `503`. Confirming the safe answer to A1's open point 8: the
@@ -156,6 +168,7 @@ final class DomainErrorCode
             self::NAMESPACE_CONFLICT,
             self::NOT_EMPTY,
             self::PREFIX_TAKEN,
+            self::RENAME_BLOCKED_BY_MAILING_LIST,
             self::RENAME_INCOMPLETE,
             self::RENAME_NOT_CONFIRMED,
             self::STILL_HAS_ADDRESSES,

@@ -118,9 +118,6 @@ final class AuthorizationMiddlewareTest extends TestCase
             'audit.read',
             'domain.delete',
             'domain.write',
-            'list.delete',
-            'list.read',
-            'list.write',
             'maintenance.read',
             'maintenance.write',
         ], $this->sorted($refused));

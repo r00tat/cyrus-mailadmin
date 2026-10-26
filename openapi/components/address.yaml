@@ -20,22 +20,39 @@ components:
         What a row of `virtual` is, decided once by its field pattern
         (architecture 3.4). `unknown` is a row that fits no pattern; it is
         listed, never skipped (U-22).
+
+        `mailing_list` is the row that routes a mailing list's address (A5):
+        `dest` on the list transport domain, or the legacy form
+        `dest = username = REPLACE(alias, '@', '.')` with a list of that
+        address. `alias` is then the list address. Such a row is read-only
+        here; it is changed and removed through `/lists`.
       enum:
         - mailbox_address
         - alias
         - catchall
         - forward
+        - mailing_list
         - unknown
 
     AddressUnknownReason:
       type: string
-      description: Why a row fits no pattern. A stable key; the frontend translates (E-16).
+      description: |
+        Why a row fits no pattern. A stable key; the frontend translates
+        (E-16). `list_destination_mismatch`: a destination is on the list
+        transport domain, but the row is not exactly a list's own (one
+        destination, `<list key>@<transport domain>`, empty `username`).
+        `list_missing`: the row is exactly a list's own in the transport
+        form, but no list has its address — the delivery script finds
+        nothing and bounces. Whoever manages the domain's addresses removes
+        it like any other unknown row (U-146).
       enum:
         - no_alias
         - no_destination
         - alias_is_not_an_address
         - catchall_without_domain
         - unusable_value
+        - list_destination_mismatch
+        - list_missing
 
     AddressDestination:
       type: string
@@ -46,7 +63,11 @@ components:
         delivery). An account name is matched without regard to case and
         written in the spelling `accountuser` has. A name without `@` that is
         no account is refused (`address.invalid_destination`): Postfix would
-        complete it with its own domain (U-104).
+        complete it with its own domain (U-104). So is a destination on the
+        mailing list transport domain (any case, trailing dot or not), a source
+        route starting with `@`, and a local part containing `%` or `!` —
+        routing syntax that names one address and delivers to another. Stored
+        rows with such spellings are still shown and kept as they are.
       example: anna@example.test
 
     AddressDestinations:
@@ -136,6 +157,8 @@ components:
             - alias_is_not_an_address
             - catchall_without_domain
             - unusable_value
+            - list_destination_mismatch
+            - list_missing
 
     AddressEntryCollection:
       type: object

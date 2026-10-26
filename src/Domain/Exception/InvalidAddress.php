@@ -79,6 +79,19 @@ final class InvalidAddress extends DomainError
         );
     }
 
+    /**
+     * The mailing list transport domain: it is routed to the list script by
+     * `transport_maps` and must never be a domain Postfix delivers itself.
+     */
+    public static function transportDomainName(string $domain): self
+    {
+        return new self(
+            DomainErrorCode::DOMAIN_INVALID_NAME,
+            sprintf('Domain name "%s" is reserved for mailing list delivery.', self::excerpt($domain)),
+            ['domain' => self::excerpt($domain), 'reason' => 'list_transport_domain'],
+        );
+    }
+
     public static function unconventionalDomainName(string $domain): self
     {
         return new self(

@@ -36,6 +36,8 @@ export const DOMAIN_MASTER = {
   permissions: [
     ...BASE_PERMISSIONS,
     'profile.password.write',
+    'profile.preferences.read',
+    'profile.preferences.write',
     'domain.read',
     'account.read',
     'account.write',
@@ -44,6 +46,9 @@ export const DOMAIN_MASTER = {
     'address.read',
     'address.write',
     'address.delete',
+    'list.read',
+    'list.write',
+    'list.delete',
   ],
   domains: ['example.test'],
   expires_at: '2026-01-01T13:00:00Z',

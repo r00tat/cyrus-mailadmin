@@ -9,9 +9,8 @@ import { MailingListListPage } from './MailingListListPage';
  * The routes of this page directory, mounted under `AppLayout` by
  * `app/routes.tsx`. Owned by the domains-admins-lists work stream.
  *
- * The segment below `/lists/` is a list name (U-60), and any name is possible
- * — `new` included. Creating is therefore a dialog on the list page, and
- * nothing else lives on that level.
+ * The segment below `/lists/` is the list address, URL-encoded. Creating is a
+ * dialog on the list page, and nothing else lives on that level.
  */
 export const mailingListRoutes: RouteObject[] = [
   {
@@ -23,7 +22,7 @@ export const mailingListRoutes: RouteObject[] = [
     ),
   },
   {
-    path: '/lists/:listName',
+    path: '/lists/:address',
     element: (
       <RequirePermission permission="list.read">
         <MailingListDetailPage />

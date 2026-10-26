@@ -28,12 +28,17 @@ export const deAddress = {
   'address.list.type.alias': 'Alias',
   'address.list.type.catchall': 'Catchall',
   'address.list.type.forward': 'Weiterleitung',
+  'address.list.type.mailingList': 'Mailingliste',
   'address.list.type.unknown': 'Unbekannt',
   'address.list.unknownReason.noAlias': 'Die Zeile hat keine Adresse.',
   'address.list.unknownReason.noDestination': 'Die Zeile hat kein Ziel.',
   'address.list.unknownReason.aliasIsNotAnAddress': 'Die Adresse ist weder Mailadresse noch Kontoname.',
   'address.list.unknownReason.catchallWithoutDomain': 'Catchall ohne Domain.',
   'address.list.unknownReason.unusableValue': 'Ein Feld enthält einen unbrauchbaren Wert.',
+  'address.list.unknownReason.listDestinationMismatch':
+    'Die Zeile leitet an eine Mailingliste weiter, ist aber nicht deren eigener Eintrag.',
+  'address.list.unknownReason.listMissing':
+    'Die Zeile ist der Eintrag einer Mailingliste, die es nicht mehr gibt. Mail an die Adresse kommt zurück.',
   'address.list.reserved': 'reserviert',
   'address.list.noDestination': 'kein Ziel',
   'address.list.senderNone': 'niemand',

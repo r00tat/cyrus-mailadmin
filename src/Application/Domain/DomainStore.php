@@ -135,6 +135,11 @@ interface DomainStore
      * `kunde.example.de`. Compared case-insensitively. The accounts of
      * `$except` are left out: a rename moves them along.
      *
+     * A mailing list of such a parent claims the namespace the same way, by
+     * its key `REPLACE(address, '@', '.')` (U-145): `info.kunde@example.de` is
+     * what the account `info` of `kunde.example.de` would be called. Its
+     * address is returned then.
+     *
      * @throws PersistenceError
      */
     public function namespaceClaimant(DomainName $name, ?DomainName $except = null): ?string;

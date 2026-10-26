@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mailadmin\Tests\Unit\Domain\MailingList;
 
+use Mailadmin\Domain\Exception\DomainErrorCode;
 use Mailadmin\Domain\Exception\InvalidMailingList;
 use Mailadmin\Domain\MailingList\MailingList;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -19,7 +20,7 @@ final class MailingListTest extends TestCase
             'team-example',
             'team',
             'team-list@example.test',
-            'anna@example.test,bernd@example.test',
+            "anna@example.test\nbernd@example.test",
         );
 
         self::assertSame('team-example', $list->name->toString());
@@ -53,7 +54,7 @@ final class MailingListTest extends TestCase
 
         self::assertSame('team', $list->tag, 'Surrounding whitespace is trimmed.');
         self::assertSame('team-list@example.test', $list->address);
-        self::assertSame('anna@example.test,bernd@example.test', $list
+        self::assertSame("anna@example.test\nbernd@example.test", $list
             ->withMembers(['anna@example.test', 'bernd@example.test'])
             ->members
             ->toStoredValue());
@@ -141,5 +142,40 @@ final class MailingListTest extends TestCase
         $list = MailingList::create('team-example', 'anything at all', 'team-list@example.test', []);
 
         self::assertSame('anything at all', $list->tag);
+    }
+
+    public function testATagMayCarryUmlautsUpTo255Characters(): void
+    {
+        self::assertSame('Grüße', MailingList::create('team', 'Grüße', 'team-list@example.test', [])->tag);
+
+        $long = str_repeat('ä', MailingList::MAX_TAG_LENGTH);
+        self::assertSame($long, MailingList::create('team', $long, 'team-list@example.test', [])->tag);
+
+        $this->expectException(InvalidMailingList::class);
+        MailingList::create('team', $long . 'ä', 'team-list@example.test', []);
+    }
+
+    public function testANewTagLatin1CannotHoldIsRefusedWithItsOwnCode(): void
+    {
+        try {
+            MailingList::create('team', 'Team 🎉', 'team-list@example.test', []);
+            self::fail('An emoji tag was accepted on create.');
+        } catch (InvalidMailingList $error) {
+            self::assertSame(DomainErrorCode::LIST_TAG_OUTSIDE_LATIN1, $error->code());
+        }
+
+        $stored = MailingList::fromStoredValues('team', 'old', 'team-list@example.test', '');
+
+        try {
+            $stored->withTag('Team €');
+            self::fail('A euro sign in a tag was accepted on change.');
+        } catch (InvalidMailingList $error) {
+            self::assertSame(DomainErrorCode::LIST_TAG_OUTSIDE_LATIN1, $error->code());
+        }
+    }
+
+    public function testAStoredTagIsNeverRefused(): void
+    {
+        self::assertSame('Team 🎉', MailingList::fromStoredValues('team', 'Team 🎉', 'team-list@example.test', '')->tag);
     }
 }

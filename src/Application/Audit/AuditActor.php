@@ -41,9 +41,13 @@ final readonly class AuditActor
     ) {
     }
 
+    /**
+     * A {@see ActorContext::system()} actor is recorded with its name and no
+     * role, like {@see system()}: nobody signed in.
+     */
     public static function of(ActorContext $actor): self
     {
-        return new self($actor->username, $actor->role);
+        return new self($actor->username, $actor->isSystem() ? null : $actor->role);
     }
 
     /**

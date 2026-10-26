@@ -24,6 +24,9 @@ export interface ProblemText {
   readonly fieldErrors: Readonly<Record<string, string>>;
 }
 
+/** `<resource>.<state>`, the form of a contract error code (U-7). Validator keywords have no dot. */
+const CONTRACT_CODE = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+
 function describeProblem(problem: ApiProblem, translator: Translator): ProblemText {
   const key = `errors.${problem.code}` as TranslationKey;
   const translated = translator.t(key);
@@ -37,7 +40,10 @@ function describeProblem(problem: ApiProblem, translator: Translator): ProblemTe
   const fieldErrors: Record<string, string> = {};
 
   for (const [field, reason] of Object.entries(problem.errors)) {
-    const reasonKey = `errors.field.${reason}` as TranslationKey;
+    // The reason is a validator keyword (`maxLength`), or — where a use case
+    // refuses one field — a contract code (`list.tag_outside_latin1`). A code
+    // has its text in the catalogue already; a keyword has it under `field`.
+    const reasonKey = (CONTRACT_CODE.test(reason) ? `errors.${reason}` : `errors.field.${reason}`) as TranslationKey;
     const reasonText = translator.t(reasonKey);
 
     fieldErrors[field] = reasonText !== reasonKey ? reasonText : translator.t('errors.field.unknown');

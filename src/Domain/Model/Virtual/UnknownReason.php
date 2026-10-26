@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Mailadmin\Domain\Model\Virtual;
 
 /**
- * Why a `virtual` row fits none of the four patterns.
+ * Why a `virtual` row fits none of the patterns.
  *
  * The reason is shown next to the row (U-22). „We do not understand this" is an
  * honest answer; skipping the row is not, because the row is live in Postfix
@@ -30,4 +30,20 @@ enum UnknownReason: string
 
     /** A value contains something no field of this table should carry. */
     case UnusableValue = 'unusable_value';
+
+    /**
+     * A destination is on the list transport domain, but the row is not
+     * exactly a list's own: more than one destination, a `username`, or a key
+     * that is not the list key of `alias` (A5). Such a row delivers into a
+     * list nobody here routed it to; a superuser removes it.
+     */
+    case ListDestinationMismatch = 'list_destination_mismatch';
+
+    /**
+     * Exactly a list's own row in the transport form, but `lists` has no row
+     * for its address. The pipe script finds no list and bounces. Left behind
+     * when `lists` lost the row outside this application; whoever manages the
+     * domain's addresses removes it (U-146).
+     */
+    case ListMissing = 'list_missing';
 }

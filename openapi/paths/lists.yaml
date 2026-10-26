@@ -2,10 +2,14 @@
 # Mailing lists (A5). See `openapi/README.md` for the file conventions and
 # `docs/03-architektur.md`, section 7.2, for where this resource sits.
 #
-# Five operations over one legacy table. What makes them unlike the rest of the
-# API is stated once here and repeated where it matters: the application writes
-# `lists` and never renders a file (E-4), so a change takes effect at the next
-# configuration run, not at save time.
+# Five operations over two legacy tables: the row in `lists` and the entry in
+# `virtual` that routes the list address. A list is identified by its address;
+# `name` is display text and may repeat (spec 4.3, "Identität").
+#
+# Superusers reach every list, domain masters the lists of their own domains
+# (`list.read`, `list.write`, `list.delete`). A list outside the actor's domains
+# is `404`, indistinguishable from one that does not exist (U-44); creating one
+# in a foreign domain is `403`, because there is no object a `404` could hide.
 #
 tags:
   - name: mailing-lists
@@ -20,8 +24,12 @@ tags:
 
       Two consequences a client has to carry:
 
-        * every write answers with `X-Mailadmin-Effect: pending-configuration-run`,
-          because the change is in the database and not yet in the mail system;
+        * while the legacy alias file is still rendered, creating and deleting
+          a list answer with `X-Mailadmin-Effect: pending-configuration-run`:
+          the list delivers, or stops, at once, but the aliases file only
+          follows with the next configuration run. A change to name, tag or
+          members is live at once and carries no header; on the transport path
+          no answer carries it;
         * rows that were written before this application existed may contain
           values it would not accept. They are shown and flagged
           (`unusable_members`, `address_usable`), never filtered out and never
@@ -63,8 +71,6 @@ paths:
                 $ref: '#/components/schemas/MailingListCollection'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
         '500':
@@ -76,13 +82,23 @@ paths:
         - mailing-lists
       summary: Create a mailing list
       description: |
-        Writes one row to `lists`. Nothing is created in the mail store — a
-        mailing list has no mailbox — so none of the ordering rules for
-        operations that span both systems apply (architecture 8.1).
+        Writes the row to `lists` and then the entry in `virtual` that routes
+        the address. Nothing is created in the mail store — a mailing list has
+        no mailbox.
 
-        **The address does not deliver yet.** It starts working when the
-        configuration management next renders the aliases file (E-4); the answer
-        carries `X-Mailadmin-Effect` to say so.
+        The address has to be free: not another list, not an address in
+        `virtual` of any kind, and not a list with the same list key. Otherwise
+        the answer is `409` with `list.address_taken`. Its domain has to be one
+        this application manages (`list.unknown_domain`), and its local part
+        must not carry a recipient delimiter (`list.address_has_extension`).
+
+        A domain master may create lists in their own domains only. Any other
+        domain is `403` — not `404`, because no existing object is being hidden.
+
+        The address delivers at once on either delivery path: its `virtual`
+        entry routes to the pipe transport. On the legacy alias path the
+        aliases file gains the list's line only with the next configuration
+        run, and the answer carries `X-Mailadmin-Effect` to say so.
 
         Every member has to be a mail address. That is a security rule, not
         validation: the column is rendered into an aliases file, where `|command`
@@ -115,9 +131,18 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: |
+            The address lies in a domain outside the actor's domains, or the
+            actor lacks `list.write`.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '409':
-          description: A list of that name already exists — the name is the primary key (`list.already_exists`).
+          description: The address is in use — as a list, as an address in `virtual`, or through a list with the same list key (`list.address_taken`).
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
@@ -130,9 +155,9 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
-  /lists/{listName}:
+  /lists/{address}:
     parameters:
-      - $ref: '#/components/parameters/MailingListName'
+      - $ref: '#/components/parameters/MailingListAddress'
 
     get:
       operationId: getMailingList
@@ -144,6 +169,9 @@ paths:
         the representation, not of the database row, so that a column the
         external tool writes in parallel does not invalidate an administrator's
         `If-Match`.
+
+        A domain master reads the lists of their own domains. Any other list
+        is `404`, the same answer as a list that does not exist (U-44).
       x-permission: list.read
       responses:
         '200':
@@ -159,8 +187,6 @@ paths:
                 $ref: '#/components/schemas/MailingList'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -181,8 +207,16 @@ paths:
         `NULL`. That matters because `lists` is also written by another tool and
         the exact form of the existing rows was never captured (U-56).
 
-        The name cannot be changed here. It identifies the list; renaming is a
-        delete and a create.
+        `name`, `tag` and `members` can be changed; the address cannot. It
+        identifies the list, so moving a list is a delete and a create. A body
+        that names `address` — or any other field the schema does not list —
+        is `422`. Only `lists` is written; the entry in `virtual` stays as it is.
+        The change is live at once on either delivery path — the delivery
+        script reads the list at delivery time — so the answer never carries
+        `X-Mailadmin-Effect`.
+
+        A domain master changes the lists of their own domains; any other list
+        is `404`.
 
         `If-Match` is accepted, not demanded. Sent and stale, the answer is
         `412`; absent, the write proceeds (architecture 7.1).
@@ -203,16 +237,12 @@ paths:
               $ref: '#/components/headers/XRequestId'
             ETag:
               $ref: '#/components/headers/ETag'
-            X-Mailadmin-Effect:
-              $ref: '#/components/headers/MailingListEffect'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/MailingList'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '412':
@@ -228,13 +258,19 @@ paths:
         - mailing-lists
       summary: Delete a mailing list
       description: |
-        Removes the row. Nothing is removed from the mail store, because nothing
-        was ever created there.
+        Removes the entry in `virtual` first, so that no more mail reaches the
+        list, and then the row in `lists`. A `lists` row that cannot be removed
+        goes to the repair queue and the answer is still `204`: without the
+        `virtual` entry the list is already unreachable. Nothing is removed from
+        the mail store, because nothing was ever created there.
 
-        **The address keeps delivering until the configuration management next
-        runs** (E-4) — the opposite of the surprise every other delete in this
-        API has, which is why the answer carries `X-Mailadmin-Effect` although it
-        has no body.
+        Mail to the address stops at once on either delivery path. On the
+        legacy alias path the aliases file keeps the list's line until the
+        configuration management next runs; the answer then carries
+        `X-Mailadmin-Effect` although it has no body.
+
+        A domain master deletes the lists of their own domains; any other list
+        is `404`.
 
         `If-Match` is accepted here too: deleting the wrong version of a list is
         exactly as damaging as overwriting it.
@@ -251,8 +287,6 @@ paths:
               $ref: '#/components/headers/MailingListEffect'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '412':

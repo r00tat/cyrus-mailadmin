@@ -7,7 +7,6 @@ namespace Mailadmin\Tests\Integration\Persistence;
 use Mailadmin\Application\Account\AccountLocator;
 use Mailadmin\Application\Account\AccountView;
 use Mailadmin\Application\Account\DeleteAccount;
-use Mailadmin\Application\Address\AddressReader;
 use Mailadmin\Application\Address\CatchallCleanup;
 use Mailadmin\Application\Address\DeleteCatchall;
 use Mailadmin\Application\Address\RowWriter;
@@ -18,7 +17,6 @@ use Mailadmin\Domain\Model\LocalPart;
 use Mailadmin\Domain\Model\MailboxIdentity;
 use Mailadmin\Domain\Model\NamingScheme;
 use Mailadmin\Domain\Model\PasswordFormat;
-use Mailadmin\Domain\Model\Virtual\VirtualEntryClassifier;
 use Mailadmin\Domain\Password\PasswordFormatDetector;
 use Mailadmin\Infrastructure\Mailstore\InMemoryMailstore;
 use Mailadmin\Infrastructure\Persistence\AccountRepository;
@@ -26,10 +24,12 @@ use Mailadmin\Infrastructure\Persistence\Criteria\ListCriteria;
 use Mailadmin\Infrastructure\Persistence\DomainRepository;
 use Mailadmin\Infrastructure\Persistence\InMemoryAuditTrail;
 use Mailadmin\Infrastructure\Persistence\Migration\MigrationLoader;
+use Mailadmin\Infrastructure\Persistence\SqlMailingListRepository;
 use Mailadmin\Infrastructure\Persistence\VirtualRepository;
 use Mailadmin\Infrastructure\Repair\InMemoryRepairQueue;
 use Mailadmin\Tests\Support\DomainFixture;
 use Mailadmin\Tests\Support\FrozenClock;
+use Mailadmin\Tests\Support\ListDeliveryFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Psr\Log\NullLogger;
 
@@ -183,6 +183,26 @@ final class AccountRepositoryIntegrationTest extends DatabaseTestCase
             DomainName::fromStoredValue('kunde.example.test'),
             NamingScheme::Dotted,
         )));
+    }
+
+    public function testAUserNameThatIsAMailingListKeyIsTaken(): void
+    {
+        // U-145: `lists` has no key column; the key is REPLACE(address, '@', '.').
+        $identity = MailboxIdentity::create(
+            LocalPart::fromString('info'),
+            DomainName::fromStoredValue('kunde.example.test'),
+            NamingScheme::Dotted,
+        );
+
+        self::assertFalse($this->repository->isTaken($identity));
+
+        $this->connection->execute('INSERT INTO lists (name, tag, address, members) VALUES ("kunde", "", "Info.Kunde@example.test", "")');
+
+        self::assertTrue($this->repository->isTaken($identity));
+        self::assertFalse(
+            $this->repository->isTaken(MailboxIdentity::create($identity->localPart, $identity->domain, NamingScheme::Fqun)),
+            'a name with an @ is never a key',
+        );
     }
 
     public function testDeletionRemovesTheAccountRowsAndLeavesOtherAliasesAlone(): void
@@ -386,7 +406,7 @@ final class AccountRepositoryIntegrationTest extends DatabaseTestCase
             new NullLogger(),
             new DomainRepository($this->connection, new FrozenClock()),
             $virtual,
-            new CatchallCleanup($virtual, new AddressReader($virtual, new VirtualEntryClassifier())),
+            new CatchallCleanup($virtual, ListDeliveryFixture::reader($virtual, new SqlMailingListRepository($this->connection))),
             new RowWriter($virtual, $audit, $repairs, new NullLogger()),
         );
     }

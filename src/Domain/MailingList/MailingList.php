@@ -55,8 +55,6 @@ final readonly class MailingList
     /**
      * A row as the database has it. Nothing here is rejected for being
      * unconventional — see the class comment.
-     *
-     * @throws InvalidMailingList when the name is unusable as a key at all
      */
     public static function fromStoredValues(
         string $name,
@@ -91,19 +89,22 @@ final readonly class MailingList
     }
 
     /**
+     * A new display name, through the strict door — the name is free text and
+     * not the identity, so changing it touches nothing but this column.
+     *
      * @throws InvalidMailingList
      */
-    public function withTag(string $tag): self
+    public function withName(string $name): self
     {
-        return new self($this->name, self::guardTag($tag), $this->address, $this->members);
+        return new self(MailingListName::fromString($name), $this->tag, $this->address, $this->members);
     }
 
     /**
      * @throws InvalidMailingList
      */
-    public function withAddress(string $address): self
+    public function withTag(string $tag): self
     {
-        return new self($this->name, $this->tag, self::guardAddress($address), $this->members);
+        return new self($this->name, self::guardTag($tag), $this->address, $this->members);
     }
 
     /**
@@ -137,9 +138,7 @@ final readonly class MailingList
      *
      * The only reason this exists is scoping: `lists` has no domain column, so a
      * domain master could only ever be scoped through the address
-     * ({@see \Mailadmin\Domain\Policy\ListPolicy}). Nothing calls it while list
-     * management is superuser-only (U-58), and it is here so that widening does
-     * not have to invent it.
+     * ({@see \Mailadmin\Domain\Policy\ListPolicy}).
      */
     public function domain(): ?DomainName
     {
@@ -171,8 +170,15 @@ final readonly class MailingList
 
         $value = trim($tag);
 
-        if (strlen($value) > self::MAX_TAG_LENGTH) {
-            throw InvalidMailingList::tagTooLong(strlen($value), self::MAX_TAG_LENGTH);
+        if (!Latin1Text::fits($value)) {
+            throw InvalidMailingList::tagOutsideLatin1();
+        }
+
+        // Characters, not bytes: the column is latin1, so 255 umlauts fit.
+        $length = Latin1Text::characters($value);
+
+        if ($length > self::MAX_TAG_LENGTH) {
+            throw InvalidMailingList::tagTooLong($length, self::MAX_TAG_LENGTH);
         }
 
         return $value;

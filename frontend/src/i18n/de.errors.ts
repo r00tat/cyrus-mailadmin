@@ -85,6 +85,8 @@ export const deErrors = {
     'Der Name würde einen bestehenden Benutzernamen mehrdeutig machen. Im Namensschema mit Punkt ergeben info.kunde@example.de und info@kunde.example.de denselben Benutzernamen.',
   'errors.domain.not_empty': 'Die Domain enthält noch Konten.',
   'errors.domain.prefix_taken': 'Dieses Präfix ist bereits vergeben.',
+  'errors.domain.rename_blocked_by_mailing_list':
+    'Die Domain hat noch Mailinglisten. Bitte die Listen zuerst löschen und nach der Umbenennung unter dem neuen Namen neu anlegen.',
   'errors.domain.rename_incomplete':
     'Die Umbenennung wurde nicht abgeschlossen. Was sich nicht zurücknehmen ließ, steht in der Reparaturwarteschlange.',
   'errors.domain.rename_not_confirmed': 'Die Umbenennung wurde nicht bestätigt.',
@@ -125,11 +127,19 @@ export const deErrors = {
   'errors.vacation.rejected': 'Der Sieve-Dienst hat die Abwesenheitsnotiz abgelehnt.',
 
   // Verteilerlisten (A5)
-  'errors.list.already_exists': 'Diese Liste existiert bereits.',
+  'errors.list.address_has_extension': 'Eine Listenadresse darf kein „+“ enthalten.',
+  'errors.list.address_taken': 'Diese Adresse ist bereits vergeben.',
   'errors.list.invalid_address': 'Die Listenadresse ist unzulässig.',
   'errors.list.invalid_member': 'Mindestens eine Mitgliedsadresse ist unzulässig.',
   'errors.list.invalid_name': 'Der Listenname ist unzulässig.',
-  'errors.list.invalid_tag': 'Die Listenkennung ist unzulässig.',
+  'errors.list.invalid_tag': 'Das Kennzeichen ist unzulässig.',
+  'errors.list.member_not_deliverable':
+    'Mindestens ein Mitglied ist keine Adresse, an die der Verteiler zustellen kann, etwa wegen Umlauten in der Adresse oder einer Domain ohne Punkt.',
+  'errors.list.member_outside_latin1':
+    'Mindestens ein Mitglied enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
+  'errors.list.name_outside_latin1': 'Der Listenname enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
+  'errors.list.tag_outside_latin1': 'Das Kennzeichen enthält Zeichen, die die Datenbank nicht speichern kann, etwa Emojis oder das Euro-Zeichen.',
+  'errors.list.unknown_domain': 'Die Domain der Listenadresse wird hier nicht verwaltet.',
 
   // Reparaturwarteschlange (A6)
   'errors.repair.already_resolved': 'Dieser Reparatureintrag ist bereits erledigt.',

@@ -14,12 +14,13 @@ export type Catchall = components['schemas']['Catchall'];
 export type Forwards = components['schemas']['Forwards'];
 export type Vacation = components['schemas']['Vacation'];
 
-/** The four types of architecture 3.4, plus the rows that fit none (U-22). */
+/** The four types of architecture 3.4, mailing list rows (A5), plus the rows that fit none (U-22). */
 export const ENTRY_TYPES = [
   'mailbox_address',
   'alias',
   'catchall',
   'forward',
+  'mailing_list',
   'unknown',
 ] as const satisfies readonly AddressEntryType[];
 
@@ -28,6 +29,7 @@ export const ENTRY_TYPE_KEYS: Readonly<Record<AddressEntryType, TranslationKey>>
   alias: 'address.list.type.alias',
   catchall: 'address.list.type.catchall',
   forward: 'address.list.type.forward',
+  mailing_list: 'address.list.type.mailingList',
   unknown: 'address.list.type.unknown',
 };
 
@@ -37,6 +39,8 @@ export const UNKNOWN_REASON_KEYS: Readonly<Record<AddressUnknownReason, Translat
   alias_is_not_an_address: 'address.list.unknownReason.aliasIsNotAnAddress',
   catchall_without_domain: 'address.list.unknownReason.catchallWithoutDomain',
   unusable_value: 'address.list.unknownReason.unusableValue',
+  list_destination_mismatch: 'address.list.unknownReason.listDestinationMismatch',
+  list_missing: 'address.list.unknownReason.listMissing',
 };
 
 /** The detail route of an alias; the address is URL-encoded (`info%40example.test`). */

@@ -28,6 +28,14 @@ import { useErrorCodeText } from '../../i18n/problemText';
  */
 
 type HealthCheck = components['schemas']['HealthCheckDetails'];
+type ListDeliverySettings = components['schemas']['ListDeliverySettings'];
+
+const LIST_DELIVERY_MODE_KEYS: Record<ListDeliverySettings['mode'], TranslationKey> = {
+  alias: 'maintenance.health.listDelivery.mode.alias',
+  transport: 'maintenance.health.listDelivery.mode.transport',
+};
+
+const LIST_DELIVERY_HEADING_ID = 'health-list-delivery';
 
 const COMPONENT_KEYS: Record<HealthCheck['component'], TranslationKey> = {
   database: 'maintenance.health.component.database',
@@ -145,8 +153,52 @@ export function HealthPage(): ReactNode {
             rowKey={(check) => check.component}
             loading={health.isFetching}
           />
+
+          <ListDeliverySection settings={health.data.list_delivery} />
         </Stack>
       )}
     </>
+  );
+}
+
+/**
+ * The list delivery settings (A6): a setting, not a probe, so they do not
+ * change the verdict above. A transport domain that is also a managed domain
+ * is a configuration error — Postfix would deliver locally and the pipe
+ * transport would never see the mail — and gets a warning of its own.
+ */
+function ListDeliverySection({ settings }: { settings: ListDeliverySettings }): ReactNode {
+  const { t } = useTranslation();
+
+  return (
+    <Box component="section" aria-labelledby={LIST_DELIVERY_HEADING_ID}>
+      <Typography id={LIST_DELIVERY_HEADING_ID} variant="h6" component="h2" gutterBottom>
+        {t('maintenance.health.listDelivery.title')}
+      </Typography>
+      <Stack spacing={1}>
+        <Box component="dl" sx={{ m: 0, display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 2, rowGap: 0.5 }}>
+          <Typography component="dt" variant="body2" color="text.secondary">
+            {t('maintenance.health.listDelivery.mode')}
+          </Typography>
+          <Typography component="dd" variant="body2" sx={{ m: 0 }}>
+            {t(LIST_DELIVERY_MODE_KEYS[settings.mode])}
+          </Typography>
+          <Typography component="dt" variant="body2" color="text.secondary">
+            {t('maintenance.health.listDelivery.transportDomain')}
+          </Typography>
+          <Typography component="dd" variant="body2" sx={{ m: 0, fontFamily: 'monospace' }}>
+            {settings.transport_domain}
+          </Typography>
+        </Box>
+        {settings.transport_domain_is_managed === true && (
+          <Alert severity="warning">
+            {t('maintenance.health.listDelivery.managed', { domain: settings.transport_domain })}
+          </Alert>
+        )}
+        {settings.transport_domain_is_managed === null && (
+          <Alert severity="info">{t('maintenance.health.listDelivery.managedUnknown')}</Alert>
+        )}
+      </Stack>
+    </Box>
   );
 }

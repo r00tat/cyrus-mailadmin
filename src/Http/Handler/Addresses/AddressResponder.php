@@ -157,6 +157,7 @@ final readonly class AddressResponder
             detail: self::DETAILS[$failure->errorCode] ?? 'The request could not be carried out.',
             instance: $request->getUri()->getPath(),
             requestId: self::requestId($request),
+            errors: $failure->reason === null ? [] : ['entry' => $failure->reason],
         ));
     }
 

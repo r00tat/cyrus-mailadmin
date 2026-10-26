@@ -85,8 +85,8 @@ describe('ApiClient — X-Mailadmin-Effect (U-59)', () => {
       () => new Response(null, { status: 204, headers: { 'X-Mailadmin-Effect': PENDING_CONFIGURATION_RUN } }),
     );
 
-    const exchange = await client.requestVersioned('delete', '/lists/{listName}', {
-      pathParams: { listName: 'team' },
+    const exchange = await client.requestVersioned('delete', '/lists/{address}', {
+      pathParams: { address: 'team@example.test' },
       headers: { 'If-Match': '"l1"' },
     });
 

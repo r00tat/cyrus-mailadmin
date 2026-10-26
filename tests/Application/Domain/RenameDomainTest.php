@@ -8,6 +8,7 @@ use Mailadmin\Application\Audit\AuditOutcome;
 use Mailadmin\Application\Domain\DomainErrorCode;
 use Mailadmin\Application\Domain\DomainOperationFailed;
 use Mailadmin\Application\Domain\RenameDomain;
+use Mailadmin\Domain\MailingList\MailingList;
 use Mailadmin\Domain\Model\DomainName;
 use Mailadmin\Domain\Model\MailboxIdentity;
 use Mailadmin\Domain\Policy\AccessDenied;
@@ -203,6 +204,56 @@ final class RenameDomainTest extends DomainUseCaseTestCase
         self::assertSame(DomainErrorCode::RENAME_INCOMPLETE, $failure->errorCode);
         self::assertSame([], $this->renamesOnly());
         self::assertSame([], $this->store->operations());
+    }
+
+    public function testADomainWithAMailingListIsNotRenamed(): void
+    {
+        // `lists.address` and the list key in `dest` would keep the old name
+        // (plan B5b), so the rename is refused before anything is touched.
+        $this->givenDomainWithTwoAccounts();
+        $this->lists->given(MailingList::fromStoredValues('Team', '', 'team@old.test', ''));
+        $mailstoreBefore = $this->mailstore->operations();
+
+        $failure = $this->expectFailure();
+
+        self::assertSame(DomainErrorCode::RENAME_BLOCKED_BY_MAILING_LIST, $failure->errorCode);
+        self::assertSame(409, $failure->status);
+        self::assertSame($mailstoreBefore, $this->mailstore->operations(), 'No mailbox was touched, not even probed.');
+        self::assertSame([], $this->store->operations());
+        self::assertSame(0, $this->lists->writeCount());
+        self::assertTrue($this->store->exists(DomainFixture::name('old.test')));
+        self::assertSame([], $this->audit->all());
+    }
+
+    public function testAMailingListOfAnotherDomainDoesNotBlockTheRename(): void
+    {
+        $this->givenDomainWithTwoAccounts();
+        $this->lists->given(MailingList::fromStoredValues('Team', '', 'team@other.test', ''));
+        $this->lists->given(MailingList::fromStoredValues('Sub', '', 'team@sub.old.test', ''));
+
+        $this->renameDomain()->handle(
+            DomainFixture::superuser(),
+            DomainFixture::name('old.test'),
+            DomainFixture::name('new.test'),
+        );
+
+        self::assertTrue($this->store->exists(DomainFixture::name('new.test')));
+    }
+
+    public function testAMailingListCreatedWhileTheMailboxesMovedStopsTheRenameAndSendsThemBack(): void
+    {
+        $this->givenDomainWithTwoAccounts();
+        $this->store->beforeNamespaceLockedWork(function (): void {
+            $this->lists->given(MailingList::fromStoredValues('Team', '', 'team@old.test', ''));
+        });
+
+        $failure = $this->expectFailure();
+
+        self::assertSame(DomainErrorCode::RENAME_BLOCKED_BY_MAILING_LIST, $failure->errorCode);
+        self::assertTrue($this->mailstore->mailboxExists($this->identity('anna.old.test', 'old.test')));
+        self::assertTrue($this->mailstore->mailboxExists($this->identity('info.old.test', 'old.test')));
+        self::assertTrue($this->store->exists(DomainFixture::name('old.test')));
+        self::assertFalse($this->store->exists(DomainFixture::name('new.test')));
     }
 
     public function testADomainMasterMayNotRename(): void
@@ -677,5 +728,36 @@ final class RenameDomainTest extends DomainUseCaseTestCase
     private function identity(string $storedUsername, string $domain): MailboxIdentity
     {
         return MailboxIdentity::fromStoredUsername($storedUsername, DomainName::fromStoredValue($domain));
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function transportDomainSpellings(): iterable
+    {
+        yield 'as configured' => ['maillist.invalid'];
+        yield 'upper case with a trailing dot' => ['MailList.Invalid.'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('transportDomainSpellings')]
+    public function testNoDomainIsRenamedToTheListTransportDomain(string $name): void
+    {
+        $this->givenDomainWithTwoAccounts();
+        $storeBefore = $this->store->operations();
+        $mailstoreBefore = $this->mailstore->operations();
+
+        try {
+            $this->renameDomain()->handle(
+                DomainFixture::superuser(),
+                DomainFixture::name('old.test'),
+                DomainName::fromStoredValue($name),
+            );
+            self::fail('The domain was renamed to the transport domain.');
+        } catch (\Mailadmin\Domain\Exception\InvalidAddress $refused) {
+            self::assertSame('domain.invalid_name', $refused->code());
+        }
+
+        self::assertSame($storeBefore, $this->store->operations());
+        self::assertSame($mailstoreBefore, $this->mailstore->operations(), 'No mailbox was touched.');
     }
 }

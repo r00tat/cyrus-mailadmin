@@ -5,17 +5,21 @@ declare(strict_types=1);
 namespace Mailadmin\Application\Maintenance;
 
 use Mailadmin\Application\Account\AccountStore;
+use Mailadmin\Application\Address\AddressStore;
 use Mailadmin\Application\Audit\AuditEntry;
 use Mailadmin\Application\Audit\AuditWriter;
 use Mailadmin\Application\Domain\DomainStore;
 use Mailadmin\Domain\Access\ActorContext;
 use Mailadmin\Domain\Exception\DomainError;
+use Mailadmin\Domain\Exception\InvalidAddress;
 use Mailadmin\Domain\Mailstore\Mailstore;
 use Mailadmin\Domain\Mailstore\MailstoreFailure;
 use Mailadmin\Domain\Mailstore\Quota;
 use Mailadmin\Domain\Model\DefaultFolders;
 use Mailadmin\Domain\Model\DomainName;
+use Mailadmin\Domain\Model\EmailAddress;
 use Mailadmin\Domain\Model\MailboxIdentity;
+use Mailadmin\Infrastructure\Persistence\MailingListRepository;
 use Mailadmin\Runtime\Clock;
 use Psr\Log\LoggerInterface;
 
@@ -72,6 +76,8 @@ final readonly class RetryRepair
         private AuditWriter $audit,
         private Clock $clock,
         private LoggerInterface $logger,
+        private MailingListRepository $lists,
+        private AddressStore $virtual,
     ) {
     }
 
@@ -162,6 +168,7 @@ final readonly class RetryRepair
             RepairCatalogue::DELETE_MAILBOX => $this->deleteMailbox($entry),
             RepairCatalogue::RESTORE_QUOTA => $this->restoreQuota($entry),
             RepairCatalogue::RENAME_BACK => $this->renameBack($entry),
+            RepairCatalogue::REMOVE_LIST_ROW => $this->removeListRow($entry),
             default => throw RepairOperationFailed::notRetryable($entry->id, 'unknown step'),
         };
     }
@@ -259,6 +266,31 @@ final readonly class RetryRepair
             }
 
             $this->mailstore->renameMailbox($moved, $original);
+        });
+    }
+
+    /**
+     * A `lists` row whose `virtual` row is gone. Under the namespace lock,
+     * which list creation takes as well, so a list created again for the
+     * address in the meantime cannot lose its row between check and act. A
+     * row that is already gone counts as done.
+     */
+    private function removeListRow(RepairEntry $entry): void
+    {
+        try {
+            $address = EmailAddress::parseStored($entry->parameter('address'));
+        } catch (InvalidAddress) {
+            throw RepairOperationFailed::notRetryable($entry->id, 'the entry names no usable list address');
+        }
+
+        $this->domains->withNamespaceLock(function () use ($address): void {
+            if ($this->virtual->rowsWithAlias($address->toString()) !== []) {
+                throw RepairOperationFailed::stateChanged(
+                    'The address has a virtual row again; the list row may be in use.',
+                );
+            }
+
+            $this->lists->remove($address);
         });
     }
 
